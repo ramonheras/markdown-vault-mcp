@@ -74,6 +74,7 @@ CREATE TABLE IF NOT EXISTS links (
     link_text TEXT NOT NULL DEFAULT '',
     link_type TEXT NOT NULL,
     fragment TEXT,
+    raw_target TEXT NOT NULL DEFAULT '',
     FOREIGN KEY (source_id) REFERENCES documents(id) ON DELETE CASCADE
 );
 
@@ -141,6 +142,16 @@ def _open_connection(db_path: Path | str) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     # Apply schema; executescript commits implicitly.
     conn.executescript(_SCHEMA_SQL)
+    # Migrate existing databases: add columns introduced after initial schema.
+    # ALTER TABLE ADD COLUMN is idempotent-guarded via try/except because
+    # SQLite only supports ADD COLUMN IF NOT EXISTS from version 3.35 onwards.
+    try:
+        conn.execute(
+            "ALTER TABLE links ADD COLUMN raw_target TEXT NOT NULL DEFAULT ''"
+        )
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass  # Column already exists — nothing to do.
     # Ensure foreign_keys stays ON for subsequent statements (executescript
     # does not guarantee this survives across statement boundaries in all
     # SQLite versions).
@@ -363,8 +374,8 @@ class FTSIndex:
             cur.execute(
                 """
                 INSERT INTO links (source_id, target_path, link_text,
-                                   link_type, fragment)
-                VALUES (?, ?, ?, ?, ?)
+                                   link_type, fragment, raw_target)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
                 (
                     document_id,
@@ -372,6 +383,7 @@ class FTSIndex:
                     link.link_text,
                     link.link_type,
                     link.fragment,
+                    link.raw_target,
                 ),
             )
 
@@ -706,7 +718,7 @@ class FTSIndex:
 
         Returns:
             List of dicts with keys ``source_path``, ``source_title``,
-            ``link_text``, ``link_type``, ``fragment``.
+            ``link_text``, ``link_type``, ``fragment``, ``raw_target``.
         """
         cur = self._conn.execute(
             """
@@ -714,7 +726,8 @@ class FTSIndex:
                    d.title AS source_title,
                    l.link_text,
                    l.link_type,
-                   l.fragment
+                   l.fragment,
+                   l.raw_target
             FROM links l
             JOIN documents d ON d.id = l.source_id
             WHERE l.target_path = ?
@@ -736,7 +749,7 @@ class FTSIndex:
 
         Returns:
             List of dicts with keys ``target_path``, ``link_text``,
-            ``link_type``, ``fragment``, ``exists`` (bool).
+            ``link_type``, ``fragment``, ``raw_target``, ``exists`` (bool).
         """
         cur = self._conn.execute(
             """
@@ -744,6 +757,7 @@ class FTSIndex:
                    l.link_text,
                    l.link_type,
                    l.fragment,
+                   l.raw_target,
                    (t.id IS NOT NULL) AS target_exists
             FROM links l
             JOIN documents d ON d.id = l.source_id

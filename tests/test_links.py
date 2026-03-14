@@ -79,6 +79,7 @@ class TestExtractInlineLinks:
         assert links[0].link_text == "Click here"
         assert links[0].link_type == "markdown"
         assert links[0].fragment is None
+        assert links[0].raw_target == "notes/intro.md"
 
     def test_inline_link_with_fragment(self) -> None:
         """Fragment identifier is split from target and stored separately."""
@@ -86,6 +87,8 @@ class TestExtractInlineLinks:
         assert len(links) == 1
         assert links[0].target_path == "notes/intro.md"
         assert links[0].fragment == "overview"
+        # raw_target preserves the original string including fragment
+        assert links[0].raw_target == "notes/intro.md#overview"
 
     def test_external_url_skipped(self) -> None:
         """HTTP/HTTPS links are not extracted."""
@@ -107,6 +110,8 @@ class TestExtractInlineLinks:
         links = extract_links("[Note](../sibling.md)", "Journal/2024/today.md")
         assert len(links) == 1
         assert links[0].target_path == "Journal/sibling.md"
+        # raw_target preserves the original relative string, not the resolved one
+        assert links[0].raw_target == "../sibling.md"
 
     def test_relative_path_same_dir(self) -> None:
         """Relative path in same directory resolves correctly."""
@@ -163,6 +168,7 @@ class TestExtractReferenceLinks:
         assert links[0].link_text == "the note"
         assert links[0].link_type == "reference"
         assert links[0].fragment is None
+        assert links[0].raw_target == "notes/topic.md"
 
     def test_reference_link_with_fragment(self) -> None:
         """Fragment in reference definition target is split off."""
@@ -171,6 +177,7 @@ class TestExtractReferenceLinks:
         assert len(links) == 1
         assert links[0].target_path == "notes/topic.md"
         assert links[0].fragment == "section"
+        assert links[0].raw_target == "notes/topic.md#section"
 
     def test_reference_link_case_insensitive_key(self) -> None:
         """Reference keys are case-insensitive per Markdown spec."""
@@ -219,6 +226,8 @@ class TestExtractWikilinks:
         assert links[0].link_text == "Note Title"
         assert links[0].link_type == "wikilink"
         assert links[0].fragment is None
+        # raw_target is the stem before .md was appended
+        assert links[0].raw_target == "Note Title"
 
     def test_wikilink_with_alias(self) -> None:
         """[[path|alias]] uses alias as link_text."""
@@ -226,6 +235,8 @@ class TestExtractWikilinks:
         assert len(links) == 1
         assert links[0].target_path == "notes/topic.md"
         assert links[0].link_text == "My Topic"
+        # raw_target is the path portion only (before |), without .md
+        assert links[0].raw_target == "notes/topic"
 
     def test_wikilink_md_extension_not_doubled(self) -> None:
         """[[note.md]] does not become note.md.md."""
@@ -239,6 +250,8 @@ class TestExtractWikilinks:
         assert len(links) == 1
         assert links[0].target_path == "note.md"
         assert links[0].fragment == "section"
+        # raw_target re-attaches the fragment to the stem (no .md)
+        assert links[0].raw_target == "note#section"
 
     def test_wikilink_relative_path(self) -> None:
         """Wikilinks with subdirectory paths resolve against source dir."""
@@ -483,6 +496,131 @@ class TestFTSIndexLinks:
         assert len(rows) == 3
         sources = {r["source_path"] for r in rows}
         assert sources == {"src0.md", "src1.md", "src2.md"}
+
+
+# ---------------------------------------------------------------------------
+# raw_target: stored and returned by FTS queries
+# ---------------------------------------------------------------------------
+
+
+class TestRawTargetInFTS:
+    def test_raw_target_stored_and_returned_by_outlinks(self) -> None:
+        """raw_target is stored in the links table and returned by get_outlinks."""
+        idx = FTSIndex(":memory:")
+        note = make_note(
+            path="source.md",
+            links=[
+                LinkInfo(
+                    target_path="notes/topic.md",
+                    link_text="Topic",
+                    link_type="markdown",
+                    raw_target="../notes/topic.md",
+                )
+            ],
+        )
+        idx.upsert_note(note)
+        rows = idx.get_outlinks("source.md")
+        assert rows[0]["raw_target"] == "../notes/topic.md"
+
+    def test_raw_target_returned_by_backlinks(self) -> None:
+        """raw_target is included in get_backlinks results."""
+        idx = FTSIndex(":memory:")
+        note = make_note(
+            path="source.md",
+            links=[
+                LinkInfo(
+                    target_path="target.md",
+                    link_text="T",
+                    link_type="markdown",
+                    raw_target="target.md",
+                )
+            ],
+        )
+        idx.upsert_note(note)
+        rows = idx.get_backlinks("target.md")
+        assert rows[0]["raw_target"] == "target.md"
+
+    def test_raw_target_empty_string_default(self) -> None:
+        """LinkInfo with no explicit raw_target defaults to empty string."""
+        idx = FTSIndex(":memory:")
+        note = make_note(
+            path="source.md",
+            links=[
+                LinkInfo(
+                    target_path="target.md",
+                    link_text="T",
+                    link_type="markdown",
+                    # raw_target omitted — defaults to ""
+                )
+            ],
+        )
+        idx.upsert_note(note)
+        rows = idx.get_outlinks("source.md")
+        assert rows[0]["raw_target"] == ""
+
+    def test_raw_target_wikilink_no_md_extension(self) -> None:
+        """Wikilink raw_target is the stem without .md, per extract_links convention."""
+        links = extract_links("[[My Note]]", "index.md")
+        assert len(links) == 1
+        assert links[0].raw_target == "My Note"
+        assert links[0].target_path == "My Note.md"
+
+    def test_raw_target_wikilink_with_fragment(self) -> None:
+        """Wikilink raw_target re-attaches the fragment to the stem."""
+        links = extract_links("[[My Note#heading]]", "index.md")
+        assert len(links) == 1
+        assert links[0].raw_target == "My Note#heading"
+        assert links[0].fragment == "heading"
+
+    def test_schema_migration_adds_column_to_existing_db(
+        self, tmp_path: Path
+    ) -> None:
+        """Opening an existing DB without raw_target column applies migration."""
+        import sqlite3
+
+        db_file = tmp_path / "test.db"
+        # Create DB with old schema (no raw_target column).
+        conn = sqlite3.connect(str(db_file))
+        conn.executescript(
+            """
+            CREATE TABLE documents (
+                id INTEGER PRIMARY KEY,
+                path TEXT UNIQUE NOT NULL,
+                title TEXT NOT NULL DEFAULT '',
+                folder TEXT NOT NULL DEFAULT '',
+                content_hash TEXT NOT NULL DEFAULT '',
+                modified_at REAL NOT NULL DEFAULT 0,
+                frontmatter_json TEXT NOT NULL DEFAULT '{}'
+            );
+            CREATE TABLE links (
+                id INTEGER PRIMARY KEY,
+                source_id INTEGER NOT NULL,
+                target_path TEXT NOT NULL,
+                link_text TEXT NOT NULL DEFAULT '',
+                link_type TEXT NOT NULL,
+                fragment TEXT,
+                FOREIGN KEY (source_id) REFERENCES documents(id) ON DELETE CASCADE
+            );
+            """
+        )
+        conn.close()
+        # Opening via FTSIndex should apply migration without error.
+        idx = FTSIndex(db_file)
+        # Verify the column exists by inserting a row with raw_target.
+        note = make_note(
+            path="src.md",
+            links=[
+                LinkInfo(
+                    target_path="tgt.md",
+                    link_text="T",
+                    link_type="markdown",
+                    raw_target="tgt.md",
+                )
+            ],
+        )
+        idx.upsert_note(note)
+        rows = idx.get_outlinks("src.md")
+        assert rows[0]["raw_target"] == "tgt.md"
 
 
 # ---------------------------------------------------------------------------
