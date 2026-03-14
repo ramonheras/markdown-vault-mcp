@@ -1504,11 +1504,11 @@ class Collection:
             if self._vectors is not None and self._vectors.count > 0:
                 raw = self._vectors.search_by_path(path, limit=similar_limit)
                 similar_dicts = [
-                    {
-                        "path": r["path"],
-                        "title": r["title"],
-                        "score": r["score"],
-                    }
+                    SimilarItem(
+                        path=r["path"],
+                        title=r["title"],
+                        score=r["score"],
+                    )
                     for r in raw
                 ]
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal, TypedDict
+from typing import Any, Literal
 
 
 @dataclass
@@ -222,12 +222,13 @@ class BrokenLinkInfo:
     fragment: str | None = None
 
 
-class SimilarItem(TypedDict):
+@dataclass
+class SimilarItem:
     """Shape of each entry in :attr:`NoteContext.similar`.
 
-    Keys are a compact subset of :class:`SearchResult` — path, title, and
-    score only. Use :meth:`~markdown_vault_mcp.collection.Collection.get_similar`
-    directly when you need the full chunk content.
+    A compact subset of :class:`SearchResult` — path, title, and score only.
+    Use :meth:`~markdown_vault_mcp.collection.Collection.get_similar` directly
+    when you need the full chunk content.
     """
 
     path: str
