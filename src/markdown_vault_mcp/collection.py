@@ -14,6 +14,7 @@ import logging
 import mimetypes
 import queue
 import shutil
+import sqlite3
 import threading
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
@@ -54,6 +55,7 @@ from markdown_vault_mcp.types import (
     ReindexResult,
     RenameResult,
     SearchResult,
+    SimilarItem,
     WriteCallback,
     WriteResult,
 )
@@ -69,6 +71,7 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_STATE_SUBDIR = ".markdown_vault_mcp"
 _DEFAULT_STATE_FILENAME = "state.json"
+_CONTEXT_FOLDER_PEERS_LIMIT = 20
 
 # RRF constant — standard value recommended in the original paper.
 _RRF_K = 60
@@ -1465,8 +1468,8 @@ class Collection:
                 )
                 for r in backlinks
             ]
-        except Exception:
-            logger.warning("get_context: failed to retrieve backlinks for %s", path)
+        except sqlite3.OperationalError as exc:
+            logger.warning("get_context: failed to retrieve backlinks for %s: %s", path, exc)
             backlink_objs = []
 
         # Outlinks — capped at link_limit; graceful if links table absent.
@@ -1482,13 +1485,17 @@ class Collection:
                 )
                 for r in outlinks
             ]
-        except Exception:
-            logger.warning("get_context: failed to retrieve outlinks for %s", path)
+        except sqlite3.OperationalError as exc:
+            logger.warning("get_context: failed to retrieve outlinks for %s: %s", path, exc)
             outlink_objs = []
 
-        # Similar notes — empty if embeddings not configured.
-        similar_dicts: list[dict[str, Any]] = []
-        if self._embedding_provider is not None and self._embeddings_path is not None:
+        # Similar notes — empty if embeddings not configured or similar_limit is 0.
+        similar_dicts: list[SimilarItem] = []
+        if (
+            similar_limit > 0
+            and self._embedding_provider is not None
+            and self._embeddings_path is not None
+        ):
             self._load_vectors()
             if self._vectors is not None and self._vectors.count > 0:
                 raw = self._vectors.search_by_path(path, limit=similar_limit)
@@ -1501,11 +1508,13 @@ class Collection:
                     for r in raw
                 ]
 
-        # Folder peers — other notes in the same folder, max 20.
+        # Folder peers — other notes in the same folder, capped at limit.
         # folder is always a str (empty string for root-level docs) — never None.
         folder = row["folder"]
         folder_rows = self._fts.list_notes(folder=folder)
-        folder_notes = [r["path"] for r in folder_rows if r["path"] != path][:20]
+        folder_notes = [
+            r["path"] for r in folder_rows if r["path"] != path
+        ][:_CONTEXT_FOLDER_PEERS_LIMIT]
 
         # Tags — indexed frontmatter fields present on this document.
         tags: dict[str, list[str]] = {}

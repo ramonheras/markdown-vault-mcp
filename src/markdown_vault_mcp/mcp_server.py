@@ -938,7 +938,7 @@ def create_server() -> FastMCP:
             path: Relative path of the document (e.g. "notes/topic.md").
                 Case-sensitive.
             similar_limit: Maximum number of similar notes to include
-                (default 5). Set to 0 to skip similarity lookup.
+                (default 5). Pass 0 to skip the similarity lookup entirely.
             link_limit: Maximum number of backlinks and outlinks to include
                 each (default 10).
 
@@ -949,7 +949,8 @@ def create_server() -> FastMCP:
             paths for other notes in the same folder, max 20), tags (dict
             of indexed frontmatter field → list of values).
             backlinks and outlinks are empty if link tracking is not
-            available. similar is empty if semantic search is not configured.
+            available. similar is empty if semantic search is not configured
+            or similar_limit is 0.
 
         Raises:
             ValueError: If no document exists at the given path.
@@ -960,18 +961,7 @@ def create_server() -> FastMCP:
             similar_limit=similar_limit,
             link_limit=link_limit,
         )
-        return {
-            "path": result.path,
-            "title": result.title,
-            "folder": result.folder,
-            "frontmatter": result.frontmatter,
-            "modified_at": result.modified_at,
-            "backlinks": [asdict(b) for b in result.backlinks],
-            "outlinks": [asdict(o) for o in result.outlinks],
-            "similar": result.similar,
-            "folder_notes": result.folder_notes,
-            "tags": result.tags,
-        }
+        return asdict(result)
 
     # --- Index management tools ---
 
