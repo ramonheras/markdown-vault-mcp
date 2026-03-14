@@ -817,9 +817,7 @@ class TestCollectionGetContext:
         assert result.backlinks == []
         assert result.outlinks == []
 
-    def test_get_context_raises_for_nonexistent_path(
-        self, context_vault: Path
-    ) -> None:
+    def test_get_context_raises_for_nonexistent_path(self, context_vault: Path) -> None:
         """get_context raises ValueError when the path is not indexed."""
         col = Collection(source_dir=context_vault)
         col.build_index()

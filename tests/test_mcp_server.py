@@ -1414,9 +1414,7 @@ class TestContextTool:
         """notes/topic.md has a backlink from index.md."""
         server = create_server()
         async with Client(server) as client:
-            result = await client.call_tool(
-                "get_context", {"path": "notes/topic.md"}
-            )
+            result = await client.call_tool("get_context", {"path": "notes/topic.md"})
         data = _parse_tool_data(result)
         sources = [b["source_path"] for b in data["backlinks"]]
         assert "index.md" in sources
@@ -1436,9 +1434,7 @@ class TestContextTool:
         """folder_notes for notes/topic.md contains peer.md but not topic.md."""
         server = create_server()
         async with Client(server) as client:
-            result = await client.call_tool(
-                "get_context", {"path": "notes/topic.md"}
-            )
+            result = await client.call_tool("get_context", {"path": "notes/topic.md"})
         data = _parse_tool_data(result)
         assert "notes/topic.md" not in data["folder_notes"]
         assert "notes/peer.md" in data["folder_notes"]

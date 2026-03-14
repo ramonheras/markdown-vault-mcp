@@ -1469,7 +1469,9 @@ class Collection:
                 for r in backlinks
             ]
         except sqlite3.OperationalError as exc:
-            logger.warning("get_context: failed to retrieve backlinks for %s: %s", path, exc)
+            logger.warning(
+                "get_context: failed to retrieve backlinks for %s: %s", path, exc
+            )
             backlink_objs = []
 
         # Outlinks — capped at link_limit; graceful if links table absent.
@@ -1486,7 +1488,9 @@ class Collection:
                 for r in outlinks
             ]
         except sqlite3.OperationalError as exc:
-            logger.warning("get_context: failed to retrieve outlinks for %s: %s", path, exc)
+            logger.warning(
+                "get_context: failed to retrieve outlinks for %s: %s", path, exc
+            )
             outlink_objs = []
 
         # Similar notes — empty if embeddings not configured or similar_limit is 0.
@@ -1512,9 +1516,9 @@ class Collection:
         # folder is always a str (empty string for root-level docs) — never None.
         folder = row["folder"]
         folder_rows = self._fts.list_notes(folder=folder)
-        folder_notes = [
-            r["path"] for r in folder_rows if r["path"] != path
-        ][:_CONTEXT_FOLDER_PEERS_LIMIT]
+        folder_notes = [r["path"] for r in folder_rows if r["path"] != path][
+            :_CONTEXT_FOLDER_PEERS_LIMIT
+        ]
 
         # Tags — indexed frontmatter fields present on this document.
         tags: dict[str, list[str]] = {}
