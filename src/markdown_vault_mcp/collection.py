@@ -13,6 +13,7 @@ import json
 import logging
 import mimetypes
 import queue
+import re
 import shutil
 import sqlite3
 import threading
@@ -72,6 +73,66 @@ logger = logging.getLogger(__name__)
 _DEFAULT_STATE_SUBDIR = ".markdown_vault_mcp"
 _DEFAULT_STATE_FILENAME = "state.json"
 _CONTEXT_FOLDER_PEERS_LIMIT = 20
+
+# ---------------------------------------------------------------------------
+# Link-update helpers (used by Collection.rename update_links logic)
+# ---------------------------------------------------------------------------
+
+
+def _compute_new_raw_target(
+    link_type: str, raw_target: str, fragment: str | None, new_path: str
+) -> str:
+    """Compute the replacement raw_target string when a file is renamed.
+
+    Args:
+        link_type: One of ``"markdown"``, ``"reference"``, ``"wikilink"``.
+        raw_target: The literal link string stored in the source file.
+        fragment: The heading fragment (``#heading``) of the link, if any.
+        new_path: The vault-relative path of the renamed file (e.g.
+            ``"notes/new-name.md"``).
+
+    Returns:
+        The replacement raw_target string to write into the source file.
+    """
+    if link_type == "wikilink":
+        # Determine whether the original wikilink included the .md extension.
+        old_path_part = raw_target.split("#")[0]
+        if old_path_part.lower().endswith(".md"):
+            new_path_part = new_path
+        else:
+            new_path_part = new_path[:-3] if new_path.endswith(".md") else new_path
+        return new_path_part + ("#" + fragment if fragment else "")
+    else:
+        # markdown and reference: use vault-relative new_path, append fragment.
+        return new_path + ("#" + fragment if fragment else "")
+
+
+def _apply_link_replacement(
+    content: str, link_type: str, old_raw: str, new_raw: str
+) -> str:
+    """Replace a single link target occurrence in file content.
+
+    Args:
+        content: Full file content to modify.
+        link_type: One of ``"markdown"``, ``"reference"``, ``"wikilink"``.
+        old_raw: The original raw_target string to find.
+        new_raw: The replacement raw_target string.
+
+    Returns:
+        Updated content with all occurrences of *old_raw* replaced.
+    """
+    if link_type == "markdown":
+        return content.replace("(" + old_raw + ")", "(" + new_raw + ")")
+    elif link_type == "reference":
+        return content.replace("]: " + old_raw, "]: " + new_raw)
+    elif link_type == "wikilink":
+        return re.sub(
+            r"\[\[" + re.escape(old_raw) + r"(\|[^\]]*)?\]\]",
+            lambda m: "[[" + new_raw + (m.group(1) or "") + "]]",
+            content,
+        )
+    return content
+
 
 # RRF constant — standard value recommended in the original paper.
 _RRF_K = 60
@@ -2116,7 +2177,12 @@ class Collection:
         return DeleteResult(path=path)
 
     def rename(
-        self, old_path: str, new_path: str, if_match: str | None = None
+        self,
+        old_path: str,
+        new_path: str,
+        if_match: str | None = None,
+        *,
+        update_links: bool = False,
     ) -> RenameResult:
         """Rename or move a document or attachment.
 
@@ -2125,6 +2191,11 @@ class Collection:
         (no index update).  Creates intermediate directories for *new_path*
         as needed.
 
+        When *update_links* is ``True`` and *old_path* is a ``.md`` document,
+        every document that links to *old_path* is also updated so its links
+        point to *new_path*.  Replacement is best-effort: failures are logged
+        at ``WARNING`` but do not prevent the rename from succeeding.
+
         Args:
             old_path: Current relative document or attachment path.
             new_path: Target relative document or attachment path.
@@ -2132,9 +2203,14 @@ class Collection:
                 :meth:`read_attachment` call for *old_path*. When provided,
                 the rename is only performed if the current file hash matches
                 this value. Pass ``None`` (default) to skip the check.
+            update_links: When ``True``, find all documents that link to
+                *old_path* and rewrite their link targets to point to
+                *new_path*. Only applies to ``.md`` documents.  Default
+                ``False``.
 
         Returns:
-            :class:`~markdown_vault_mcp.types.RenameResult`.
+            :class:`~markdown_vault_mcp.types.RenameResult` with
+            *updated_links* counting source documents successfully updated.
 
         Raises:
             ReadOnlyError: If the collection is read-only.
@@ -2146,6 +2222,9 @@ class Collection:
                 non-.md paths) has an extension not in the attachment allowlist.
         """
         self._check_writable()
+        source_callbacks: list[tuple[Path, str]] = []
+        updated_links = 0
+
         with self._write_lock:
             self._ensure_initialized()
 
@@ -2163,6 +2242,10 @@ class Collection:
                         raise ConcurrentModificationError(
                             old_path, expected=if_match, actual=current_hash
                         )
+
+                # Collect backlinks before the rename so the index still
+                # reflects old_path as the target.
+                backlinks = self._fts.get_backlinks(old_path) if update_links else []
 
                 new_abs.parent.mkdir(parents=True, exist_ok=True)
                 shutil.move(str(old_abs), str(new_abs))
@@ -2184,6 +2267,59 @@ class Collection:
                     self._schedule_embedding_flush()
 
                 callback_content = new_abs.read_text(encoding="utf-8")
+
+                # Update backlinkers — group rows by source file so each file
+                # is only read/written once even if it contains multiple links.
+                if backlinks:
+                    from collections import defaultdict
+
+                    by_source: dict[str, list[dict]] = defaultdict(list)
+                    for row in backlinks:
+                        by_source[row["source_path"]].append(row)
+
+                    for source_path, rows in by_source.items():
+                        try:
+                            source_abs = self._validate_path(source_path)
+                            if not source_abs.is_file():
+                                logger.warning(
+                                    "update_links: skipping %s — file not found",
+                                    source_path,
+                                )
+                                continue
+                            content = source_abs.read_text(encoding="utf-8")
+                            for row in rows:
+                                new_raw = _compute_new_raw_target(
+                                    row["link_type"],
+                                    row["raw_target"],
+                                    row["fragment"],
+                                    new_path,
+                                )
+                                content = _apply_link_replacement(
+                                    content,
+                                    row["link_type"],
+                                    row["raw_target"],
+                                    new_raw,
+                                )
+                            source_abs.write_text(content, encoding="utf-8")
+                            updated_note = parse_note(
+                                source_abs, self._source_dir, self._chunk_strategy
+                            )
+                            self._fts.upsert_note(updated_note)
+                            if (
+                                self._embeddings_path is not None
+                                and self._embedding_provider is not None
+                            ):
+                                with self._embedding_flush_lock:
+                                    self._dirty_embeddings.add(source_path)
+                                self._schedule_embedding_flush()
+                            source_callbacks.append((source_abs, content))
+                            updated_links += 1
+                        except Exception as exc:
+                            logger.warning(
+                                "update_links: failed to update %s: %s",
+                                source_path,
+                                exc,
+                            )
             else:
                 old_abs = self._validate_attachment_path(old_path)
                 new_abs = self._validate_attachment_path(new_path)
@@ -2204,7 +2340,11 @@ class Collection:
 
                 callback_content = ""
 
-        # Fire git callback in background thread.
+        # Fire git callbacks in background thread (outside write lock).
         self._fire_write_callback(new_abs, callback_content, "rename")
+        for src_abs, src_content in source_callbacks:
+            self._fire_write_callback(src_abs, src_content, "edit")
 
-        return RenameResult(old_path=old_path, new_path=new_path)
+        return RenameResult(
+            old_path=old_path, new_path=new_path, updated_links=updated_links
+        )

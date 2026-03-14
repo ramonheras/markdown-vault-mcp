@@ -1184,6 +1184,7 @@ def create_server() -> FastMCP:
         old_path: str,
         new_path: str,
         if_match: str | None = None,
+        update_links: bool = False,
         collection: Collection = Depends(get_collection),
     ) -> dict[str, Any]:
         """Rename a document or attachment, or move it to a different folder.
@@ -1201,12 +1202,21 @@ def create_server() -> FastMCP:
                 for old_path. When provided, the rename only proceeds if
                 the file has not been modified since that read (optimistic
                 concurrency). Omit to rename unconditionally.
+            update_links: When True, all .md documents that link to old_path
+                are also updated so their links point to new_path. Replacement
+                is best-effort — failures are logged but do not prevent the
+                rename. Default False.
 
         Returns:
-            Dict with old_path (str) and new_path (str).
+            Dict with old_path (str), new_path (str), and updated_links (int)
+            counting the number of source documents whose links were updated.
         """
         result = await asyncio.to_thread(
-            collection.rename, old_path, new_path, if_match=if_match
+            collection.rename,
+            old_path,
+            new_path,
+            if_match=if_match,
+            update_links=update_links,
         )
         return asdict(result)
 
