@@ -302,6 +302,7 @@ markdown-vault-mcp reindex [--source-dir PATH] [--index-path PATH]
 | `get_broken_links` | Find all links pointing to non-existent documents |
 | `get_similar` | Find semantically similar notes by document path |
 | `get_recent` | Get the most recently modified notes |
+| `get_context` | Get a consolidated context dossier for a note (backlinks, outlinks, similar, folder peers, tags, modified time) |
 
 Write tools (`write`, `edit`, `delete`, `rename`) are only available when `MARKDOWN_VAULT_MCP_READ_ONLY=false`.
 

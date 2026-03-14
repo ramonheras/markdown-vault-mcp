@@ -222,6 +222,36 @@ class BrokenLinkInfo:
     fragment: str | None = None
 
 
+@dataclass
+class SimilarItem:
+    """Shape of each entry in :attr:`NoteContext.similar`.
+
+    A compact subset of :class:`SearchResult` — path, title, and score only.
+    Use :meth:`~markdown_vault_mcp.collection.Collection.get_similar` directly
+    when you need the full chunk content.
+    """
+
+    path: str
+    title: str
+    score: float
+
+
+@dataclass
+class NoteContext:
+    """Consolidated context for a document, returned by get_context()."""
+
+    path: str
+    title: str
+    folder: str
+    frontmatter: dict[str, Any]
+    modified_at: float
+    backlinks: list[BacklinkInfo]
+    outlinks: list[OutlinkInfo]
+    similar: list[SimilarItem]
+    folder_notes: list[str]
+    tags: dict[str, list[str]]
+
+
 WriteCallback = Callable[
     [Path, str, Literal["write", "edit", "delete", "rename"]], None
 ]

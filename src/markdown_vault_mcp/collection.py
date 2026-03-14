@@ -14,6 +14,7 @@ import logging
 import mimetypes
 import queue
 import shutil
+import sqlite3
 import threading
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
@@ -47,12 +48,14 @@ from markdown_vault_mcp.types import (
     EditResult,
     IndexStats,
     NoteContent,
+    NoteContext,
     NoteInfo,
     OutlinkInfo,
     ParsedNote,
     ReindexResult,
     RenameResult,
     SearchResult,
+    SimilarItem,
     WriteCallback,
     WriteResult,
 )
@@ -68,6 +71,7 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_STATE_SUBDIR = ".markdown_vault_mcp"
 _DEFAULT_STATE_FILENAME = "state.json"
+_CONTEXT_FOLDER_PEERS_LIMIT = 20
 
 # RRF constant — standard value recommended in the original paper.
 _RRF_K = 60
@@ -1418,6 +1422,127 @@ class Collection:
         self._ensure_initialized()
         rows = self._fts.get_recent(limit=limit, folder=folder)
         return [_fts_row_to_note_info(row) for row in rows]
+
+    def get_context(
+        self,
+        path: str,
+        *,
+        similar_limit: int = 5,
+        link_limit: int = 10,
+    ) -> NoteContext:
+        """Return a consolidated context dossier for a document.
+
+        Combines backlinks, outlinks, similar notes, folder peers, and
+        indexed frontmatter tags into a single response, saving the caller
+        multiple round trips.
+
+        Args:
+            path: Relative path of the document (e.g. ``"notes/topic.md"``).
+            similar_limit: Maximum number of similar notes to include.
+            link_limit: Maximum number of backlinks and outlinks to include.
+
+        Returns:
+            A :class:`~markdown_vault_mcp.types.NoteContext` object.
+
+        Raises:
+            ValueError: If no document exists at the given path.
+        """
+        self._ensure_initialized()
+        self._validate_path(path)
+        row = self._fts.get_note(path)
+        if row is None:
+            raise ValueError(f"Document not found: {path}")
+
+        frontmatter = self._get_frontmatter(path)
+
+        # Backlinks — capped at link_limit; graceful if links table absent.
+        try:
+            backlinks = self._fts.get_backlinks(path)[:link_limit]
+            backlink_objs = [
+                BacklinkInfo(
+                    source_path=r["source_path"],
+                    source_title=r["source_title"],
+                    link_text=r["link_text"],
+                    link_type=r["link_type"],
+                    fragment=r["fragment"],
+                )
+                for r in backlinks
+            ]
+        except sqlite3.OperationalError as exc:
+            logger.warning(
+                "get_context: failed to retrieve backlinks for %s: %s", path, exc
+            )
+            backlink_objs = []
+
+        # Outlinks — capped at link_limit; graceful if links table absent.
+        try:
+            outlinks = self._fts.get_outlinks(path)[:link_limit]
+            outlink_objs = [
+                OutlinkInfo(
+                    target_path=r["target_path"],
+                    link_text=r["link_text"],
+                    link_type=r["link_type"],
+                    fragment=r["fragment"],
+                    exists=bool(r["target_exists"]),
+                )
+                for r in outlinks
+            ]
+        except sqlite3.OperationalError as exc:
+            logger.warning(
+                "get_context: failed to retrieve outlinks for %s: %s", path, exc
+            )
+            outlink_objs = []
+
+        # Similar notes — empty if embeddings not configured or similar_limit is 0.
+        similar_dicts: list[SimilarItem] = []
+        if (
+            similar_limit > 0
+            and self._embedding_provider is not None
+            and self._embeddings_path is not None
+        ):
+            self._load_vectors()
+            if self._vectors is not None and self._vectors.count > 0:
+                raw = self._vectors.search_by_path(path, limit=similar_limit)
+                similar_dicts = [
+                    SimilarItem(
+                        path=r["path"],
+                        title=r["title"],
+                        score=r["score"],
+                    )
+                    for r in raw
+                ]
+
+        # Folder peers — other notes in the same folder, capped at limit.
+        # folder is always a str (empty string for root-level docs) — never None.
+        folder = row["folder"]
+        folder_rows = self._fts.list_notes(folder=folder)
+        folder_notes = [r["path"] for r in folder_rows if r["path"] != path][
+            :_CONTEXT_FOLDER_PEERS_LIMIT
+        ]
+
+        # Tags — indexed frontmatter fields present on this document.
+        tags: dict[str, list[str]] = {}
+        for field in self._indexed_frontmatter_fields:
+            value = frontmatter.get(field)
+            if value is None:
+                continue
+            if isinstance(value, list):
+                tags[field] = [str(v) for v in value]
+            else:
+                tags[field] = [str(value)]
+
+        return NoteContext(
+            path=path,
+            title=row["title"],
+            folder=folder,
+            frontmatter=frontmatter,
+            modified_at=row["modified_at"],
+            backlinks=backlink_objs,
+            outlinks=outlink_objs,
+            similar=similar_dicts,
+            folder_notes=folder_notes,
+            tags=tags,
+        )
 
     def stats(self) -> CollectionStats:
         """Return collection-wide statistics.
