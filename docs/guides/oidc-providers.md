@@ -28,13 +28,16 @@ Add the client and a custom lifespan under `identity_providers.oidc` in your Aut
 identity_providers:
   oidc:
     # Custom lifespan for long-running MCP sessions.
-    # Default Authelia lifespans: access_token=1h, refresh_token=90m.
-    # MCP clients do not reliably re-authenticate after token expiry,
-    # so longer lifetimes prevent session drops.
+    # Default Authelia lifespans: access_token=1h, id_token=1h, refresh_token=90m.
+    # MCP clients do not reliably refresh tokens (see Known Limitations in
+    # the authentication guide), so all lifetimes must cover a full workday.
+    # IMPORTANT: id_token must match access_token — when verify_id_token=true
+    # (the default for Authelia), the id_token exp claim gates session validity.
     lifespans:
       custom:
         mcp_long_lived:
           access_token: '8h'
+          id_token: '8h'
           refresh_token: '30d'
     clients:
       - client_id: markdown-vault-mcp
@@ -61,7 +64,7 @@ identity_providers:
 ```
 
 !!! tip "Token lifetimes"
-    MCP clients (Claude.ai, Claude Code) do not reliably re-authenticate when tokens expire. The `mcp_long_lived` custom lifespan sets `access_token` to 8 hours and `refresh_token` to 30 days so tokens outlast a typical session. See [Authelia OIDC Provider — Lifespans](https://www.authelia.com/configuration/identity-providers/openid-connect/provider/#lifespans) for the full reference.
+    MCP clients (Claude.ai, Claude Code) do not reliably refresh tokens — see [Known Limitations](authentication.md#known-limitations-mcp-oauth-token-refresh). The `mcp_long_lived` custom lifespan sets both `access_token` and `id_token` to 8 hours so tokens outlast a typical work session. The `id_token` lifetime is critical when using `verify_id_token` mode (the default for Authelia) — if omitted, Authelia defaults it to 1 hour regardless of the `access_token` setting. See [Authelia OIDC Provider — Lifespans](https://www.authelia.com/configuration/identity-providers/openid-connect/provider/#lifespans) for the full reference.
 
 ### 2. Generate and hash a client secret
 
