@@ -47,6 +47,7 @@ from markdown_vault_mcp.types import (
     EditResult,
     IndexStats,
     NoteContent,
+    NoteContext,
     NoteInfo,
     OutlinkInfo,
     ParsedNote,
@@ -1418,6 +1419,116 @@ class Collection:
         self._ensure_initialized()
         rows = self._fts.get_recent(limit=limit, folder=folder)
         return [_fts_row_to_note_info(row) for row in rows]
+
+    def get_context(
+        self,
+        path: str,
+        *,
+        similar_limit: int = 5,
+        link_limit: int = 10,
+    ) -> NoteContext:
+        """Return a consolidated context dossier for a document.
+
+        Combines backlinks, outlinks, similar notes, folder peers, and
+        indexed frontmatter tags into a single response, saving the caller
+        multiple round trips.
+
+        Args:
+            path: Relative path of the document (e.g. ``"notes/topic.md"``).
+            similar_limit: Maximum number of similar notes to include.
+            link_limit: Maximum number of backlinks and outlinks to include.
+
+        Returns:
+            A :class:`~markdown_vault_mcp.types.NoteContext` object.
+
+        Raises:
+            ValueError: If no document exists at the given path.
+        """
+        self._ensure_initialized()
+        self._validate_path(path)
+        row = self._fts.get_note(path)
+        if row is None:
+            raise ValueError(f"Document not found: {path}")
+
+        frontmatter = self._get_frontmatter(path)
+
+        # Backlinks — capped at link_limit; graceful if links table absent.
+        try:
+            backlinks = self._fts.get_backlinks(path)[:link_limit]
+            backlink_objs = [
+                BacklinkInfo(
+                    source_path=r["source_path"],
+                    source_title=r["source_title"],
+                    link_text=r["link_text"],
+                    link_type=r["link_type"],
+                    fragment=r["fragment"],
+                )
+                for r in backlinks
+            ]
+        except Exception:
+            logger.warning("get_context: failed to retrieve backlinks for %s", path)
+            backlink_objs = []
+
+        # Outlinks — capped at link_limit; graceful if links table absent.
+        try:
+            outlinks = self._fts.get_outlinks(path)[:link_limit]
+            outlink_objs = [
+                OutlinkInfo(
+                    target_path=r["target_path"],
+                    link_text=r["link_text"],
+                    link_type=r["link_type"],
+                    fragment=r["fragment"],
+                    exists=bool(r["target_exists"]),
+                )
+                for r in outlinks
+            ]
+        except Exception:
+            logger.warning("get_context: failed to retrieve outlinks for %s", path)
+            outlink_objs = []
+
+        # Similar notes — empty if embeddings not configured.
+        similar_dicts: list[dict[str, Any]] = []
+        if self._embedding_provider is not None and self._embeddings_path is not None:
+            self._load_vectors()
+            if self._vectors is not None and self._vectors.count > 0:
+                raw = self._vectors.search_by_path(path, limit=similar_limit)
+                similar_dicts = [
+                    {
+                        "path": r["path"],
+                        "title": r.get("title", ""),
+                        "score": r.get("score", 0.0),
+                    }
+                    for r in raw
+                ]
+
+        # Folder peers — other notes in the same folder, max 20.
+        folder = row["folder"]
+        folder_rows = self._fts.list_notes(folder=folder) if folder else []
+        folder_notes = [r["path"] for r in folder_rows if r["path"] != path][:20]
+
+        # Tags — indexed frontmatter fields present on this document.
+        tags: dict[str, list[str]] = {}
+        for field in self._indexed_frontmatter_fields:
+            value = frontmatter.get(field)
+            if value is None:
+                continue
+            if isinstance(value, list):
+                tags[field] = [str(v) for v in value]
+            else:
+                tags[field] = [str(value)]
+
+        return NoteContext(
+            path=path,
+            title=row["title"],
+            folder=folder,
+            frontmatter=frontmatter,
+            modified_at=row["modified_at"],
+            backlinks=backlink_objs,
+            outlinks=outlink_objs,
+            similar=similar_dicts,
+            folder_notes=folder_notes,
+            tags=tags,
+        )
 
     def stats(self) -> CollectionStats:
         """Return collection-wide statistics.

@@ -1349,6 +1349,139 @@ class TestRecentTool:
 
 
 # ---------------------------------------------------------------------------
+# Context dossier tool
+# ---------------------------------------------------------------------------
+
+
+class TestContextTool:
+    """Integration tests for get_context tool."""
+
+    @pytest.fixture
+    def _mcp_env_context(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Vault with interlinked notes and a folder peer for context tests."""
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        (vault / "index.md").write_text(
+            "---\ntags: [ai, research]\n---\n# Index\n\nSee [Topic](notes/topic.md).\n",
+            encoding="utf-8",
+        )
+        (vault / "notes").mkdir()
+        (vault / "notes" / "topic.md").write_text(
+            "# Topic\n\nBack to [Index](../index.md).\n",
+            encoding="utf-8",
+        )
+        (vault / "notes" / "peer.md").write_text(
+            "# Peer\n\nA sibling note.\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", str(vault))
+        monkeypatch.delenv("MARKDOWN_VAULT_MCP_READ_ONLY", raising=False)
+        for var in _CLEAR_VARS:
+            monkeypatch.delenv(var, raising=False)
+        # Set after clearing so it is not wiped by _CLEAR_VARS.
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_INDEXED_FIELDS", "tags")
+
+    @pytest.mark.usefixtures("_mcp_env_context")
+    async def test_get_context_basic_fields(self) -> None:
+        """get_context returns expected top-level fields."""
+        server = create_server()
+        async with Client(server) as client:
+            result = await client.call_tool("get_context", {"path": "index.md"})
+        data = _parse_tool_data(result)
+        assert data["path"] == "index.md"
+        assert data["title"] == "Index"
+        assert "modified_at" in data
+        assert isinstance(data["modified_at"], float)
+        assert isinstance(data["backlinks"], list)
+        assert isinstance(data["outlinks"], list)
+        assert isinstance(data["similar"], list)
+        assert isinstance(data["folder_notes"], list)
+        assert isinstance(data["tags"], dict)
+
+    @pytest.mark.usefixtures("_mcp_env_context")
+    async def test_get_context_modified_at_matches_read(self) -> None:
+        """modified_at in context matches the value from read()."""
+        server = create_server()
+        async with Client(server) as client:
+            ctx = _parse_tool_data(
+                await client.call_tool("get_context", {"path": "index.md"})
+            )
+            read = (await client.call_tool("read", {"path": "index.md"})).data
+        assert ctx["modified_at"] == read["modified_at"]
+
+    @pytest.mark.usefixtures("_mcp_env_context")
+    async def test_get_context_backlinks(self) -> None:
+        """notes/topic.md has a backlink from index.md."""
+        server = create_server()
+        async with Client(server) as client:
+            result = await client.call_tool(
+                "get_context", {"path": "notes/topic.md"}
+            )
+        data = _parse_tool_data(result)
+        sources = [b["source_path"] for b in data["backlinks"]]
+        assert "index.md" in sources
+
+    @pytest.mark.usefixtures("_mcp_env_context")
+    async def test_get_context_outlinks(self) -> None:
+        """index.md has an outlink to notes/topic.md."""
+        server = create_server()
+        async with Client(server) as client:
+            result = await client.call_tool("get_context", {"path": "index.md"})
+        data = _parse_tool_data(result)
+        targets = [o["target_path"] for o in data["outlinks"]]
+        assert "notes/topic.md" in targets
+
+    @pytest.mark.usefixtures("_mcp_env_context")
+    async def test_get_context_folder_notes_excludes_self(self) -> None:
+        """folder_notes for notes/topic.md contains peer.md but not topic.md."""
+        server = create_server()
+        async with Client(server) as client:
+            result = await client.call_tool(
+                "get_context", {"path": "notes/topic.md"}
+            )
+        data = _parse_tool_data(result)
+        assert "notes/topic.md" not in data["folder_notes"]
+        assert "notes/peer.md" in data["folder_notes"]
+
+    @pytest.mark.usefixtures("_mcp_env_context")
+    async def test_get_context_tags(self) -> None:
+        """Indexed frontmatter tags appear in context.tags."""
+        server = create_server()
+        async with Client(server) as client:
+            result = await client.call_tool("get_context", {"path": "index.md"})
+        data = _parse_tool_data(result)
+        assert "tags" in data["tags"]
+        assert "ai" in data["tags"]["tags"]
+        assert "research" in data["tags"]["tags"]
+
+    @pytest.mark.usefixtures("_mcp_env_context")
+    async def test_get_context_similar_empty_without_embeddings(self) -> None:
+        """similar is empty when embeddings are not configured."""
+        server = create_server()
+        async with Client(server) as client:
+            result = await client.call_tool("get_context", {"path": "index.md"})
+        data = _parse_tool_data(result)
+        assert data["similar"] == []
+
+    @pytest.mark.usefixtures("_mcp_env_context")
+    async def test_get_context_nonexistent_raises(self) -> None:
+        """get_context raises for a path not in the index."""
+        server = create_server()
+        async with Client(server) as client:
+            with pytest.raises((ToolError, McpError)):
+                await client.call_tool("get_context", {"path": "nope.md"})
+
+    @pytest.mark.usefixtures("_mcp_env_context")
+    async def test_get_context_in_tool_list(self) -> None:
+        """get_context appears in the server tool list."""
+        server = create_server()
+        async with Client(server) as client:
+            tools = await client.list_tools()
+        names = {t.name for t in tools}
+        assert "get_context" in names
+
+
+# ---------------------------------------------------------------------------
 # Resources
 # ---------------------------------------------------------------------------
 

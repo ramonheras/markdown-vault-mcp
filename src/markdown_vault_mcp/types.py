@@ -222,6 +222,22 @@ class BrokenLinkInfo:
     fragment: str | None = None
 
 
+@dataclass
+class NoteContext:
+    """Consolidated context for a document, returned by get_context()."""
+
+    path: str
+    title: str
+    folder: str
+    frontmatter: dict[str, Any]
+    modified_at: float
+    backlinks: list[BacklinkInfo]
+    outlinks: list[OutlinkInfo]
+    similar: list[dict[str, Any]]
+    folder_notes: list[str]
+    tags: dict[str, list[str]]
+
+
 WriteCallback = Callable[
     [Path, str, Literal["write", "edit", "delete", "rename"]], None
 ]

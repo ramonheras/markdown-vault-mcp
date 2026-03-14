@@ -148,6 +148,12 @@ _TOOL_ICONS: dict[str, list[Icon]] = {
             mimeType="image/svg+xml",
         )
     ],
+    "get_context": [
+        Icon(
+            src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0Ij48ZyBmaWxsPSJub25lIiBzdHJva2U9ImN1cnJlbnRDb2xvciIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIiBzdHJva2Utd2lkdGg9IjIiPjxwYXRoIGQ9Ik0zIDdWNWEyIDIgMCAwIDEgMi0yaDJNMTcgM2gyYTIgMiAwIDAgMSAyIDJ2Mk0yMSAxN3YyYTIgMiAwIDAgMS0yIDJoLTJNNyAyMUg1YTIgMiAwIDAgMS0yLTJ2LTIiLz48Y2lyY2xlIGN4PSIxMiIgY3k9IjEyIiByPSIxIi8+PHBhdGggZD0iTTE4Ljk0NCAxMi4zM2ExIDEgMCAwIDAgMC0uNjYgNy41IDcuNSAwIDAgMC0xMS44ODggMGExIDEgMCAwIDAgMCAuNjZhNy41IDcuNSAwIDAgMCAxMS44ODggMCIvPjwvZz48L3N2Zz4=",
+            mimeType="image/svg+xml",
+        )
+    ],
 }
 
 logger = logging.getLogger(__name__)
@@ -902,6 +908,70 @@ def create_server() -> FastMCP:
             collection.get_recent, limit=limit, folder=folder
         )
         return [asdict(r) for r in results]
+
+    # --- Context dossier ---
+
+    @mcp.tool(
+        icons=_TOOL_ICONS["get_context"],
+        annotations={
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+        },
+    )
+    async def get_context(
+        path: str,
+        similar_limit: int = 5,
+        link_limit: int = 10,
+        collection: Collection = Depends(get_collection),
+    ) -> dict[str, Any]:
+        """Get a consolidated context dossier for a document.
+
+        Returns everything useful about a note in one call: its metadata,
+        backlinks (documents that link to it), outlinks (documents it links
+        to), semantically similar notes, other notes in the same folder, and
+        indexed frontmatter tags. Use this instead of making 4-5 separate
+        tool calls when you need a full picture of a note's place in the
+        vault.
+
+        Args:
+            path: Relative path of the document (e.g. "notes/topic.md").
+                Case-sensitive.
+            similar_limit: Maximum number of similar notes to include
+                (default 5). Set to 0 to skip similarity lookup.
+            link_limit: Maximum number of backlinks and outlinks to include
+                each (default 10).
+
+        Returns:
+            Dict with: path, title, folder, frontmatter (dict),
+            modified_at (Unix timestamp), backlinks (list), outlinks (list),
+            similar (list of {path, title, score}), folder_notes (list of
+            paths for other notes in the same folder, max 20), tags (dict
+            of indexed frontmatter field → list of values).
+            backlinks and outlinks are empty if link tracking is not
+            available. similar is empty if semantic search is not configured.
+
+        Raises:
+            ValueError: If no document exists at the given path.
+        """
+        result = await asyncio.to_thread(
+            collection.get_context,
+            path,
+            similar_limit=similar_limit,
+            link_limit=link_limit,
+        )
+        return {
+            "path": result.path,
+            "title": result.title,
+            "folder": result.folder,
+            "frontmatter": result.frontmatter,
+            "modified_at": result.modified_at,
+            "backlinks": [asdict(b) for b in result.backlinks],
+            "outlinks": [asdict(o) for o in result.outlinks],
+            "similar": result.similar,
+            "folder_notes": result.folder_notes,
+            "tags": result.tags,
+        }
 
     # --- Index management tools ---
 
