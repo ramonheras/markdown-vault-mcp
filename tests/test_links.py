@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 from typing import TYPE_CHECKING
+from unittest.mock import patch
 
 import pytest
 
@@ -801,8 +802,6 @@ class TestCollectionGetContext:
         self, context_vault: Path
     ) -> None:
         """backlinks and outlinks are empty when the links table methods raise."""
-        from unittest.mock import patch
-
         col = Collection(source_dir=context_vault)
         col.build_index()
 

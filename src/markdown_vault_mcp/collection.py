@@ -1506,8 +1506,8 @@ class Collection:
                 similar_dicts = [
                     {
                         "path": r["path"],
-                        "title": r.get("title", ""),
-                        "score": r.get("score", 0.0),
+                        "title": r["title"],
+                        "score": r["score"],
                     }
                     for r in raw
                 ]
