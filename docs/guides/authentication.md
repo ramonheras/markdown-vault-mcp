@@ -106,7 +106,7 @@ Client → markdown-vault-mcp (OIDCProxy) → OIDC Provider
     ```
 
 !!! tip "Long-running sessions"
-    Configure `offline_access` scope on your identity provider to enable refresh tokens. Combined with long token lifetimes, this prevents session drops during extended use. See [Session drops after token expiry](#session-drops-after-token-expiry) in Troubleshooting.
+    Current MCP clients do not reliably refresh tokens — see [Known Limitations](#known-limitations-mcp-oauth-token-refresh). Configure **all** token lifetimes (access, id, refresh) on your identity provider to cover a full workday (8h+). For simpler deployments, bearer token auth is unaffected by these limitations.
 
 ### Provider guides
 
@@ -155,17 +155,74 @@ Authentication only works with HTTP transport. If you're using `--transport stdi
 
 ### Session drops after token expiry
 
-**Symptom:** the MCP client works for a few hours, then starts returning 401 errors or stops responding. Restarting the client fixes it temporarily.
+**Symptom:** the MCP client works for a period (often ~1 hour), then starts returning 401 errors or stops responding. Restarting the client fixes it temporarily.
 
-**Root cause:** MCP clients (Claude.ai, Claude Code) do not reliably re-authenticate when both access and refresh tokens expire. This is a known ecosystem-wide issue:
+**Root cause:** this is almost always a token lifetime issue, not a server bug. Check three things:
 
-- Claude Code ignores `scopes_supported` and never requests `offline_access`, so no refresh token is issued ([claude-code#7744](https://github.com/anthropics/claude-code/issues/7744))
-- The MCP Python SDK can deadlock during token refresh inside an active SSE stream ([python-sdk#1326](https://github.com/modelcontextprotocol/python-sdk/issues/1326))
+1. **id_token lifetime** (most common): When using `verify_id_token` mode (the default for Authelia), the server re-validates the upstream `id_token` on every request. If your provider's `id_token` lifetime is shorter than the `access_token` lifetime, the session dies at the `id_token` expiry — even though the access token is still valid. Authelia defaults `id_token` to 1 hour. **Fix: set `id_token` lifetime to match `access_token`** in your provider config.
 
-**Workaround:** configure long token lifetimes on your identity provider so tokens outlast a typical session. For example, set access tokens to 8 hours and refresh tokens to 30 days. Also include `offline_access` in the scopes configured on the provider side — even though current clients may not request it, future client updates may use it.
+2. **access_token lifetime**: If both `id_token` and `access_token` are set correctly but sessions still drop, check that the provider's `expires_in` response matches your configured lifetime.
 
-See the [Authelia provider guide](oidc-providers.md#authelia) for specific configuration.
+3. **No refresh token**: See [Known Limitations](#known-limitations-mcp-oauth-token-refresh) below — current MCP clients cannot refresh tokens, so sessions are limited to the token lifetime.
+
+**Workaround:** configure **all** token lifetimes on your identity provider to cover a full workday:
+
+```yaml
+# Authelia example
+lifespans:
+  custom:
+    mcp_long_lived:
+      access_token: '8h'
+      id_token: '8h'        # must match access_token for verify_id_token mode
+      refresh_token: '30d'
+```
+
+See the [Authelia provider guide](oidc-providers.md#authelia) for the full configuration.
 
 ### Opaque access tokens (Authelia)
 
 Authelia issues opaque (non-JWT) access tokens. This is handled automatically — the server verifies the `id_token` instead. No extra configuration needed. See the [Authelia guide](oidc-providers.md#authelia) for details.
+
+---
+
+## Known Limitations: MCP OAuth token refresh
+
+!!! warning "Ecosystem-wide issue (as of March 2026)"
+    The limitations below affect **all** OAuth-protected MCP servers, not just markdown-vault-mcp. They are caused by issues in the MCP client implementations (Claude Code, Claude.ai, Claude Desktop) and the MCP Python SDK.
+
+### The problem
+
+MCP clients cannot maintain sessions beyond the token lifetime because token refresh does not work. When tokens expire, the session drops and requires manual re-authentication. This affects every provider — Authelia, Keycloak, Google, Slack, Notion, Atlassian, and others.
+
+### Why refresh doesn't work
+
+Three independent issues prevent token refresh:
+
+| Layer | Issue | Impact |
+|-------|-------|--------|
+| **Claude Code** | Stores refresh tokens but never uses them ([claude-code#21333](https://github.com/anthropics/claude-code/issues/21333)) | Refresh tokens are obtained and saved but never sent back to refresh expired access tokens |
+| **Claude Code** | Never requests `offline_access` scope ([claude-code#7744](https://github.com/anthropics/claude-code/issues/7744)) | Most OIDC providers won't issue a refresh token without this scope |
+| **MCP Python SDK** | Token refresh deadlocks inside SSE streams ([python-sdk#1326](https://github.com/modelcontextprotocol/python-sdk/issues/1326)) | Even with a valid refresh token, the SDK hangs when attempting refresh during an active stream |
+
+The server-side refresh architecture (FastMCP's `OAuthProxy.exchange_refresh_token()`) is correctly implemented and would work — but it requires the client to initiate the refresh, which none of the current clients do reliably.
+
+### What works today
+
+**Bearer token auth** is unaffected by all of the above. If your deployment allows it (e.g., Claude Code with env vars, or API clients), bearer tokens are the simplest and most reliable option.
+
+**Long token lifetimes** are the only viable workaround for OIDC. Set all three lifetimes (access, id, refresh) to cover your typical session duration:
+
+- `access_token: '8h'` — covers a workday
+- `id_token: '8h'` — **must match access_token** when using `verify_id_token` mode (critical for Authelia)
+- `refresh_token: '30d'` — ready for when clients support refresh
+- Include `offline_access` in provider-side scopes — no effect today, but will enable refresh when clients are fixed
+
+### Tracking
+
+These upstream issues are actively tracked:
+
+- [anthropics/claude-code#21333](https://github.com/anthropics/claude-code/issues/21333) — refresh tokens stored but never used
+- [anthropics/claude-code#7744](https://github.com/anthropics/claude-code/issues/7744) — `offline_access` scope never requested
+- [modelcontextprotocol/python-sdk#1326](https://github.com/modelcontextprotocol/python-sdk/issues/1326) — SSE refresh deadlock
+
+When these are resolved, OIDC sessions should persist indefinitely via automatic token refresh with no changes needed to markdown-vault-mcp.
