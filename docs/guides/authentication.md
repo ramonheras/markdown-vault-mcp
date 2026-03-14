@@ -187,8 +187,8 @@ Authelia issues opaque (non-JWT) access tokens. This is handled automatically â€
 
 ## Known Limitations: MCP OAuth token refresh
 
-!!! warning "Ecosystem-wide issue (as of March 2026)"
-    The limitations below affect **all** OAuth-protected MCP servers, not just markdown-vault-mcp. They are caused by issues in the MCP client implementations (Claude Code, Claude.ai, Claude Desktop) and the MCP Python SDK.
+!!! warning "Ecosystem-wide issue"
+    The limitations below affect **all** OAuth-protected MCP servers, not just markdown-vault-mcp. They are caused by issues in the MCP client implementations (Claude Code, Claude.ai, Claude Desktop) and the MCP Python SDK. Check the linked tracking issues for current status.
 
 ### The problem
 
