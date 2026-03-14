@@ -6,6 +6,8 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+import sqlite3
+
 from markdown_vault_mcp.collection import Collection
 from markdown_vault_mcp.fts_index import FTSIndex
 from markdown_vault_mcp.scanner import extract_links
@@ -13,6 +15,7 @@ from markdown_vault_mcp.types import (
     BacklinkInfo,
     Chunk,
     LinkInfo,
+    NoteContext,
     OutlinkInfo,
     ParsedNote,
 )
@@ -701,3 +704,133 @@ class TestParsedNoteDefault:
             LinkInfo(target_path="x.md", link_text="X", link_type="markdown")
         )
         assert n2.links == []
+
+
+# ---------------------------------------------------------------------------
+# Collection.get_context
+# ---------------------------------------------------------------------------
+
+
+class TestCollectionGetContext:
+    """Tests for Collection.get_context(), including graceful degradation."""
+
+    @pytest.fixture
+    def context_vault(self, tmp_path: Path) -> Path:
+        """Vault with interlinked notes and a root-level peer."""
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        (vault / "index.md").write_text(
+            "# Index\n\nSee [Topic](notes/topic.md).\n",
+            encoding="utf-8",
+        )
+        (vault / "home.md").write_text(
+            "# Home\n\nAnother root note.\n",
+            encoding="utf-8",
+        )
+        (vault / "notes").mkdir()
+        (vault / "notes" / "topic.md").write_text(
+            "# Topic\n\nBack to [Index](../index.md).\n",
+            encoding="utf-8",
+        )
+        (vault / "notes" / "peer.md").write_text(
+            "# Peer\n\nA sibling note.\n",
+            encoding="utf-8",
+        )
+        return vault
+
+    def test_get_context_returns_note_context(self, context_vault: Path) -> None:
+        """get_context returns a NoteContext instance."""
+        col = Collection(source_dir=context_vault)
+        col.build_index()
+        result = col.get_context("index.md")
+        assert isinstance(result, NoteContext)
+
+    def test_get_context_basic_fields(self, context_vault: Path) -> None:
+        """get_context populates path, title, folder, frontmatter, modified_at."""
+        col = Collection(source_dir=context_vault)
+        col.build_index()
+        result = col.get_context("index.md")
+        assert result.path == "index.md"
+        assert result.title == "Index"
+        assert result.folder == ""
+        assert isinstance(result.frontmatter, dict)
+        assert isinstance(result.modified_at, float)
+        assert result.modified_at > 0
+
+    def test_get_context_backlinks(self, context_vault: Path) -> None:
+        """get_context includes backlinks for a well-linked note."""
+        col = Collection(source_dir=context_vault)
+        col.build_index()
+        result = col.get_context("notes/topic.md")
+        sources = [b.source_path for b in result.backlinks]
+        assert "index.md" in sources
+
+    def test_get_context_outlinks(self, context_vault: Path) -> None:
+        """get_context includes outlinks from a note."""
+        col = Collection(source_dir=context_vault)
+        col.build_index()
+        result = col.get_context("index.md")
+        targets = [o.target_path for o in result.outlinks]
+        assert "notes/topic.md" in targets
+
+    def test_get_context_folder_notes_excludes_self(self, context_vault: Path) -> None:
+        """folder_notes does not include the document itself."""
+        col = Collection(source_dir=context_vault)
+        col.build_index()
+        result = col.get_context("notes/topic.md")
+        assert "notes/topic.md" not in result.folder_notes
+        assert "notes/peer.md" in result.folder_notes
+
+    def test_get_context_root_folder_notes(self, context_vault: Path) -> None:
+        """Root-level documents see other root-level docs as folder peers."""
+        col = Collection(source_dir=context_vault)
+        col.build_index()
+        result = col.get_context("index.md")
+        assert "index.md" not in result.folder_notes
+        assert "home.md" in result.folder_notes
+
+    def test_get_context_similar_empty_without_embeddings(
+        self, context_vault: Path
+    ) -> None:
+        """similar is empty when no embedding provider is configured."""
+        col = Collection(source_dir=context_vault)
+        col.build_index()
+        result = col.get_context("index.md")
+        assert result.similar == []
+
+    def test_get_context_backlinks_outlinks_empty_without_links_table(
+        self, context_vault: Path
+    ) -> None:
+        """backlinks and outlinks are empty when the links table methods raise."""
+        from unittest.mock import patch
+
+        col = Collection(source_dir=context_vault)
+        col.build_index()
+
+        # Simulate missing links table by making FTS methods raise OperationalError.
+        err = sqlite3.OperationalError("no such table: links")
+        with (
+            patch.object(col._fts, "get_backlinks", side_effect=err),
+            patch.object(col._fts, "get_outlinks", side_effect=err),
+        ):
+            result = col.get_context("index.md")
+
+        assert result.backlinks == []
+        assert result.outlinks == []
+
+    def test_get_context_raises_for_nonexistent_path(
+        self, context_vault: Path
+    ) -> None:
+        """get_context raises ValueError when the path is not indexed."""
+        col = Collection(source_dir=context_vault)
+        col.build_index()
+        with pytest.raises(ValueError, match="Document not found"):
+            col.get_context("nonexistent.md")
+
+    def test_get_context_link_limit_caps_results(self, context_vault: Path) -> None:
+        """link_limit caps backlinks and outlinks lists."""
+        col = Collection(source_dir=context_vault)
+        col.build_index()
+        result = col.get_context("notes/topic.md", link_limit=0)
+        assert result.backlinks == []
+        assert result.outlinks == []

@@ -1502,8 +1502,9 @@ class Collection:
                 ]
 
         # Folder peers — other notes in the same folder, max 20.
+        # folder is always a str (empty string for root-level docs) — never None.
         folder = row["folder"]
-        folder_rows = self._fts.list_notes(folder=folder) if folder else []
+        folder_rows = self._fts.list_notes(folder=folder)
         folder_notes = [r["path"] for r in folder_rows if r["path"] != path][:20]
 
         # Tags — indexed frontmatter fields present on this document.
