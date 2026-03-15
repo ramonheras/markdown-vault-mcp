@@ -294,7 +294,7 @@ markdown-vault-mcp reindex [--source-dir PATH] [--index-path PATH]
 | `list_folders` | List all folder paths in the vault |
 | `list_tags` | List all unique frontmatter tag values |
 | `reindex` | Force a full reindex of the vault |
-| `stats` | Get collection statistics (document count, chunk count, etc.) |
+| `stats` | Get collection statistics (document count, chunk count, link health metrics, etc.) |
 | `build_embeddings` | Build or rebuild vector embeddings for semantic search |
 | `embeddings_status` | Check embedding provider and index status |
 | `get_backlinks` | Find all documents that link to a given document |

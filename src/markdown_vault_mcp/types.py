@@ -178,6 +178,9 @@ class CollectionStats:
     semantic_search_available: bool
     indexed_frontmatter_fields: list[str] = field(default_factory=list)
     attachment_extensions: list[str] = field(default_factory=list)
+    link_count: int = 0
+    broken_link_count: int = 0
+    orphan_count: int = 0
 
 
 @dataclass
