@@ -708,19 +708,24 @@ class FTSIndex:
             for row in cur.fetchall()
         ]
 
-    def get_backlinks(self, path: str) -> list[dict]:
+    def get_backlinks(
+        self, path: str, *, limit: int | None = None
+    ) -> list[dict]:
         """Return all documents that link TO the given path.
 
         Args:
             path: Relative document path that is the link target
                 (e.g. ``"notes/topic.md"``).
+            limit: If provided, return at most this many results.
 
         Returns:
             List of dicts with keys ``source_path``, ``source_title``,
             ``link_text``, ``link_type``, ``fragment``, ``raw_target``.
         """
+        limit_clause = "" if limit is None else "LIMIT ?"
+        params: tuple = (path,) if limit is None else (path, limit)
         cur = self._conn.execute(
-            """
+            f"""
             SELECT d.path AS source_path,
                    d.title AS source_title,
                    l.link_text,
@@ -731,12 +736,15 @@ class FTSIndex:
             JOIN documents d ON d.id = l.source_id
             WHERE l.target_path = ?
             ORDER BY d.path, l.rowid
+            {limit_clause}
             """,
-            (path,),
+            params,
         )
         return [dict(row) for row in cur.fetchall()]
 
-    def get_outlinks(self, path: str) -> list[dict]:
+    def get_outlinks(
+        self, path: str, *, limit: int | None = None
+    ) -> list[dict]:
         """Return all links FROM the given document.
 
         Uses a LEFT JOIN to check target existence in a single query,
@@ -745,13 +753,16 @@ class FTSIndex:
         Args:
             path: Relative document path that is the link source
                 (e.g. ``"notes/topic.md"``).
+            limit: If provided, return at most this many results.
 
         Returns:
             List of dicts with keys ``target_path``, ``link_text``,
             ``link_type``, ``fragment``, ``raw_target``, ``exists`` (bool).
         """
+        limit_clause = "" if limit is None else "LIMIT ?"
+        params: tuple = (path,) if limit is None else (path, limit)
         cur = self._conn.execute(
-            """
+            f"""
             SELECT l.target_path,
                    l.link_text,
                    l.link_type,
@@ -763,8 +774,9 @@ class FTSIndex:
             LEFT JOIN documents t ON t.path = l.target_path
             WHERE d.path = ?
             ORDER BY l.rowid
+            {limit_clause}
             """,
-            (path,),
+            params,
         )
         return [dict(row) for row in cur.fetchall()]
 

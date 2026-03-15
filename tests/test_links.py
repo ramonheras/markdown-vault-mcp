@@ -783,6 +783,64 @@ class TestCollectionOutlinks:
             col.get_outlinks("../../secret.md")
 
 
+class TestLinkLimitSQL:
+    """SQL LIMIT is pushed into get_backlinks/get_outlinks queries."""
+
+    def test_get_backlinks_limit_restricts_results(self) -> None:
+        """get_backlinks(limit=N) returns at most N rows."""
+        idx = FTSIndex(":memory:")
+        # Three sources link to the same target.
+        for i in range(3):
+            idx.upsert_note(
+                make_note(
+                    path=f"src{i}.md",
+                    links=[
+                        LinkInfo(
+                            target_path="target.md",
+                            link_text="T",
+                            link_type="markdown",
+                        )
+                    ],
+                )
+            )
+        assert len(idx.get_backlinks("target.md")) == 3
+        assert len(idx.get_backlinks("target.md", limit=2)) == 2
+        assert len(idx.get_backlinks("target.md", limit=1)) == 1
+
+    def test_get_outlinks_limit_restricts_results(self) -> None:
+        """get_outlinks(limit=N) returns at most N rows."""
+        idx = FTSIndex(":memory:")
+        idx.upsert_note(
+            make_note(
+                path="source.md",
+                links=[
+                    LinkInfo(target_path=f"t{i}.md", link_text="T", link_type="markdown")
+                    for i in range(4)
+                ],
+            )
+        )
+        assert len(idx.get_outlinks("source.md")) == 4
+        assert len(idx.get_outlinks("source.md", limit=2)) == 2
+
+    def test_get_backlinks_no_limit_returns_all(self) -> None:
+        """get_backlinks without limit returns all rows (backward-compatible)."""
+        idx = FTSIndex(":memory:")
+        for i in range(5):
+            idx.upsert_note(
+                make_note(
+                    path=f"src{i}.md",
+                    links=[
+                        LinkInfo(
+                            target_path="hub.md",
+                            link_text="H",
+                            link_type="markdown",
+                        )
+                    ],
+                )
+            )
+        assert len(idx.get_backlinks("hub.md")) == 5
+
+
 class TestCollectionReindex:
     def test_reindex_updates_links(self, tmp_path: Path) -> None:
         """reindex() refreshes link data for modified documents."""
