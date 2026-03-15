@@ -198,6 +198,7 @@ class BacklinkInfo:
     link_text: str
     link_type: Literal["markdown", "wikilink", "reference"]
     fragment: str | None = None
+    raw_target: str = ""
 
 
 @dataclass
@@ -209,6 +210,7 @@ class OutlinkInfo:
     link_type: Literal["markdown", "wikilink", "reference"]
     fragment: str | None = None
     exists: bool = False
+    raw_target: str = ""
 
 
 @dataclass
