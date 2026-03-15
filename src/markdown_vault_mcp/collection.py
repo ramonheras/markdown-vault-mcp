@@ -2317,6 +2317,12 @@ class Collection:
                     for row in backlinks:
                         by_source[row["source_path"]].append(row)
 
+                    # If the renamed file self-links, its source key is
+                    # old_path — but the file now lives at new_path.  Remap
+                    # before iterating so we read/write the correct file.
+                    if old_path in by_source:
+                        by_source[new_path] = by_source.pop(old_path)
+
                     for source_path, rows in by_source.items():
                         try:
                             source_abs = self._validate_path(source_path)
