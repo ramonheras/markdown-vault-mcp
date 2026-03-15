@@ -788,7 +788,8 @@ def create_server() -> FastMCP:
             List of dicts, each with: source_path (linking document),
             source_title, link_text (the clickable text), link_type
             ("markdown", "wikilink", or "reference"), fragment (heading
-            anchor or null).
+            anchor or null), raw_target (the literal link string as written
+            in the source file).
 
         Raises:
             ValueError: If no document exists at the given path.
@@ -824,8 +825,9 @@ def create_server() -> FastMCP:
         Returns:
             List of dicts, each with: target_path (linked document),
             link_text, link_type ("markdown", "wikilink", or "reference"),
-            fragment (heading anchor or null), exists (bool — True if the
-            target is an indexed document).
+            fragment (heading anchor or null), raw_target (the literal link
+            string as written in the source file), exists (bool — True if
+            the target is an indexed document).
 
         Raises:
             ValueError: If no document exists at the given path.
@@ -863,7 +865,8 @@ def create_server() -> FastMCP:
             List of dicts, each with: source_path (document containing the
             broken link), source_title, target_path (the missing target),
             link_text, link_type ("markdown", "wikilink", or "reference"),
-            fragment (heading anchor or null).
+            fragment (heading anchor or null), raw_target (the literal link
+            string as written in the source file).
         """
         results = await asyncio.to_thread(collection.get_broken_links, folder=folder)
         return [asdict(r) for r in results]
@@ -1020,8 +1023,8 @@ def create_server() -> FastMCP:
 
         Returns:
             List of dicts with path (str), title (str), folder (str),
-            frontmatter (dict), and modified_at (Unix timestamp as float),
-            ordered by path.
+            frontmatter (dict), modified_at (Unix timestamp as float), and
+            kind (always "note"), ordered by path.
         """
         results = await asyncio.to_thread(collection.get_orphan_notes)
         return [asdict(r) for r in results]
