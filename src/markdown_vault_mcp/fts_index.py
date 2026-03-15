@@ -838,7 +838,7 @@ class FTSIndex:
 
         Returns:
             List of dicts with keys ``path``, ``title``, ``folder``,
-            ordered by path.
+            ``frontmatter_json``, and ``modified_at``, ordered by path.
         """
         cur = self._conn.execute(
             """
