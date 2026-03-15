@@ -1,6 +1,6 @@
 """Shared dependency injection and lifespan for the MCP server.
 
-Provides :func:`get_collection` and :data:`_collection_lifespan` which are
+Provides :func:`get_collection` and :func:`make_collection_lifespan` which are
 imported by the tool, resource, and prompt registration modules.
 """
 
@@ -16,68 +16,84 @@ from fastmcp.server.context import Context
 from fastmcp.server.lifespan import lifespan
 
 from markdown_vault_mcp.collection import Collection
-from markdown_vault_mcp.config import load_config
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
+    from markdown_vault_mcp.config import CollectionConfig
+
 logger = logging.getLogger(__name__)
 
 
-@lifespan
-async def _collection_lifespan(
-    server: FastMCP,  # noqa: ARG001
-) -> AsyncIterator[dict[str, Any]]:
-    """Build the Collection at server startup, tear down on shutdown."""
-    config = load_config()
-    logger.info("Initialising collection from %s", config.source_dir)
+def make_collection_lifespan(config: CollectionConfig) -> Any:
+    """Create a lifespan function that closes over a pre-loaded config.
 
-    # Resolve embedding provider if embeddings_path is configured.
-    embedding_provider = None
-    if config.embeddings_path is not None:
+    Args:
+        config: A fully-loaded :class:`~markdown_vault_mcp.config.CollectionConfig`
+            instance, typically produced by a single :func:`load_config` call in
+            :func:`~markdown_vault_mcp.mcp_server.create_server`.
+
+    Returns:
+        A FastMCP lifespan coroutine that initialises the
+        :class:`~markdown_vault_mcp.collection.Collection` and yields
+        ``{"collection": collection, "config": config}`` to the lifespan context.
+    """
+
+    @lifespan
+    async def _collection_lifespan(
+        server: FastMCP,  # noqa: ARG001
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Build the Collection at server startup, tear down on shutdown."""
+        logger.info("Initialising collection from %s", config.source_dir)
+
+        # Resolve embedding provider if embeddings_path is configured.
+        embedding_provider = None
+        if config.embeddings_path is not None:
+            try:
+                from markdown_vault_mcp.providers import get_embedding_provider
+
+                embedding_provider = get_embedding_provider()
+                logger.info("Embedding provider: %s", type(embedding_provider).__name__)
+            except Exception:
+                logger.warning(
+                    "Could not load embedding provider; semantic search disabled",
+                    exc_info=True,
+                )
+
+        kwargs = config.to_collection_kwargs()
+        if embedding_provider is not None:
+            kwargs["embedding_provider"] = embedding_provider
+        collection = Collection(**kwargs)
+
+        # If periodic git pull is enabled, sync before building the initial index so
+        # build_index() scans the freshest working tree.
+        await asyncio.to_thread(collection.sync_from_remote_before_index)
+
+        # Build index eagerly so first tool call is fast.
+        stats = await asyncio.to_thread(collection.build_index)
+        logger.info(
+            "Index built: %d documents, %d chunks",
+            stats.documents_indexed,
+            stats.chunks_indexed,
+        )
+
+        # Build embeddings eagerly when an embedding provider is configured.
+        # build_embeddings() skips work if the vector index already exists on disk,
+        # so this is safe to call on every startup.
+        if embedding_provider is not None:
+            chunks_embedded = await asyncio.to_thread(collection.build_embeddings)
+            logger.info("Embeddings ready: %d chunks", chunks_embedded)
+
+        # Start background tasks (e.g. git pull loop) after index is built.
+        collection.start()
+
         try:
-            from markdown_vault_mcp.providers import get_embedding_provider
+            yield {"collection": collection, "config": config}
+        finally:
+            collection.close()
+            logger.info("Collection shut down")
 
-            embedding_provider = get_embedding_provider()
-            logger.info("Embedding provider: %s", type(embedding_provider).__name__)
-        except Exception:
-            logger.warning(
-                "Could not load embedding provider; semantic search disabled",
-                exc_info=True,
-            )
-
-    kwargs = config.to_collection_kwargs()
-    if embedding_provider is not None:
-        kwargs["embedding_provider"] = embedding_provider
-    collection = Collection(**kwargs)
-
-    # If periodic git pull is enabled, sync before building the initial index so
-    # build_index() scans the freshest working tree.
-    await asyncio.to_thread(collection.sync_from_remote_before_index)
-
-    # Build index eagerly so first tool call is fast.
-    stats = await asyncio.to_thread(collection.build_index)
-    logger.info(
-        "Index built: %d documents, %d chunks",
-        stats.documents_indexed,
-        stats.chunks_indexed,
-    )
-
-    # Build embeddings eagerly when an embedding provider is configured.
-    # build_embeddings() skips work if the vector index already exists on disk,
-    # so this is safe to call on every startup.
-    if embedding_provider is not None:
-        chunks_embedded = await asyncio.to_thread(collection.build_embeddings)
-        logger.info("Embeddings ready: %d chunks", chunks_embedded)
-
-    # Start background tasks (e.g. git pull loop) after index is built.
-    collection.start()
-
-    try:
-        yield {"collection": collection, "config": config}
-    finally:
-        collection.close()
-        logger.info("Collection shut down")
+    return _collection_lifespan
 
 
 def get_collection(ctx: Context = CurrentContext()) -> Collection:
