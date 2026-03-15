@@ -1549,7 +1549,7 @@ def create_server() -> FastMCP:
             f"Step 2: Call `get_context` with path='{path}' — this returns "
             "backlinks, outlinks, and similar notes in one call. Also call "
             "`search` using the main topic terms to surface additional documents "
-            "not captured by the link graph.\n"
+            "not captured by direct links or overall document similarity.\n"
             "Step 3: Present a list of the most relevant related documents. "
             "For each, include: the document title, its path, and one sentence "
             "explaining the connection.\n"
