@@ -149,13 +149,14 @@ def _apply_link_replacement(
         Updated content with all occurrences of *old_raw* replaced.
     """
     if link_type == "markdown":
-        # Match (url) or (url "title") / (url 'title') — preserves title.
-        # Using regex instead of str.replace for structural anchoring.
-        # NOTE: operates on raw file content; occurrences of (old_raw) inside
-        # backtick code spans would also be rewritten. Risk is low in practice.
+        # Anchor to [text]( prefix so we only match actual markdown links,
+        # not plain-text occurrences of the same path string.
+        # Captures and preserves optional link title (e.g. "title" or 'title').
+        # NOTE: operates on raw file content; occurrences inside backtick code
+        # spans would also be rewritten. Risk is low in practice.
         return re.sub(
-            r"\(" + re.escape(old_raw) + r"((?:\s[^)]*)?)\)",
-            lambda m: "(" + new_raw + m.group(1) + ")",
+            r"(\[[^\]]*?\])\(" + re.escape(old_raw) + r"((?:\s[^)]*)?)\)",
+            lambda m: m.group(1) + "(" + new_raw + m.group(2) + ")",
             content,
         )
     elif link_type == "reference":
