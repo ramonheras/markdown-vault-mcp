@@ -150,11 +150,12 @@ def _apply_link_replacement(
     """
     if link_type == "markdown":
         # Anchor to [text]( prefix so we only match actual markdown links,
-        # not plain-text occurrences of the same path string.
-        # Captures and preserves optional link title (e.g. "title" or 'title').
+        # not plain-text occurrences of the same path string. Image links
+        # ![](old_raw) are also rewritten because `!` sits before `[` and is
+        # outside the match — safe in practice since .md paths rarely appear
+        # as image URLs. Captures and preserves optional link title.
         # NOTE: operates on raw file content; occurrences inside backtick code
-        # spans and image links ![](old_raw) are also rewritten. Risk is low
-        # in practice since image paths rarely share names with .md documents.
+        # spans would also be rewritten. Risk is low in practice.
         return re.sub(
             r"(\[[^\]]*?\])\(" + re.escape(old_raw) + r"((?:\s[^)]*)?)\)",
             lambda m: m.group(1) + "(" + new_raw + m.group(2) + ")",

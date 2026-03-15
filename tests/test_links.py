@@ -1197,3 +1197,16 @@ class TestRenameUpdateLinks:
         content = (rename_vault / "self_renamed.md").read_text()
         assert "(self_renamed.md)" in content
         assert "(self_link.md)" not in content
+
+    def test_update_links_ignored_for_attachments(self, rename_vault: Path) -> None:
+        """update_links=True is silently ignored when renaming a non-.md attachment."""
+        (rename_vault / "image.png").write_bytes(b"\x89PNG\r\n")
+        col = Collection(
+            source_dir=rename_vault, read_only=False, attachment_extensions=["png"]
+        )
+        col.build_index()
+
+        result = col.rename("image.png", "photo.png", update_links=True)
+
+        assert result.updated_links == 0
+        assert (rename_vault / "photo.png").is_file()
