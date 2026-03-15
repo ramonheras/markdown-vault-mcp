@@ -842,6 +842,53 @@ class FTSIndex:
             )
         return [dict(row) for row in cur.fetchall()]
 
+    def get_orphan_notes(self) -> list[dict]:
+        """Return all documents with no inbound or outbound links.
+
+        A document is an orphan if it has zero rows in ``links`` as either
+        source (no outlinks) AND does not appear as a target in any link row
+        (no backlinks).
+
+        Returns:
+            List of dicts with keys ``path``, ``title``, ``folder``,
+            ``frontmatter_json``, and ``modified_at``, ordered by path.
+        """
+        cur = self._conn.execute(
+            """
+            SELECT path, title, folder, frontmatter_json, modified_at
+            FROM documents d
+            WHERE NOT EXISTS (SELECT 1 FROM links WHERE source_id = d.id)
+              AND NOT EXISTS (SELECT 1 FROM links WHERE target_path = d.path)
+            ORDER BY path
+            """
+        )
+        return [dict(row) for row in cur.fetchall()]
+
+    def get_most_linked(self, limit: int = 10) -> list[dict]:
+        """Return the documents with the most distinct source documents linking to them.
+
+        Args:
+            limit: Maximum number of results to return.
+
+        Returns:
+            List of dicts with keys ``path``, ``title``, ``backlink_count``,
+            ordered by backlink_count descending.
+        """
+        cur = self._conn.execute(
+            """
+            SELECT d.path,
+                   d.title,
+                   COUNT(DISTINCT l.source_id) AS backlink_count
+            FROM links l
+            JOIN documents d ON d.path = l.target_path
+            GROUP BY d.path, d.title
+            ORDER BY backlink_count DESC
+            LIMIT ?
+            """,
+            (limit,),
+        )
+        return [dict(row) for row in cur.fetchall()]
+
     def close(self) -> None:
         """Close the underlying database connection.
 

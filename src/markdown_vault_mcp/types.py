@@ -226,6 +226,15 @@ class BrokenLinkInfo:
 
 
 @dataclass
+class MostLinkedNote:
+    """A document with its inbound backlink count, returned by get_most_linked()."""
+
+    path: str
+    title: str
+    backlink_count: int
+
+
+@dataclass
 class SimilarItem:
     """Shape of each entry in :attr:`NoteContext.similar`.
 

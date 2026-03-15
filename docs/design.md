@@ -528,6 +528,15 @@ class ChangeSet:
     modified: list[str]
     deleted: list[str]
     unchanged: int
+
+# --- Graph types ---
+
+@dataclass
+class MostLinkedNote:
+    """A document with its inbound backlink count, returned by get_most_linked()."""
+    path: str
+    title: str
+    backlink_count: int               # number of distinct source documents linking here
 ```
 
 ## Database Schema
@@ -684,6 +693,8 @@ class Collection:
     def get_similar(self, path: str, *, limit: int = 10) -> list[SearchResult]: ...
     def get_recent(self, *, limit: int = 20, folder: str | None = None) -> list[NoteInfo]: ...
     def get_context(self, path: str, *, similar_limit: int = 5, link_limit: int = 10) -> NoteContext: ...
+    def get_orphan_notes(self) -> list[NoteInfo]: ...
+    def get_most_linked(self, *, limit: int = 10) -> list[MostLinkedNote]: ...
     def stats(self) -> CollectionStats: ...
 ```
 
@@ -863,6 +874,8 @@ pattern). Each tool is annotated with MCP `ToolAnnotations`:
 | `get_similar` | Find semantically similar notes by path | `True` | `False` | `True` |
 | `get_recent` | Get most recently modified notes | `True` | `False` | `True` |
 | `get_context` | Get consolidated context dossier for a note | `True` | `False` | `True` |
+| `get_orphan_notes` | Find notes with no inbound or outbound links | `True` | `False` | `True` |
+| `get_most_linked` | Find notes ranked by number of inbound links | `True` | `False` | `True` |
 
 **Tool name note**: the MCP tool is registered as `list_documents` (not `list`)
 to avoid shadowing Python's built-in `list`. The underlying `Collection.list()`

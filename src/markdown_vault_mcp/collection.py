@@ -47,6 +47,7 @@ from markdown_vault_mcp.types import (
     DeleteResult,
     EditResult,
     IndexStats,
+    MostLinkedNote,
     NoteContent,
     NoteContext,
     NoteInfo,
@@ -1547,6 +1548,33 @@ class Collection:
             folder_notes=folder_notes,
             tags=tags,
         )
+
+    def get_orphan_notes(self) -> list[NoteInfo]:
+        """Return all documents with no inbound or outbound links.
+
+        A document is an orphan if it has zero outlinks and is not referenced
+        by any other document's links.
+
+        Returns:
+            List of :class:`~markdown_vault_mcp.types.NoteInfo` objects,
+            ordered by path.
+        """
+        self._ensure_initialized()
+        rows = self._fts.get_orphan_notes()
+        return [_fts_row_to_note_info(r) for r in rows]
+
+    def get_most_linked(self, *, limit: int = 10) -> list[MostLinkedNote]:
+        """Return the documents with the most inbound links.
+
+        Args:
+            limit: Maximum number of results to return. Default 10.
+
+        Returns:
+            List of :class:`~markdown_vault_mcp.types.MostLinkedNote` ordered
+            by backlink_count descending.
+        """
+        self._ensure_initialized()
+        return [MostLinkedNote(**row) for row in self._fts.get_most_linked(limit=limit)]
 
     def stats(self) -> CollectionStats:
         """Return collection-wide statistics.
