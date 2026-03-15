@@ -528,6 +528,15 @@ class ChangeSet:
     modified: list[str]
     deleted: list[str]
     unchanged: int
+
+# --- Graph types ---
+
+@dataclass
+class MostLinkedNote:
+    """A document with its inbound backlink count, returned by get_most_linked()."""
+    path: str
+    title: str
+    backlink_count: int               # number of distinct source documents linking here
 ```
 
 ## Database Schema
@@ -684,7 +693,7 @@ class Collection:
     def get_recent(self, *, limit: int = 20, folder: str | None = None) -> list[NoteInfo]: ...
     def get_context(self, path: str, *, similar_limit: int = 5, link_limit: int = 10) -> NoteContext: ...
     def get_orphan_notes(self) -> list[NoteInfo]: ...
-    def get_most_linked(self, *, limit: int = 10) -> list[dict]: ...  # dict has path, title, backlink_count
+    def get_most_linked(self, *, limit: int = 10) -> list[MostLinkedNote]: ...
     def stats(self) -> CollectionStats: ...
 ```
 
