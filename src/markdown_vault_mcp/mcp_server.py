@@ -715,15 +715,21 @@ def create_server() -> FastMCP:
         mode="hybrid" can be used in 'search'.
 
         Returns:
-            Dict with document_count, chunk_count, folder_count,
-            semantic_search_available (bool), indexed_frontmatter_fields
-            (list of field names usable as 'filters' in 'search' and as
-            'field' in 'list_tags'), attachment_extensions (list of
-            allowed non-.md extensions), link_count (int — total links
-            indexed), broken_link_count (int — links pointing to missing
-            documents; call 'get_broken_links' if non-zero), orphan_count
-            (int — notes with no inbound or outbound links; call
-            'get_orphan_notes' if non-zero).
+            Dict with the following fields:
+
+            - document_count (int): Total number of indexed documents.
+            - chunk_count (int): Total number of indexed text chunks.
+            - folder_count (int): Total number of folders containing documents.
+            - semantic_search_available (bool): True if mode="semantic" or
+              mode="hybrid" can be used in 'search'.
+            - indexed_frontmatter_fields (list[str]): Field names usable as
+              'filters' in 'search' and as 'field' in 'list_tags'.
+            - attachment_extensions (list[str]): Allowed non-.md extensions.
+            - link_count (int): Total number of indexed links.
+            - broken_link_count (int): Links pointing to missing documents.
+              Call 'get_broken_links' if non-zero.
+            - orphan_count (int): Notes with no inbound or outbound links.
+              Call 'get_orphan_notes' if non-zero.
         """
         result = await asyncio.to_thread(collection.stats)
         return asdict(result)
@@ -785,11 +791,14 @@ def create_server() -> FastMCP:
                 "notes/topic.md"). Case-sensitive.
 
         Returns:
-            List of dicts, each with: source_path (linking document),
-            source_title, link_text (the clickable text), link_type
-            ("markdown", "wikilink", or "reference"), fragment (heading
-            anchor or null), raw_target (the literal link string as written
-            in the source file).
+            List of dicts, each with:
+
+            - source_path (str): Path of the document containing the link.
+            - source_title (str): Title of the source document.
+            - link_text (str): The clickable text of the link.
+            - link_type (str): One of "markdown", "wikilink", or "reference".
+            - fragment (str | None): Heading anchor (e.g. "#section"), or null.
+            - raw_target (str): Literal link target as written in the source.
 
         Raises:
             ValueError: If no document exists at the given path.
@@ -823,11 +832,14 @@ def create_server() -> FastMCP:
                 "notes/topic.md"). Case-sensitive.
 
         Returns:
-            List of dicts, each with: target_path (linked document),
-            link_text, link_type ("markdown", "wikilink", or "reference"),
-            fragment (heading anchor or null), raw_target (the literal link
-            string as written in the source file), exists (bool — True if
-            the target is an indexed document).
+            List of dicts, each with:
+
+            - target_path (str): Path of the linked document.
+            - link_text (str): The clickable text of the link.
+            - link_type (str): One of "markdown", "wikilink", or "reference".
+            - fragment (str | None): Heading anchor (e.g. "#section"), or null.
+            - raw_target (str): Literal link target as written in the source.
+            - exists (bool): True if the target document is indexed.
 
         Raises:
             ValueError: If no document exists at the given path.
@@ -862,11 +874,15 @@ def create_server() -> FastMCP:
                 Without this, checks all documents.
 
         Returns:
-            List of dicts, each with: source_path (document containing the
-            broken link), source_title, target_path (the missing target),
-            link_text, link_type ("markdown", "wikilink", or "reference"),
-            fragment (heading anchor or null), raw_target (the literal link
-            string as written in the source file).
+            List of dicts, each with:
+
+            - source_path (str): Path of the document containing the broken link.
+            - source_title (str): Title of the source document.
+            - target_path (str): The missing target path.
+            - link_text (str): The clickable text of the link.
+            - link_type (str): One of "markdown", "wikilink", or "reference".
+            - fragment (str | None): Heading anchor (e.g. "#section"), or null.
+            - raw_target (str): Literal link target as written in the source.
         """
         results = await asyncio.to_thread(collection.get_broken_links, folder=folder)
         return [asdict(r) for r in results]
@@ -1022,9 +1038,14 @@ def create_server() -> FastMCP:
         may need to be connected to the rest of the vault or removed.
 
         Returns:
-            List of dicts with path (str), title (str), folder (str),
-            frontmatter (dict), modified_at (Unix timestamp as float), and
-            kind (always "note"), ordered by path.
+            List of dicts ordered by path, each with:
+
+            - path (str): Relative path of the orphan note.
+            - title (str): Title of the note.
+            - folder (str): Folder containing the note.
+            - frontmatter (dict): Parsed YAML frontmatter.
+            - modified_at (float): Unix timestamp of last modification.
+            - kind (str): Always "note".
         """
         results = await asyncio.to_thread(collection.get_orphan_notes)
         return [asdict(r) for r in results]
