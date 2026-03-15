@@ -1556,16 +1556,7 @@ class Collection:
         """
         self._ensure_initialized()
         rows = self._fts.get_orphan_notes()
-        return [
-            NoteInfo(
-                path=r["path"],
-                title=r["title"],
-                folder=r["folder"],
-                frontmatter=json.loads(r["frontmatter_json"]),
-                modified_at=r["modified_at"],
-            )
-            for r in rows
-        ]
+        return [_fts_row_to_note_info(r) for r in rows]
 
     def get_most_linked(self, limit: int = 10) -> list[dict]:
         """Return the documents with the most inbound links.
