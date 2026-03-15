@@ -135,6 +135,7 @@ class CollectionConfig:
     attachment_extensions: list[str] | None = None
     max_attachment_size_mb: float = 10.0
     templates_folder: str = "_templates"
+    prompts_folder: str | None = None
 
     def to_collection_kwargs(self) -> dict[str, Any]:
         """Return keyword arguments suitable for ``Collection(**kwargs)``.
@@ -265,6 +266,8 @@ def load_config() -> CollectionConfig:
       megabytes for read and write; ``0`` disables the limit; default ``10.0``.
     - ``MARKDOWN_VAULT_MCP_TEMPLATES_FOLDER``: relative folder path where
       template markdown files are stored; default ``_templates``.
+    - ``MARKDOWN_VAULT_MCP_PROMPTS_FOLDER``: relative folder path where
+      user-defined prompt markdown files are stored; default ``None`` (disabled).
 
     The ``EMBEDDING_PROVIDER`` variable is intentionally **not** resolved here;
     call :func:`~markdown_vault_mcp.providers.get_embedding_provider`
@@ -428,6 +431,12 @@ def load_config() -> CollectionConfig:
     )
     logger.debug("load_config: templates_folder=%s", templates_folder)
 
+    raw_prompts_folder = (_env("PROMPTS_FOLDER") or "").strip()
+    prompts_folder: str | None = (
+        raw_prompts_folder.replace("\\", "/").rstrip("/") or None
+    )
+    logger.debug("load_config: prompts_folder=%s", prompts_folder)
+
     return CollectionConfig(
         source_dir=source_dir,
         read_only=read_only,
@@ -448,4 +457,5 @@ def load_config() -> CollectionConfig:
         attachment_extensions=attachment_extensions,
         max_attachment_size_mb=max_attachment_size_mb,
         templates_folder=templates_folder,
+        prompts_folder=prompts_folder,
     )
