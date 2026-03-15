@@ -272,7 +272,10 @@ def _build_default_instructions(*, read_only: bool) -> str:
         if read_only
         else (
             "This instance is READ-WRITE — use 'write' to create, 'edit' for "
-            "targeted changes (read first), 'rename' to move, 'delete' to remove."
+            "targeted changes (read first), 'rename' to move "
+            "(pass update_links=True to fix links in other notes), 'delete' to remove. "
+            "All write operations update the search index immediately — never call "
+            "'reindex' after write, edit, delete, or rename."
         )
     )
     return (
@@ -682,7 +685,9 @@ def create_server() -> FastMCP:
 
         Args:
             field: Frontmatter field name to enumerate (default "tags"). Must
-                match a field in indexed_frontmatter_fields (check 'stats').
+                be one of the values in indexed_frontmatter_fields (from 'stats')
+                — passing any other field silently returns an empty list, not an
+                error.
 
         Returns:
             Sorted list of distinct string values, e.g.
@@ -713,7 +718,12 @@ def create_server() -> FastMCP:
             Dict with document_count, chunk_count, folder_count,
             semantic_search_available (bool), indexed_frontmatter_fields
             (list of field names usable as 'filters' in 'search' and as
-            'field' in 'list_tags').
+            'field' in 'list_tags'), attachment_extensions (list of
+            allowed non-.md extensions), link_count (int — total links
+            indexed), broken_link_count (int — links pointing to missing
+            documents; call 'get_broken_links' if non-zero), orphan_count
+            (int — notes with no inbound or outbound links; call
+            'get_orphan_notes' if non-zero).
         """
         result = await asyncio.to_thread(collection.stats)
         return asdict(result)
@@ -734,8 +744,9 @@ def create_server() -> FastMCP:
         Use this to diagnose why semantic search is unavailable. Embeddings
         are built automatically on startup when configured, so chunk_count
         should normally match the FTS chunk count from 'stats'. If it is
-        lower, call 'reindex' to re-embed changed docs, or
-        'build_embeddings' with force=True to rebuild from scratch.
+        lower, call 'build_embeddings' (without force) to embed the missing
+        chunks. Use 'build_embeddings' with force=True only to rebuild from
+        scratch after changing the embedding model.
 
         Returns:
             Dict with available (bool), provider (str — provider class name,
@@ -761,6 +772,10 @@ def create_server() -> FastMCP:
         """Find all documents that link TO the given document (backlinks).
 
         Use this to discover which notes reference a particular document.
+        For a full picture of a note's place in the vault (backlinks,
+        outlinks, similar notes, folder peers), use 'get_context' instead
+        of calling this separately. Call 'get_backlinks' directly when you
+        only need the inbound link list.
         Backlinks reveal implicit relationships that search alone cannot
         surface — they show what other authors considered relevant to this
         document.
@@ -773,7 +788,8 @@ def create_server() -> FastMCP:
             List of dicts, each with: source_path (linking document),
             source_title, link_text (the clickable text), link_type
             ("markdown", "wikilink", or "reference"), fragment (heading
-            anchor or null).
+            anchor or null), raw_target (the literal link string as written
+            in the source file).
 
         Raises:
             ValueError: If no document exists at the given path.
@@ -795,9 +811,12 @@ def create_server() -> FastMCP:
     ) -> list[dict[str, Any]]:
         """Find all links FROM the given document to other documents (outlinks).
 
-        Use this to see what a document references. Each result includes an
-        'exists' flag indicating whether the target document is in the
-        collection — False means the link is broken (target does not exist).
+        Use this to see what a document references. For a full picture of
+        a note's place in the vault, use 'get_context' instead of calling
+        this separately. Call 'get_outlinks' directly when you only need
+        the outbound link list. Each result includes an 'exists' flag —
+        False means the link is broken (the target is missing from the
+        collection).
 
         Args:
             path: Relative path of the source document (e.g.
@@ -806,8 +825,9 @@ def create_server() -> FastMCP:
         Returns:
             List of dicts, each with: target_path (linked document),
             link_text, link_type ("markdown", "wikilink", or "reference"),
-            fragment (heading anchor or null), exists (bool — True if the
-            target is an indexed document).
+            fragment (heading anchor or null), raw_target (the literal link
+            string as written in the source file), exists (bool — True if
+            the target is an indexed document).
 
         Raises:
             ValueError: If no document exists at the given path.
@@ -829,9 +849,12 @@ def create_server() -> FastMCP:
     ) -> list[dict[str, Any]]:
         """Find all links that point to non-existent documents (broken links).
 
-        Use this to audit link health across the collection. A broken link
-        means the target path does not match any indexed document — the
-        referenced note may have been deleted, renamed, or never created.
+        Use this to audit link health across the collection. Call this when
+        'stats' shows broken_link_count > 0, or after a 'rename' that did
+        not use update_links=True, to see what links were left pointing to
+        the old path. A broken link means the target path does not match any
+        indexed document — the referenced note may have been deleted, renamed,
+        or never created.
 
         Args:
             folder: Optional folder filter. When provided, only checks
@@ -842,7 +865,8 @@ def create_server() -> FastMCP:
             List of dicts, each with: source_path (document containing the
             broken link), source_title, target_path (the missing target),
             link_text, link_type ("markdown", "wikilink", or "reference"),
-            fragment (heading anchor or null).
+            fragment (heading anchor or null), raw_target (the literal link
+            string as written in the source file).
         """
         results = await asyncio.to_thread(collection.get_broken_links, folder=folder)
         return [asdict(r) for r in results]
@@ -951,7 +975,9 @@ def create_server() -> FastMCP:
             path: Relative path of the document (e.g. "notes/topic.md").
                 Case-sensitive.
             similar_limit: Maximum number of similar notes to include
-                (default 5). Pass 0 to skip the similarity lookup entirely.
+                (default 5). Pass 0 to skip the similarity lookup — do this
+                when 'stats' shows semantic_search_available=False (embeddings
+                are not configured).
             link_limit: Maximum number of backlinks and outlinks to include
                 each (default 10).
 
@@ -990,14 +1016,15 @@ def create_server() -> FastMCP:
         """Return all documents with no inbound links AND no outbound links.
 
         An orphan note has no backlinks (no other note links to it) and no
-        outlinks (it links to nothing). Useful for finding isolated notes that
-        may need to be connected to the rest of the vault or removed. Note:
-        there is no limit — on large vaults this may return many results.
+        outlinks (it links to nothing). Call this when 'stats' shows
+        orphan_count > 0 — on large vaults this returns many results and
+        there is no limit parameter. Useful for finding isolated notes that
+        may need to be connected to the rest of the vault or removed.
 
         Returns:
             List of dicts with path (str), title (str), folder (str),
-            frontmatter (dict), and modified_at (Unix timestamp as float),
-            ordered by path.
+            frontmatter (dict), modified_at (Unix timestamp as float), and
+            kind (always "note"), ordered by path.
         """
         results = await asyncio.to_thread(collection.get_orphan_notes)
         return [asdict(r) for r in results]
@@ -1044,11 +1071,13 @@ def create_server() -> FastMCP:
     async def reindex(
         collection: Collection = Depends(get_collection),
     ) -> dict[str, Any]:
-        """Incrementally update the full-text search index to reflect file changes.
+        """Sync the search index with files changed on disk by an external process.
 
-        Call this when documents have been added, edited, or deleted on disk
-        outside this server. Only processes changed files — unchanged documents
-        are skipped.
+        Only needed when files are modified outside this server — for example,
+        by a text editor, a sync tool, or another process writing directly to
+        the vault directory. Do NOT call this after using 'write', 'edit',
+        'delete', or 'rename' — those tools update the index immediately as
+        part of the operation.
 
         Note: this also re-embeds changed documents in the vector index
         when semantic search is configured. Use 'build_embeddings' with
@@ -1113,7 +1142,8 @@ def create_server() -> FastMCP:
 
         For .md documents: uses 'content' (markdown body) and optional
         'frontmatter'. WARNING: replaces the entire file — use 'edit'
-        for targeted changes.
+        for targeted changes. The search index is updated immediately;
+        do not call 'reindex' afterward.
 
         For attachments (pdf, png, etc.): uses 'content_base64' (base64-
         encoded binary). 'content' and 'frontmatter' are ignored.
@@ -1185,7 +1215,8 @@ def create_server() -> FastMCP:
         only once — if not found the call fails (text changed or wrong);
         if found multiple times the call fails (use a longer, unique
         excerpt). Frontmatter can be edited: old_text may span the YAML
-        block.
+        block. The search index is updated immediately; do not call
+        'reindex' afterward.
 
         Args:
             path: Relative path to the document.
@@ -1221,7 +1252,8 @@ def create_server() -> FastMCP:
     ) -> dict[str, Any]:
         """Permanently delete a document or attachment.
 
-        For .md documents: also removes from all search indices.
+        For .md documents: removes the file and immediately updates all search
+        indices — do not call 'reindex' afterward.
         For attachments: only the file is deleted (no index to update).
         IRREVERSIBLE unless git history exists. Confirm the path with
         the user before calling.
@@ -1255,9 +1287,12 @@ def create_server() -> FastMCP:
         update_links: bool = False,
         collection: Collection = Depends(get_collection),
     ) -> dict[str, Any]:
-        """Rename a document or attachment, or move it to a different folder.
+        """Rename or move a document or attachment. When renaming a .md note,
+        always pass update_links=True to rewrite links in other documents
+        that point to the old path — omitting this leaves those links broken.
 
-        For .md documents: the file and its search index entries are updated.
+        For .md documents: the file and its search index entries are updated
+        immediately — do not call 'reindex' afterward.
         For attachments: only the file is moved (no index update needed).
         Parent directories for new_path are created automatically.
 
@@ -1273,7 +1308,8 @@ def create_server() -> FastMCP:
             update_links: When True, all .md documents that link to old_path
                 are also updated so their links point to new_path. Replacement
                 is best-effort — failures are logged but do not prevent the
-                rename. Default False.
+                rename. Default False; set True whenever renaming a .md note
+                (omitting this leaves backlinks pointing to the old path).
 
         Returns:
             Dict with old_path (str), new_path (str), and updated_links (int)
@@ -1426,9 +1462,9 @@ def create_server() -> FastMCP:
         slug = re.sub(r"[^\w\-]", "-", topic.lower()).strip("-")
         return (
             f"You are building a research note about: {topic!r}\n\n"
-            "1. Call `search` with that query. Use mode='hybrid' if available "
-            "(check `stats` first), otherwise mode='keyword'. Examine the top "
-            "results; call `read` on the 3-5 highest-scoring paths.\n"
+            "1. Call `search` with that query and mode='hybrid'. If the call "
+            "fails (semantic search not configured), retry with mode='keyword'. "
+            "Examine the top results; call `read` on the 3-5 highest-scoring paths.\n"
             "2. Write a structured markdown summary of what you found. Link "
             "each source as [document title](its/relative/path.md).\n"
             f"3. Choose a path like Research/{slug}.md. "
@@ -1510,8 +1546,10 @@ def create_server() -> FastMCP:
         return (
             f"Step 1: Call `read` with path='{path}'. Extract the main topics "
             "and key terms.\n"
-            "Step 2: Call `search` using those terms. Use mode='semantic' if "
-            "available, otherwise mode='keyword'.\n"
+            f"Step 2: Call `get_context` with path='{path}' — this returns "
+            "backlinks, outlinks, and similar notes in one call. Also call "
+            "`search` using the main topic terms to surface additional documents "
+            "not captured by direct links or overall document similarity.\n"
             "Step 3: Present a list of the most relevant related documents. "
             "For each, include: the document title, its path, and one sentence "
             "explaining the connection.\n"
