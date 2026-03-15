@@ -288,10 +288,13 @@ methods return immediately after the file write + FTS update (~5ms total
 instead of seconds). Specifically:
 
 - **Embedding updates**: modified document paths are added to a dirty set.
-  A background timer flushes the set every 30 seconds, re-embedding all dirty
-  documents and saving the `.npy` file once per batch. The flush also runs
-  synchronously before semantic/hybrid search (to ensure consistent results)
-  and on `close()` (to prevent data loss).
+  A background timer flushes the set every 30 seconds. The flush runs in
+  two phases to minimise lock hold time: (1) **outside** `_write_lock` —
+  parse each dirty document and call the embedding provider (slow, seconds
+  on CPU); (2) **inside** `_write_lock` — apply fast numpy mutations only
+  (`delete_by_path`, `VectorIndex.add_vectors` with pre-computed vectors,
+  `save`). The flush also runs synchronously before semantic/hybrid search
+  (to ensure consistent results) and on `close()` (to prevent data loss).
 - **`on_write` callback** (git commit): submitted to a background worker
   thread via a queue. The `GitWriteStrategy._lock` preserves commit ordering.
   The queue is drained on `close()`.
@@ -870,6 +873,14 @@ The `VectorIndex` maintains a sidecar metadata list where each entry maps a
 row index to `{path, title, folder, heading, content}`. This enables:
 - Bulk deletion by document path (for reindex)
 - Returning rich metadata with semantic search results
+
+Key methods:
+- `add(texts, metadata)` — embeds texts via the provider then appends rows.
+- `add_vectors(raw_vectors, metadata)` — appends pre-computed float vectors
+  (L2-normalised internally) **without** calling the provider. Use this when
+  embeddings have been computed outside a lock section (see Thread Safety).
+- `delete_by_path(path)` — removes all rows for a document.
+- `save(path)` / `load(path, provider)` — persist/restore sidecar files.
 
 ### `providers.py` -- Embedding Providers
 

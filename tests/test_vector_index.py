@@ -98,6 +98,75 @@ class TestVectorIndexAdd:
         assert index.count == 3
 
 
+class TestVectorIndexAddVectors:
+    """Tests for VectorIndex.add_vectors() — pre-computed vector ingestion."""
+
+    def test_add_vectors_stores_rows(
+        self, mock_provider: MockEmbeddingProvider
+    ) -> None:
+        """add_vectors() with pre-computed floats stores the correct row count."""
+        index = VectorIndex(mock_provider)
+        raw = mock_provider.embed(["alpha", "beta", "gamma"])
+        meta = [_make_meta(f"doc{i}.md") for i in range(3)]
+
+        added = index.add_vectors(raw, meta)
+
+        assert added == 3
+        assert index.count == 3
+
+    def test_add_vectors_empty_is_noop(
+        self, mock_provider: MockEmbeddingProvider
+    ) -> None:
+        """add_vectors() with empty lists returns 0 and leaves count unchanged."""
+        index = VectorIndex(mock_provider)
+        result = index.add_vectors([], [])
+        assert result == 0
+        assert index.count == 0
+
+    def test_add_vectors_mismatched_lengths_raises(
+        self, mock_provider: MockEmbeddingProvider
+    ) -> None:
+        """Mismatched raw_vectors / metadata lengths raise ValueError."""
+        index = VectorIndex(mock_provider)
+        raw = mock_provider.embed(["a", "b"])
+        with pytest.raises(ValueError, match="same length"):
+            index.add_vectors(raw, [_make_meta("x.md")])
+
+    def test_add_vectors_dimension_mismatch_raises(
+        self, mock_provider: MockEmbeddingProvider
+    ) -> None:
+        """Appending vectors with a different dimension raises ValueError."""
+        index = VectorIndex(mock_provider)
+        # Seed with one vector.
+        raw_first = mock_provider.embed(["first"])
+        index.add_vectors(raw_first, [_make_meta("a.md")])
+        # Construct a vector with a different (wrong) dimension.
+        dim = len(raw_first[0])
+        wrong_dim_raw = [[0.1] * (dim + 1)]
+        with pytest.raises(ValueError, match="dimension mismatch"):
+            index.add_vectors(wrong_dim_raw, [_make_meta("b.md")])
+
+    def test_add_vectors_produces_same_results_as_add(
+        self, mock_provider: MockEmbeddingProvider
+    ) -> None:
+        """add_vectors(provider.embed(texts)) produces the same index as add(texts)."""
+        meta = [_make_meta("doc.md")]
+        texts = ["hello world"]
+
+        index_via_add = VectorIndex(mock_provider)
+        index_via_add.add(texts, meta)
+
+        index_via_add_vectors = VectorIndex(mock_provider)
+        raw = mock_provider.embed(texts)
+        index_via_add_vectors.add_vectors(raw, meta)
+
+        # Both indexes should return the same top result for the same query.
+        results_add = index_via_add.search("hello world")
+        results_add_vectors = index_via_add_vectors.search("hello world")
+        assert len(results_add) == len(results_add_vectors) == 1
+        assert results_add[0]["path"] == results_add_vectors[0]["path"]
+
+
 class TestVectorIndexSearch:
     def test_search_returns_results(self, mock_provider: MockEmbeddingProvider) -> None:
         """search() returns non-empty results with metadata and score after add()."""
