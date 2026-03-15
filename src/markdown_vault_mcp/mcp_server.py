@@ -154,6 +154,18 @@ _TOOL_ICONS: dict[str, list[Icon]] = {
             mimeType="image/svg+xml",
         )
     ],
+    "get_orphan_notes": [
+        Icon(
+            src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0Ij48ZyBmaWxsPSJub25lIiBzdHJva2U9ImN1cnJlbnRDb2xvciIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIiBzdHJva2Utd2lkdGg9IjIiPjxwYXRoIGQ9Ik05IDE3SDdBNSA1IDAgMCAxIDcgNyIvPjxwYXRoIGQ9Ik0xNSA3aDJhNSA1IDAgMCAxIDQgOCIvPjxsaW5lIHgxPSI4IiB4Mj0iMTIiIHkxPSIxMiIgeTI9IjEyIi8+PGxpbmUgeDE9IjIiIHgyPSIyMiIgeTE9IjIiIHkyPSIyMiIvPjwvZz48L3N2Zz4=",
+            mimeType="image/svg+xml",
+        )
+    ],
+    "get_most_linked": [
+        Icon(
+            src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0Ij48ZyBmaWxsPSJub25lIiBzdHJva2U9ImN1cnJlbnRDb2xvciIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIiBzdHJva2Utd2lkdGg9IjIiPjxjaXJjbGUgY3g9IjEyIiBjeT0iOCIgcj0iNiIvPjxwYXRoIGQ9Ik0xNS40NzcgMTIuODkgMTcgMjJsLTUtMy01IDMgMS41MjMtOS4xMSIvPjwvZz48L3N2Zz4=",
+            mimeType="image/svg+xml",
+        )
+    ],
 }
 
 logger = logging.getLogger(__name__)
@@ -962,6 +974,57 @@ def create_server() -> FastMCP:
             link_limit=link_limit,
         )
         return asdict(result)
+
+    @mcp.tool(
+        icons=_TOOL_ICONS["get_orphan_notes"],
+        annotations={
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+        },
+    )
+    async def get_orphan_notes(
+        collection: Collection = Depends(get_collection),
+    ) -> list[dict[str, Any]]:
+        """Return all documents with no inbound or outbound links.
+
+        An orphan note has no links pointing to it (no backlinks) and contains
+        no links pointing to other notes (no outlinks). Useful for finding
+        isolated notes that may need to be connected to the rest of the vault
+        or cleaned up.
+
+        Returns:
+            List of dicts with path (str), title (str), folder (str),
+            frontmatter (dict), and modified_at (float), ordered by path.
+        """
+        results = await asyncio.to_thread(collection.get_orphan_notes)
+        return [asdict(r) for r in results]
+
+    @mcp.tool(
+        icons=_TOOL_ICONS["get_most_linked"],
+        annotations={
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+        },
+    )
+    async def get_most_linked(
+        limit: int = 10,
+        collection: Collection = Depends(get_collection),
+    ) -> list[dict[str, Any]]:
+        """Return the documents with the most inbound links (most referenced).
+
+        Useful for finding hub notes — the most important or frequently
+        referenced notes in the vault.
+
+        Args:
+            limit: Maximum number of results to return. Default 10.
+
+        Returns:
+            List of dicts with path (str), title (str), and backlink_count
+            (int), ordered by backlink_count descending.
+        """
+        return await asyncio.to_thread(collection.get_most_linked, limit)
 
     # --- Index management tools ---
 
