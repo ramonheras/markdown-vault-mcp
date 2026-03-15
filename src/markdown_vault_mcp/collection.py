@@ -150,8 +150,9 @@ def _apply_link_replacement(
     """
     if link_type == "markdown":
         # Match (url) or (url "title") / (url 'title') — preserves title.
-        # Using regex instead of str.replace to avoid accidentally matching
-        # the URL fragment inside a link title or within code spans.
+        # Using regex instead of str.replace for structural anchoring.
+        # NOTE: operates on raw file content; occurrences of (old_raw) inside
+        # backtick code spans would also be rewritten. Risk is low in practice.
         return re.sub(
             r"\(" + re.escape(old_raw) + r"((?:\s[^)]*)?)\)",
             lambda m: "(" + new_raw + m.group(1) + ")",
