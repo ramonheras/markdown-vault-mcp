@@ -1841,7 +1841,8 @@ class Collection:
         """Re-embed all dirty documents and save the vector index once.
 
         Called by the periodic timer, before semantic search, and on close.
-        Thread-safe: serialised by ``_embedding_flush_lock``.
+        Thread-safe: the dirty-set swap is atomic under ``_embedding_flush_lock``;
+        Phase 2 vector mutations are serialised by ``_write_lock``.
 
         Two-phase design to minimise lock hold time:
 

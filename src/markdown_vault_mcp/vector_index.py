@@ -205,9 +205,9 @@ class VectorIndex:
             Number of rows added.
 
         Raises:
-            ValueError: If ``len(raw_vectors) != len(metadata)``,
-                ``raw_vectors`` is empty, or the vector dimension does not
-                match the dimension of vectors already stored in the index.
+            ValueError: If ``len(raw_vectors) != len(metadata)`` or the
+                vector dimension does not match the dimension of vectors
+                already stored in the index.
         """
         if len(raw_vectors) != len(metadata):
             raise ValueError(
