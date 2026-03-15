@@ -909,7 +909,7 @@ class FTSIndex:
             row = self._conn.execute("SELECT COUNT(*) FROM links").fetchone()
             return int(row[0])
         except sqlite3.OperationalError as e:
-            if "no such table" in str(e).lower():
+            if "no such table: links" in str(e).lower():
                 return 0
             raise
 
@@ -931,7 +931,7 @@ class FTSIndex:
             ).fetchone()
             return int(row[0])
         except sqlite3.OperationalError as e:
-            if "no such table" in str(e).lower():
+            if "no such table: links" in str(e).lower():
                 return 0
             raise
 
@@ -952,7 +952,7 @@ class FTSIndex:
             ).fetchone()
             return int(row[0])
         except sqlite3.OperationalError as e:
-            if "no such table" in str(e).lower():
+            if "no such table: links" in str(e).lower():
                 return 0
             raise
 
