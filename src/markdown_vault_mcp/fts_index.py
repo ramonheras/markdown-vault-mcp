@@ -899,6 +899,57 @@ class FTSIndex:
         )
         return [dict(row) for row in cur.fetchall()]
 
+    def count_links(self) -> int:
+        """Return the total number of link rows in the links table.
+
+        Returns:
+            Total link count, or 0 if the links table does not exist.
+        """
+        try:
+            row = self._conn.execute("SELECT COUNT(*) FROM links").fetchone()
+            return int(row[0]) if row else 0
+        except sqlite3.OperationalError:
+            return 0
+
+    def count_broken_links(self) -> int:
+        """Return the number of links whose target is not in the documents table.
+
+        Returns:
+            Broken link count, or 0 if the links table does not exist.
+        """
+        try:
+            row = self._conn.execute(
+                """
+                SELECT COUNT(*)
+                FROM links
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM documents d WHERE d.path = links.target_path
+                )
+                """
+            ).fetchone()
+            return int(row[0]) if row else 0
+        except sqlite3.OperationalError:
+            return 0
+
+    def count_orphans(self) -> int:
+        """Return the number of documents with no inbound or outbound links.
+
+        Returns:
+            Orphan count, or 0 if the links table does not exist.
+        """
+        try:
+            row = self._conn.execute(
+                """
+                SELECT COUNT(*)
+                FROM documents d
+                WHERE NOT EXISTS (SELECT 1 FROM links WHERE source_id = d.id)
+                  AND NOT EXISTS (SELECT 1 FROM links WHERE target_path = d.path)
+                """
+            ).fetchone()
+            return int(row[0]) if row else 0
+        except sqlite3.OperationalError:
+            return 0
+
     def close(self) -> None:
         """Close the underlying database connection.
 

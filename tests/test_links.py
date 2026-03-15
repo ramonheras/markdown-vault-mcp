@@ -1303,3 +1303,84 @@ class TestRenameUpdateLinks:
 
         assert result.updated_links == 0
         assert (rename_vault / "photo.png").is_file()
+
+
+# ---------------------------------------------------------------------------
+# CollectionStats: link counts
+# ---------------------------------------------------------------------------
+
+
+class TestStatsLinkCounts:
+    """stats() returns link_count, broken_link_count, and orphan_count."""
+
+    def test_link_count_reflects_total_links(self, linked_vault: Path) -> None:
+        """link_count equals total rows in the links table."""
+        col = Collection(source_dir=linked_vault)
+        col.build_index()
+        s = col.stats()
+        # index.md → 2 links, notes/topic.md → 2 links, notes/other.md → 0
+        assert s.link_count == 4
+
+    def test_broken_link_count_zero_when_all_resolve(self, linked_vault: Path) -> None:
+        """broken_link_count is 0 when every link target exists."""
+        col = Collection(source_dir=linked_vault)
+        col.build_index()
+        assert col.stats().broken_link_count == 0
+
+    def test_broken_link_count_nonzero_for_missing_targets(
+        self, tmp_path: Path
+    ) -> None:
+        """broken_link_count counts links to non-existent documents."""
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        (vault / "source.md").write_text(
+            "# Source\n\nSee [Ghost](ghost.md) and [Void](void.md).\n",
+            encoding="utf-8",
+        )
+        col = Collection(source_dir=vault)
+        col.build_index()
+        assert col.stats().broken_link_count == 2
+
+    def test_orphan_count_for_unlinked_notes(self, tmp_path: Path) -> None:
+        """orphan_count counts notes with no inbound or outbound links."""
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        (vault / "linked.md").write_text(
+            "# Linked\n\nSee [Other](other.md).\n", encoding="utf-8"
+        )
+        (vault / "other.md").write_text("# Other\n", encoding="utf-8")
+        (vault / "island.md").write_text("# Island\n\nNo links.\n", encoding="utf-8")
+        col = Collection(source_dir=vault)
+        col.build_index()
+        # island.md has no links in or out; other.md has a backlink
+        assert col.stats().orphan_count == 1
+
+    def test_link_counts_zero_without_links_table(self, tmp_path: Path) -> None:
+        """stats() returns 0 for all link counts when no links table exists."""
+        import sqlite3
+
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        idx_path = tmp_path / "idx.db"
+        # Build an old-style index without a links table.
+        conn = sqlite3.connect(str(idx_path))
+        conn.executescript(
+            """
+            CREATE TABLE documents (
+                id INTEGER PRIMARY KEY,
+                path TEXT UNIQUE NOT NULL,
+                title TEXT NOT NULL DEFAULT '',
+                folder TEXT NOT NULL DEFAULT '',
+                content_hash TEXT NOT NULL DEFAULT '',
+                modified_at REAL NOT NULL DEFAULT 0,
+                frontmatter_json TEXT NOT NULL DEFAULT '{}'
+            );
+            """
+        )
+        conn.close()
+        col = Collection(source_dir=vault, index_path=idx_path)
+        col._ensure_initialized()  # force index load without rebuild
+        s = col.stats()
+        assert s.link_count == 0
+        assert s.broken_link_count == 0
+        assert s.orphan_count == 0

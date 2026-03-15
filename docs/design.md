@@ -519,6 +519,10 @@ class CollectionStats:
     folder_count: int
     semantic_search_available: bool
     indexed_frontmatter_fields: list[str]
+    attachment_extensions: list[str]
+    link_count: int = 0               # total rows in the links table
+    broken_link_count: int = 0        # links where target_path not in documents
+    orphan_count: int = 0             # documents with no inbound or outbound links
 
 # --- Change tracking ---
 

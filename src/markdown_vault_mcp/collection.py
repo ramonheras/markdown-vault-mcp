@@ -1713,6 +1713,9 @@ class Collection:
             semantic_search_available=semantic_available,
             indexed_frontmatter_fields=list(self._indexed_frontmatter_fields),
             attachment_extensions=attachment_extensions,
+            link_count=self._fts.count_links(),
+            broken_link_count=self._fts.count_broken_links(),
+            orphan_count=self._fts.count_orphans(),
         )
 
     # ------------------------------------------------------------------
