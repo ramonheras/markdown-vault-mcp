@@ -20,7 +20,7 @@ from fastmcp import FastMCP
 
 from markdown_vault_mcp.config import _ENV_PREFIX, load_config
 
-from ._server_deps import _collection_lifespan
+from ._server_deps import make_collection_lifespan
 from ._server_prompts import register_prompts
 from ._server_resources import register_resources
 from ._server_tools import register_tools
@@ -261,7 +261,7 @@ def create_server() -> FastMCP:
     mcp = FastMCP(
         server_name,
         instructions=instructions,
-        lifespan=_collection_lifespan,
+        lifespan=make_collection_lifespan(config),
         auth=auth,
     )
 
