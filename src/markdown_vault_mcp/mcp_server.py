@@ -156,13 +156,13 @@ _TOOL_ICONS: dict[str, list[Icon]] = {
     ],
     "get_orphan_notes": [
         Icon(
-            src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0Ij48ZyBmaWxsPSJub25lIiBzdHJva2U9ImN1cnJlbnRDb2xvciIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIiBzdHJva2Utd2lkdGg9IjIiPjxwYXRoIGQ9Ik05IDE3SDdBNSA1IDAgMCAxIDcgNyIvPjxwYXRoIGQ9Ik0xNSA3aDJhNSA1IDAgMCAxIDQgOCIvPjxsaW5lIHgxPSI4IiB4Mj0iMTIiIHkxPSIxMiIgeTI9IjEyIi8+PGxpbmUgeDE9IjIiIHgyPSIyMiIgeTE9IjIiIHkyPSIyMiIvPjwvZz48L3N2Zz4=",
+            src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0Ij48cGF0aCBmaWxsPSJub25lIiBzdHJva2U9ImN1cnJlbnRDb2xvciIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIiBzdHJva2Utd2lkdGg9IjIiIGQ9Ik05IDE3SDdBNSA1IDAgMCAxIDcgN204IDBoMmE1IDUgMCAwIDEgNCA4TTggMTJoNE0yIDJsMjAgMjAiLz48L3N2Zz4=",
             mimeType="image/svg+xml",
         )
     ],
     "get_most_linked": [
         Icon(
-            src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0Ij48ZyBmaWxsPSJub25lIiBzdHJva2U9ImN1cnJlbnRDb2xvciIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIiBzdHJva2Utd2lkdGg9IjIiPjxjaXJjbGUgY3g9IjEyIiBjeT0iOCIgcj0iNiIvPjxwYXRoIGQ9Ik0xNS40NzcgMTIuODkgMTcgMjJsLTUtMy01IDMgMS41MjMtOS4xMSIvPjwvZz48L3N2Zz4=",
+            src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0Ij48ZyBmaWxsPSJub25lIiBzdHJva2U9ImN1cnJlbnRDb2xvciIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIiBzdHJva2Utd2lkdGg9IjIiPjxwYXRoIGQ9Im0xNS40NzcgMTIuODlsMS41MTUgOC41MjZhLjUuNSAwIDAgMS0uODEuNDdsLTMuNTgtMi42ODdhMSAxIDAgMCAwLTEuMTk3IDBsLTMuNTg2IDIuNjg2YS41LjUgMCAwIDEtLjgxLS40NjlsMS41MTQtOC41MjYiLz48Y2lyY2xlIGN4PSIxMiIgY3k9IjgiIHI9IjYiLz48L2c+PC9zdmc+",
             mimeType="image/svg+xml",
         )
     ],
@@ -903,9 +903,10 @@ def create_server() -> FastMCP:
     ) -> list[dict[str, Any]]:
         """Get the most recently modified notes in the collection.
 
-        Useful for understanding what the user has been working on
-        recently. Returns notes ordered by file modification time
-        (most recent first).
+        Returns notes ordered by file modification time (most recent first).
+        Useful for surfacing recently changed content without a search query —
+        for example to summarize recent activity or resume work on recently
+        edited notes.
 
         Args:
             limit: Maximum number of notes to return (default 20).
@@ -958,8 +959,8 @@ def create_server() -> FastMCP:
             Dict with: path, title, folder, frontmatter (dict),
             modified_at (Unix timestamp), backlinks (list), outlinks (list),
             similar (list of {path, title, score}), folder_notes (list of
-            paths for other notes in the same folder, max 20), tags (dict
-            of indexed frontmatter field → list of values).
+            path strings for other notes in the same folder, max 20), tags
+            (dict of indexed frontmatter field → list of values).
             backlinks and outlinks are empty if link tracking is not
             available. similar is empty if semantic search is not configured
             or similar_limit is 0.
@@ -986,16 +987,17 @@ def create_server() -> FastMCP:
     async def get_orphan_notes(
         collection: Collection = Depends(get_collection),
     ) -> list[dict[str, Any]]:
-        """Return all documents with no inbound or outbound links.
+        """Return all documents with no inbound links AND no outbound links.
 
-        An orphan note has no links pointing to it (no backlinks) and contains
-        no links pointing to other notes (no outlinks). Useful for finding
-        isolated notes that may need to be connected to the rest of the vault
-        or cleaned up.
+        An orphan note has no backlinks (no other note links to it) and no
+        outlinks (it links to nothing). Useful for finding isolated notes that
+        may need to be connected to the rest of the vault or removed. Note:
+        there is no limit — on large vaults this may return many results.
 
         Returns:
             List of dicts with path (str), title (str), folder (str),
-            frontmatter (dict), and modified_at (float), ordered by path.
+            frontmatter (dict), and modified_at (Unix timestamp as float),
+            ordered by path.
         """
         results = await asyncio.to_thread(collection.get_orphan_notes)
         return [asdict(r) for r in results]
@@ -1012,17 +1014,19 @@ def create_server() -> FastMCP:
         limit: int = 10,
         collection: Collection = Depends(get_collection),
     ) -> list[dict[str, Any]]:
-        """Return the documents with the most inbound links (most referenced).
+        """Return the documents with the most inbound links, ranked by backlink count.
 
-        Useful for finding hub notes — the most important or frequently
-        referenced notes in the vault.
+        Useful for discovering hub notes — frequently-referenced notes that are
+        likely key concepts in the vault. For the specific documents that link to
+        a particular note, use get_backlinks instead.
 
         Args:
             limit: Maximum number of results to return. Default 10.
 
         Returns:
-            List of dicts with path (str), title (str), and backlink_count
-            (int), ordered by backlink_count descending.
+            List of dicts with path (str), title (str), and backlink_count (int
+            — number of distinct source documents linking to this note), ordered
+            by backlink_count descending.
         """
         return await asyncio.to_thread(collection.get_most_linked, limit)
 
