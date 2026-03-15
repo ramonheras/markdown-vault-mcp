@@ -181,7 +181,43 @@ class VectorIndex:
 
         # Embed first — do NOT mutate state until this succeeds.
         raw: list[list[float]] = self._provider.embed(texts)
-        vectors = np.array(raw, dtype=np.float32)
+        return self.add_vectors(raw, metadata)
+
+    def add_vectors(self, raw_vectors: list[list[float]], metadata: list[dict]) -> int:
+        """Append pre-computed embedding vectors to the index.
+
+        Accepts raw (un-normalised) float vectors as returned by
+        :meth:`~markdown_vault_mcp.providers.EmbeddingProvider.embed`.
+        Vectors are L2-normalised before storage.
+
+        Use this when embeddings have already been computed outside a
+        critical lock section — the caller embeds outside the lock, then
+        calls ``add_vectors`` inside the lock to perform only the fast
+        numpy mutation.
+
+        Args:
+            raw_vectors: Pre-computed embeddings as a list of float lists
+                (shape ``[n, dim]``).  Length must equal ``len(metadata)``.
+            metadata: Per-row dicts (keys: ``path``, ``title``, ``folder``,
+                ``heading``, ``content``).  Each dict is stored verbatim.
+
+        Returns:
+            Number of rows added.
+
+        Raises:
+            ValueError: If ``len(raw_vectors) != len(metadata)``,
+                ``raw_vectors`` is empty, or the vector dimension does not
+                match the dimension of vectors already stored in the index.
+        """
+        if len(raw_vectors) != len(metadata):
+            raise ValueError(
+                f"raw_vectors and metadata must have the same length "
+                f"(got {len(raw_vectors)} vs {len(metadata)})"
+            )
+        if not raw_vectors:
+            return 0
+
+        vectors = np.array(raw_vectors, dtype=np.float32)
 
         # L2-normalise each row.
         norms = np.linalg.norm(vectors, axis=1, keepdims=True)
@@ -205,9 +241,11 @@ class VectorIndex:
         self._metadata.extend(metadata)
 
         logger.debug(
-            "VectorIndex.add: added %d rows (total=%d)", len(texts), self.count
+            "VectorIndex.add_vectors: added %d rows (total=%d)",
+            len(raw_vectors),
+            self.count,
         )
-        return len(texts)
+        return len(raw_vectors)
 
     def search(self, query: str, *, limit: int = 10) -> list[dict]:
         """Return the top-k most similar chunks for ``query``.

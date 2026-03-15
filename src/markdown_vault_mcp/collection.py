@@ -1842,6 +1842,16 @@ class Collection:
 
         Called by the periodic timer, before semantic search, and on close.
         Thread-safe: serialised by ``_embedding_flush_lock``.
+
+        Two-phase design to minimise lock hold time:
+
+        1. **Outside** ``_write_lock``: parse each dirty document and call
+           the (potentially slow) embedding provider.
+        2. **Inside** ``_write_lock``: apply the fast numpy mutations
+           (delete old rows, append pre-computed vectors, save).
+
+        This prevents the embedding provider from blocking foreground
+        write operations for the duration of CPU/network embedding work.
         """
         if self._embeddings_path is None or self._embedding_provider is None:
             return
@@ -1858,36 +1868,50 @@ class Collection:
             paths = self._dirty_embeddings.copy()
             self._dirty_embeddings.clear()
 
-        # Mutate vector index under _write_lock to prevent races with
-        # reindex(), which also modifies self._vectors under _write_lock.
+        # Phase 1: parse and embed OUTSIDE _write_lock.
+        # provider.embed() can be slow (seconds on CPU) — don't hold the
+        # write lock during it.  Collect (path, raw_vectors, meta) tuples
+        # for paths that still exist; paths that have been deleted will
+        # have raw_vectors=None so only a delete_by_path is applied.
+        pre_embedded: list[tuple[str, list[list[float]] | None, list[dict] | None]] = []
+        for path in paths:
+            abs_path = self._source_dir / path
+            if abs_path.is_file() and path.endswith(".md"):
+                try:
+                    note = parse_note(abs_path, self._source_dir, self._chunk_strategy)
+                    texts = [c.content for c in note.chunks]
+                    meta = [
+                        {
+                            "path": note.path,
+                            "title": note.title,
+                            "folder": _derive_folder(note.path),
+                            "heading": c.heading,
+                            "content": c.content,
+                        }
+                        for c in note.chunks
+                    ]
+                    if texts:
+                        raw_vecs = self._embedding_provider.embed(texts)
+                        pre_embedded.append((path, raw_vecs, meta))
+                    else:
+                        pre_embedded.append((path, None, None))
+                except (UnicodeDecodeError, OSError) as exc:
+                    logger.warning("Deferred embedding failed for %s: %s", path, exc)
+                    # Preserve original semantics: still delete stale vectors.
+                    pre_embedded.append((path, None, None))
+            else:
+                # File deleted or non-.md — remove stale vectors only.
+                pre_embedded.append((path, None, None))
+
+        # Phase 2: mutate vector index under _write_lock.
+        # All operations here are fast numpy mutations — no I/O or embedding.
         with self._write_lock:
             vectors = self._load_vectors()
 
-            for path in paths:
+            for path, raw_vecs, meta in pre_embedded:
                 vectors.delete_by_path(path)
-                abs_path = self._source_dir / path
-                if abs_path.is_file() and path.endswith(".md"):
-                    try:
-                        note = parse_note(
-                            abs_path, self._source_dir, self._chunk_strategy
-                        )
-                        texts = [c.content for c in note.chunks]
-                        meta = [
-                            {
-                                "path": note.path,
-                                "title": note.title,
-                                "folder": _derive_folder(note.path),
-                                "heading": c.heading,
-                                "content": c.content,
-                            }
-                            for c in note.chunks
-                        ]
-                        if texts:
-                            vectors.add(texts, meta)
-                    except (UnicodeDecodeError, OSError) as exc:
-                        logger.warning(
-                            "Deferred embedding failed for %s: %s", path, exc
-                        )
+                if raw_vecs is not None and meta:
+                    vectors.add_vectors(raw_vecs, meta)
 
             vectors.save(self._embeddings_path)
             logger.debug("Flushed deferred embeddings for %d paths", len(paths))
