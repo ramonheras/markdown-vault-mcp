@@ -492,6 +492,7 @@ class RenameResult:
     """Result of a rename operation."""
     old_path: str
     new_path: str
+    updated_links: int = 0  # number of source docs updated (update_links=True)
 
 # --- Index types ---
 
@@ -674,7 +675,8 @@ class Collection:
     def delete(self, path: str,
                if_match: str | None = None) -> DeleteResult: ...
     def rename(self, old_path: str, new_path: str,
-               if_match: str | None = None) -> RenameResult: ...
+               if_match: str | None = None, *,
+               update_links: bool = False) -> RenameResult: ...
     def list(self, *, folder: str | None = None,
              pattern: str | None = None) -> list[NoteInfo]: ...
 
@@ -730,6 +732,16 @@ FTS/embedding entries, inserts new entries under the new path, updates
 embedding metadata in-place. Triggers `on_write` with the new path. Raises
 `DocumentNotFoundError` if `old_path` does not exist. Raises
 `DocumentExistsError` if `new_path` already exists.
+
+When `update_links=True` and `old_path` is a `.md` document, every document
+that links to `old_path` is also updated so its links point to `new_path`.
+The replacement is **best-effort**: per-file failures are logged at `WARNING`
+but do not prevent the rename from succeeding. The `RenameResult.updated_links`
+count reflects source documents successfully rewritten. Link style is
+preserved: vault-root-relative links are rewritten as vault-root-relative;
+source-directory-relative links (e.g. `../notes/target.md`) are rewritten
+with the correct new relative path from the source file's directory.
+`update_links` is silently ignored for attachments (non-`.md` files).
 
 **`list()` pattern parameter**: if provided, `pattern` is a Unix glob matched
 against the relative path using `fnmatch.fnmatch()`. Example:

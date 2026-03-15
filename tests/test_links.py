@@ -977,3 +977,234 @@ class TestCollectionGetContext:
         result = col.get_context("notes/topic.md", link_limit=0)
         assert result.backlinks == []
         assert result.outlinks == []
+
+
+# ---------------------------------------------------------------------------
+# Collection.rename update_links
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def rename_vault(tmp_path: Path) -> Path:
+    """Vault with notes that link to a target that will be renamed.
+
+    Layout:
+        target.md            the note that will be renamed
+        linker_md.md         contains a markdown link to target.md
+        linker_wiki.md       contains a wikilink to target.md
+        linker_ref.md        contains a reference-style link to target.md
+        linker_frag.md       contains a markdown link with fragment to target.md
+        linker_alias.md      contains a wikilink with alias to target.md
+        linker_wiki_frag.md  contains a wikilink with fragment [[target#heading]]
+        no_links.md          no links — should not be modified
+        subdir/linker_rel.md contains a relative markdown link ../target.md
+    """
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    (vault / "subdir").mkdir()
+
+    (vault / "target.md").write_text("# Target\n\nThis is the target.\n")
+    (vault / "linker_md.md").write_text(
+        "# Linker MD\n\nSee [Target](target.md) for details.\n"
+    )
+    (vault / "linker_wiki.md").write_text(
+        "# Linker Wiki\n\nSee [[target]] for details.\n"
+    )
+    (vault / "linker_ref.md").write_text(
+        "# Linker Ref\n\nSee [Target][ref]\n\n[ref]: target.md\n"
+    )
+    (vault / "linker_frag.md").write_text(
+        "# Linker Frag\n\nSee [Section](target.md#section) for details.\n"
+    )
+    (vault / "linker_alias.md").write_text(
+        "# Linker Alias\n\nSee [[target|My Target]] for details.\n"
+    )
+    (vault / "linker_wiki_frag.md").write_text(
+        "# Linker Wiki Frag\n\nSee [[target#heading]] for details.\n"
+    )
+    (vault / "subdir" / "linker_rel.md").write_text(
+        "# Linker Rel\n\nSee [Target](../target.md) for details.\n"
+    )
+    (vault / "no_links.md").write_text("# No Links\n\nJust prose.\n")
+    return vault
+
+
+class TestRenameUpdateLinks:
+    def test_update_links_false_default_does_not_modify_sources(
+        self, rename_vault: Path
+    ) -> None:
+        """update_links=False (default): source files are not modified."""
+        col = Collection(source_dir=rename_vault, read_only=False)
+        col.build_index()
+
+        result = col.rename("target.md", "renamed.md")
+
+        assert result.updated_links == 0
+        # linker_md.md still has the old link
+        content = (rename_vault / "linker_md.md").read_text()
+        assert "target.md" in content
+
+    def test_update_links_markdown_link(self, rename_vault: Path) -> None:
+        """Markdown link [text](target.md) is updated to new_path."""
+        col = Collection(source_dir=rename_vault, read_only=False)
+        col.build_index()
+
+        result = col.rename("target.md", "renamed.md", update_links=True)
+
+        assert result.old_path == "target.md"
+        assert result.new_path == "renamed.md"
+        content = (rename_vault / "linker_md.md").read_text()
+        assert "(renamed.md)" in content
+        assert "(target.md)" not in content
+
+    def test_update_links_wikilink(self, rename_vault: Path) -> None:
+        """Wikilink [[target]] is updated to [[renamed]]."""
+        col = Collection(source_dir=rename_vault, read_only=False)
+        col.build_index()
+
+        col.rename("target.md", "renamed.md", update_links=True)
+
+        content = (rename_vault / "linker_wiki.md").read_text()
+        assert "[[renamed]]" in content
+        assert "[[target]]" not in content
+
+    def test_update_links_wikilink_preserves_alias(self, rename_vault: Path) -> None:
+        """Wikilink [[target|alias]] becomes [[renamed|alias]]."""
+        col = Collection(source_dir=rename_vault, read_only=False)
+        col.build_index()
+
+        col.rename("target.md", "renamed.md", update_links=True)
+
+        content = (rename_vault / "linker_alias.md").read_text()
+        assert "[[renamed|My Target]]" in content
+        assert "[[target|" not in content
+
+    def test_update_links_reference_link(self, rename_vault: Path) -> None:
+        """Reference definition [ref]: target.md is updated."""
+        col = Collection(source_dir=rename_vault, read_only=False)
+        col.build_index()
+
+        col.rename("target.md", "renamed.md", update_links=True)
+
+        content = (rename_vault / "linker_ref.md").read_text()
+        assert "]: renamed.md" in content
+        assert "]: target.md" not in content
+
+    def test_update_links_fragment_preserved(self, rename_vault: Path) -> None:
+        """Fragment in markdown link is preserved after rename."""
+        col = Collection(source_dir=rename_vault, read_only=False)
+        col.build_index()
+
+        col.rename("target.md", "renamed.md", update_links=True)
+
+        content = (rename_vault / "linker_frag.md").read_text()
+        assert "(renamed.md#section)" in content
+        assert "(target.md#section)" not in content
+
+    def test_update_links_unrelated_file_not_modified(self, rename_vault: Path) -> None:
+        """Files with no links to the renamed note are not modified."""
+        col = Collection(source_dir=rename_vault, read_only=False)
+        col.build_index()
+        original_mtime = (rename_vault / "no_links.md").stat().st_mtime
+
+        col.rename("target.md", "renamed.md", update_links=True)
+
+        assert (rename_vault / "no_links.md").stat().st_mtime == original_mtime
+
+    def test_update_links_updated_links_count(self, rename_vault: Path) -> None:
+        """updated_links counts source documents successfully updated."""
+        col = Collection(source_dir=rename_vault, read_only=False)
+        col.build_index()
+
+        result = col.rename("target.md", "renamed.md", update_links=True)
+
+        # linker_md, linker_wiki, linker_ref, linker_frag, linker_alias,
+        # linker_wiki_frag, subdir/linker_rel = 7
+        assert result.updated_links == 7
+
+    def test_update_links_failure_does_not_prevent_rename(
+        self, rename_vault: Path
+    ) -> None:
+        """A write failure on a source file does not prevent the rename."""
+        col = Collection(source_dir=rename_vault, read_only=False)
+        col.build_index()
+
+        # Make one source file read-only to simulate a write failure.
+        linker = rename_vault / "linker_md.md"
+        linker.chmod(0o444)
+        try:
+            result = col.rename("target.md", "renamed.md", update_links=True)
+        finally:
+            linker.chmod(0o644)
+
+        # Rename succeeded even though one source update failed.
+        assert (rename_vault / "renamed.md").is_file()
+        assert not (rename_vault / "target.md").is_file()
+        # updated_links is less than the total of 7 (one failure)
+        assert result.updated_links < 7
+
+    def test_update_links_wikilink_fragment_preserved(self, rename_vault: Path) -> None:
+        """Wikilink with fragment [[target#heading]] becomes [[renamed#heading]]."""
+        col = Collection(source_dir=rename_vault, read_only=False)
+        col.build_index()
+
+        col.rename("target.md", "renamed.md", update_links=True)
+
+        content = (rename_vault / "linker_wiki_frag.md").read_text()
+        assert "[[renamed#heading]]" in content
+        assert "[[target#heading]]" not in content
+
+    def test_update_links_relative_path_preserved(self, rename_vault: Path) -> None:
+        """Cross-directory relative links keep their relative form after rename.
+
+        A file at subdir/linker_rel.md with [Target](../target.md) should
+        become [Target](../renamed.md) — not the vault-absolute renamed.md.
+        """
+        col = Collection(source_dir=rename_vault, read_only=False)
+        col.build_index()
+
+        col.rename("target.md", "renamed.md", update_links=True)
+
+        content = (rename_vault / "subdir" / "linker_rel.md").read_text()
+        assert "(../renamed.md)" in content
+        assert "(../target.md)" not in content
+
+    def test_update_links_fts_reindexed_after_update(self, rename_vault: Path) -> None:
+        """Updated source documents are re-indexed in FTS."""
+        col = Collection(source_dir=rename_vault, read_only=False)
+        col.build_index()
+
+        col.rename("target.md", "renamed.md", update_links=True)
+
+        # linker_md now has a link to renamed.md, not target.md
+        outlinks = col._fts.get_outlinks("linker_md.md")
+        targets = {r["target_path"] for r in outlinks}
+        assert "renamed.md" in targets
+        assert "target.md" not in targets
+
+    def test_update_links_self_referencing(self, rename_vault: Path) -> None:
+        """A note that links to itself has its own link updated after rename."""
+        (rename_vault / "self_link.md").write_text(
+            "# Self\n\nSee [Self](self_link.md) for more.\n"
+        )
+        col = Collection(source_dir=rename_vault, read_only=False)
+        col.build_index()
+
+        col.rename("self_link.md", "self_renamed.md", update_links=True)
+
+        content = (rename_vault / "self_renamed.md").read_text()
+        assert "(self_renamed.md)" in content
+        assert "(self_link.md)" not in content
+
+    def test_update_links_ignored_for_attachments(self, rename_vault: Path) -> None:
+        """update_links=True is silently ignored when renaming a non-.md attachment."""
+        (rename_vault / "image.png").write_bytes(b"\x89PNG\r\n")
+        col = Collection(
+            source_dir=rename_vault, read_only=False, attachment_extensions=["png"]
+        )
+        col.build_index()
+
+        result = col.rename("image.png", "photo.png", update_links=True)
+
+        assert result.updated_links == 0
+        assert (rename_vault / "photo.png").is_file()

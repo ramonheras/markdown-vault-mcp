@@ -122,6 +122,7 @@ class RenameResult:
 
     old_path: str
     new_path: str
+    updated_links: int = 0
 
 
 @dataclass
