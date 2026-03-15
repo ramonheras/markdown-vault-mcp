@@ -1183,3 +1183,17 @@ class TestRenameUpdateLinks:
         targets = {r["target_path"] for r in outlinks}
         assert "renamed.md" in targets
         assert "target.md" not in targets
+
+    def test_update_links_self_referencing(self, rename_vault: Path) -> None:
+        """A note that links to itself has its own link updated after rename."""
+        (rename_vault / "self_link.md").write_text(
+            "# Self\n\nSee [Self](self_link.md) for more.\n"
+        )
+        col = Collection(source_dir=rename_vault, read_only=False)
+        col.build_index()
+
+        col.rename("self_link.md", "self_renamed.md", update_links=True)
+
+        content = (rename_vault / "self_renamed.md").read_text()
+        assert "(self_renamed.md)" in content
+        assert "(self_link.md)" not in content
