@@ -995,10 +995,13 @@ def rename_vault(tmp_path: Path) -> Path:
         linker_ref.md        contains a reference-style link to target.md
         linker_frag.md       contains a markdown link with fragment to target.md
         linker_alias.md      contains a wikilink with alias to target.md
+        linker_wiki_frag.md  contains a wikilink with fragment [[target#heading]]
         no_links.md          no links — should not be modified
+        subdir/linker_rel.md contains a relative markdown link ../target.md
     """
     vault = tmp_path / "vault"
     vault.mkdir()
+    (vault / "subdir").mkdir()
 
     (vault / "target.md").write_text("# Target\n\nThis is the target.\n")
     (vault / "linker_md.md").write_text(
@@ -1015,6 +1018,12 @@ def rename_vault(tmp_path: Path) -> Path:
     )
     (vault / "linker_alias.md").write_text(
         "# Linker Alias\n\nSee [[target|My Target]] for details.\n"
+    )
+    (vault / "linker_wiki_frag.md").write_text(
+        "# Linker Wiki Frag\n\nSee [[target#heading]] for details.\n"
+    )
+    (vault / "subdir" / "linker_rel.md").write_text(
+        "# Linker Rel\n\nSee [Target](../target.md) for details.\n"
     )
     (vault / "no_links.md").write_text("# No Links\n\nJust prose.\n")
     return vault
@@ -1109,8 +1118,9 @@ class TestRenameUpdateLinks:
 
         result = col.rename("target.md", "renamed.md", update_links=True)
 
-        # linker_md, linker_wiki, linker_ref, linker_frag, linker_alias = 5
-        assert result.updated_links == 5
+        # linker_md, linker_wiki, linker_ref, linker_frag, linker_alias,
+        # linker_wiki_frag, subdir/linker_rel = 7
+        assert result.updated_links == 7
 
     def test_update_links_failure_does_not_prevent_rename(
         self, rename_vault: Path
@@ -1130,8 +1140,36 @@ class TestRenameUpdateLinks:
         # Rename succeeded even though one source update failed.
         assert (rename_vault / "renamed.md").is_file()
         assert not (rename_vault / "target.md").is_file()
-        # updated_links is less than the total (one failure)
-        assert result.updated_links < 5
+        # updated_links is less than the total of 7 (one failure)
+        assert result.updated_links < 7
+
+    def test_update_links_wikilink_fragment_preserved(
+        self, rename_vault: Path
+    ) -> None:
+        """Wikilink with fragment [[target#heading]] becomes [[renamed#heading]]."""
+        col = Collection(source_dir=rename_vault, read_only=False)
+        col.build_index()
+
+        col.rename("target.md", "renamed.md", update_links=True)
+
+        content = (rename_vault / "linker_wiki_frag.md").read_text()
+        assert "[[renamed#heading]]" in content
+        assert "[[target#heading]]" not in content
+
+    def test_update_links_relative_path_preserved(self, rename_vault: Path) -> None:
+        """Cross-directory relative links keep their relative form after rename.
+
+        A file at subdir/linker_rel.md with [Target](../target.md) should
+        become [Target](../renamed.md) — not the vault-absolute renamed.md.
+        """
+        col = Collection(source_dir=rename_vault, read_only=False)
+        col.build_index()
+
+        col.rename("target.md", "renamed.md", update_links=True)
+
+        content = (rename_vault / "subdir" / "linker_rel.md").read_text()
+        assert "(../renamed.md)" in content
+        assert "(../target.md)" not in content
 
     def test_update_links_fts_reindexed_after_update(self, rename_vault: Path) -> None:
         """Updated source documents are re-indexed in FTS."""
