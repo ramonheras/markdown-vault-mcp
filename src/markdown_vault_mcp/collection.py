@@ -2297,7 +2297,7 @@ class Collection:
                 source_abs = self._validate_path(source_path)
                 if not source_abs.is_file():
                     logger.warning(
-                        "update_links: skipping %s — file not found",
+                        "_update_backlinks: skipping %s — file not found",
                         source_path,
                     )
                     continue
@@ -2326,13 +2326,13 @@ class Collection:
                 pending_callbacks.append((source_abs, content))
             except (OSError, UnicodeDecodeError, ValueError, sqlite3.Error) as exc:
                 logger.warning(
-                    "update_links: failed to update %s: %s",
+                    "_update_backlinks: failed to update %s: %s",
                     source_path,
                     exc,
                 )
             except Exception as exc:
                 logger.warning(
-                    "update_links: unexpected error updating %s: %s",
+                    "_update_backlinks: unexpected error updating %s: %s",
                     source_path,
                     exc,
                     exc_info=True,
