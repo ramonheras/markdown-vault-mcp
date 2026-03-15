@@ -2353,13 +2353,7 @@ class Collection:
                                 source_abs, self._source_dir, self._chunk_strategy
                             )
                             self._fts.upsert_note(updated_note)
-                            if (
-                                self._embeddings_path is not None
-                                and self._embedding_provider is not None
-                            ):
-                                with self._embedding_flush_lock:
-                                    self._dirty_embeddings.add(source_path)
-                                self._schedule_embedding_flush()
+                            self._update_vector_index(updated_note)
                             source_callbacks.append((source_abs, content))
                             updated_links += 1
                         except Exception as exc:
