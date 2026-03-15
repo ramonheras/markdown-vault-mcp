@@ -1,0 +1,883 @@
+"""MCP tool registrations for the markdown-vault-mcp server.
+
+Call :func:`register_tools` after constructing the :class:`~fastmcp.FastMCP`
+instance in :func:`~markdown_vault_mcp.mcp_server.create_server`.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import base64
+from dataclasses import asdict
+from typing import Any, Literal
+
+from fastmcp import FastMCP
+from fastmcp.dependencies import Depends
+
+from markdown_vault_mcp.collection import Collection
+
+from ._icons import _TOOL_ICONS
+from ._server_deps import get_collection
+
+
+def register_tools(mcp: FastMCP) -> None:
+    """Register all 21 MCP tools on *mcp*.
+
+    Args:
+        mcp: The :class:`~fastmcp.FastMCP` instance to register tools on.
+    """
+
+    # --- Read-only tools (always visible) ---
+
+    @mcp.tool(
+        icons=_TOOL_ICONS["search"],
+        annotations={
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+        },
+    )
+    async def search(
+        query: str,
+        limit: int = 10,
+        mode: Literal["keyword", "semantic", "hybrid"] = "keyword",
+        folder: str | None = None,
+        filters: dict[str, str] | None = None,
+        collection: Collection = Depends(get_collection),
+    ) -> list[dict[str, Any]]:
+        """Find documents matching a query using full-text or semantic search.
+
+        Prefer mode="hybrid" when semantic search is available (check 'stats'
+        for semantic_search_available). Use mode="keyword" for exact term
+        matches; mode="semantic" for meaning-based similarity.
+
+        Args:
+            query: Natural language or keyword query string.
+            limit: Maximum results to return (default 10).
+            mode: "keyword" uses FTS5/BM25 for exact terms. "semantic" uses
+                vector similarity (requires embeddings). "hybrid" fuses both
+                via reciprocal rank fusion — best quality when available.
+            folder: Restrict to documents under this folder path (e.g.
+                "Journal"). Must match a value from 'list_folders'.
+            filters: Filter by indexed frontmatter field values, e.g.
+                {"cluster": "craft", "tags": "pacing"}. Only fields listed
+                in indexed_frontmatter_fields (see 'stats') can be filtered.
+                Multiple filters are ANDed. For list fields (e.g. tags),
+                this checks membership — {"tags": "pacing"} matches any
+                document where "pacing" appears in the tags list.
+
+        Returns:
+            List of result dicts ranked by relevance (higher score is better).
+            Each contains: path, title, folder, content (matched chunk),
+            score, frontmatter.
+
+        Raises:
+            ValueError: If mode is "semantic" or "hybrid" and no embedding
+                provider is configured.
+        """
+        results = await asyncio.to_thread(
+            collection.search,
+            query,
+            limit=limit,
+            mode=mode,
+            folder=folder,
+            filters=filters,
+        )
+        return [asdict(r) for r in results]
+
+    @mcp.tool(
+        icons=_TOOL_ICONS["read"],
+        annotations={
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+        },
+    )
+    async def read(
+        path: str,
+        collection: Collection = Depends(get_collection),
+    ) -> dict[str, Any]:
+        """Read the full content of a document or attachment by path.
+
+        For .md documents: returns markdown body, frontmatter, title, folder.
+        For attachments (pdf, png, etc.): returns base64-encoded binary content
+        and MIME type. Use 'list_documents(include_attachments=True)' to
+        discover attachment paths. Use 'stats' to see allowed extensions.
+
+        Do not guess paths — look them up first via 'search' or 'list_documents'.
+
+        Args:
+            path: Relative path to the document or attachment
+                (e.g. "Journal/note.md" or "assets/diagram.pdf").
+                Case-sensitive.
+
+        Returns:
+            For .md: dict with path, title, folder, content (markdown body),
+            frontmatter (dict), modified_at (Unix timestamp),
+            etag (SHA-256 hex str or null).
+            For attachments: dict with path, mime_type (str or null),
+            size_bytes (int), content_base64 (str), modified_at (Unix timestamp),
+            etag (SHA-256 hex str or null).
+            The 'etag' value can be passed as 'if_match' to write, edit,
+            delete, or rename to guard against concurrent modifications.
+
+        Raises:
+            ValueError: If no file exists at the given path, the extension is
+                not in the attachment allowlist, or the file exceeds the size
+                limit.
+        """
+        if not path.endswith(".md"):
+            attachment = await asyncio.to_thread(collection.read_attachment, path)
+            return asdict(attachment)
+        note = await asyncio.to_thread(collection.read, path)
+        if note is None:
+            raise ValueError(f"Document not found: {path}")
+        return asdict(note)
+
+    @mcp.tool(
+        icons=_TOOL_ICONS["list_documents"],
+        annotations={
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+        },
+    )
+    async def list_documents(
+        folder: str | None = None,
+        pattern: str | None = None,
+        include_attachments: bool = False,
+        collection: Collection = Depends(get_collection),
+    ) -> list[dict[str, Any]]:
+        """List documents (and optionally attachments) in the collection.
+
+        Use this to enumerate documents when you need a complete listing, not
+        ranked search results. For finding documents by content, use 'search'.
+        Does NOT include body content — call 'read' for full text.
+
+        Args:
+            folder: Return only documents in this folder (e.g. "Journal").
+            pattern: Unix glob matched against relative paths (e.g.
+                "Journal/*.md", "**/*meeting*.md").
+            include_attachments: When True, also returns non-.md files (PDFs,
+                images, etc.) that match the configured allowlist. Each
+                attachment entry includes kind="attachment" and mime_type.
+                Default False (notes only).
+
+        Returns:
+            List of info dicts. Every entry has a 'kind' field.
+            Notes: path, title, folder, frontmatter, modified_at, kind="note".
+            Attachments (when include_attachments=True): path, folder,
+            mime_type, size_bytes, modified_at, kind="attachment".
+            Body content is not included in either case.
+        """
+        results = await asyncio.to_thread(
+            collection.list,
+            folder=folder,
+            pattern=pattern,
+            include_attachments=include_attachments,
+        )
+        return [asdict(r) for r in results]
+
+    @mcp.tool(
+        icons=_TOOL_ICONS["list_folders"],
+        annotations={
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+        },
+    )
+    async def list_folders(
+        collection: Collection = Depends(get_collection),
+    ) -> list[str]:
+        """List all folder paths that contain documents.
+
+        Call this to discover valid folder names before filtering 'search' or
+        'list_documents' by folder. The root folder (top-level documents) is
+        represented as an empty string "".
+
+        Returns:
+            Sorted list of folder paths, e.g. ["", "Journal", "Projects"].
+            Pass any of these as the 'folder' argument to 'search' or
+            'list_documents'.
+        """
+        return await asyncio.to_thread(collection.list_folders)
+
+    @mcp.tool(
+        icons=_TOOL_ICONS["list_tags"],
+        annotations={
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+        },
+    )
+    async def list_tags(
+        field: str = "tags",
+        collection: Collection = Depends(get_collection),
+    ) -> list[str]:
+        """List all distinct values for a frontmatter field across the collection.
+
+        Use this to discover valid filter values before calling 'search' with
+        the 'filters' argument. Only fields listed in indexed_frontmatter_fields
+        (see 'stats') are indexed — querying other fields returns an empty list.
+
+        Args:
+            field: Frontmatter field name to enumerate (default "tags"). Must
+                be one of the values in indexed_frontmatter_fields (from 'stats')
+                — passing any other field silently returns an empty list, not an
+                error.
+
+        Returns:
+            Sorted list of distinct string values, e.g.
+            ["craft", "pacing", "worldbuilding"]. Use these as values in the
+            'filters' dict when calling 'search'.
+        """
+        return await asyncio.to_thread(collection.list_tags, field)
+
+    @mcp.tool(
+        icons=_TOOL_ICONS["stats"],
+        annotations={
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+        },
+    )
+    async def stats(
+        collection: Collection = Depends(get_collection),
+    ) -> dict[str, Any]:
+        """Get an overview of the collection's size, capabilities, and configuration.
+
+        Call this at the start of a session to understand what the collection
+        contains and what search modes are available. The
+        'semantic_search_available' field tells you whether mode="semantic" or
+        mode="hybrid" can be used in 'search'.
+
+        Returns:
+            Dict with the following fields:
+
+            - document_count (int): Total number of indexed documents.
+            - chunk_count (int): Total number of indexed text chunks.
+            - folder_count (int): Total number of folders containing documents.
+            - semantic_search_available (bool): True if mode="semantic" or
+              mode="hybrid" can be used in 'search'.
+            - indexed_frontmatter_fields (list[str]): Field names usable as
+              'filters' in 'search' and as 'field' in 'list_tags'.
+            - attachment_extensions (list[str]): Allowed non-.md extensions.
+            - link_count (int): Total number of indexed links.
+            - broken_link_count (int): Links pointing to missing documents.
+              Call 'get_broken_links' if non-zero.
+            - orphan_count (int): Notes with no inbound or outbound links.
+              Call 'get_orphan_notes' if non-zero.
+        """
+        result = await asyncio.to_thread(collection.stats)
+        return asdict(result)
+
+    @mcp.tool(
+        icons=_TOOL_ICONS["embeddings_status"],
+        annotations={
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+        },
+    )
+    async def embeddings_status(
+        collection: Collection = Depends(get_collection),
+    ) -> dict[str, Any]:
+        """Check the embedding provider configuration and vector index status.
+
+        Use this to diagnose why semantic search is unavailable. Embeddings
+        are built automatically on startup when configured, so chunk_count
+        should normally match the FTS chunk count from 'stats'. If it is
+        lower, call 'build_embeddings' (without force) to embed the missing
+        chunks. Use 'build_embeddings' with force=True only to rebuild from
+        scratch after changing the embedding model.
+
+        Returns:
+            Dict with available (bool), provider (str — provider class name,
+            e.g. "OllamaProvider"), chunk_count (int — embedded chunks in the
+            vector index), and path (str — vector index file path).
+        """
+        return await asyncio.to_thread(collection.embeddings_status)
+
+    # --- Link tools (read-only) ---
+
+    @mcp.tool(
+        icons=_TOOL_ICONS["get_backlinks"],
+        annotations={
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+        },
+    )
+    async def get_backlinks(
+        path: str,
+        collection: Collection = Depends(get_collection),
+    ) -> list[dict[str, Any]]:
+        """Find all documents that link TO the given document (backlinks).
+
+        Use this to discover which notes reference a particular document.
+        For a full picture of a note's place in the vault (backlinks,
+        outlinks, similar notes, folder peers), use 'get_context' instead
+        of calling this separately. Call 'get_backlinks' directly when you
+        only need the inbound link list.
+        Backlinks reveal implicit relationships that search alone cannot
+        surface — they show what other authors considered relevant to this
+        document.
+
+        Args:
+            path: Relative path of the target document (e.g.
+                "notes/topic.md"). Case-sensitive.
+
+        Returns:
+            List of dicts, each with:
+
+            - source_path (str): Path of the document containing the link.
+            - source_title (str): Title of the source document.
+            - link_text (str): The clickable text of the link.
+            - link_type (str): One of "markdown", "wikilink", or "reference".
+            - fragment (str | None): Heading anchor (e.g. "#section"), or null.
+            - raw_target (str): Literal link target as written in the source.
+
+        Raises:
+            ValueError: If no document exists at the given path.
+        """
+        results = await asyncio.to_thread(collection.get_backlinks, path)
+        return [asdict(r) for r in results]
+
+    @mcp.tool(
+        icons=_TOOL_ICONS["get_outlinks"],
+        annotations={
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+        },
+    )
+    async def get_outlinks(
+        path: str,
+        collection: Collection = Depends(get_collection),
+    ) -> list[dict[str, Any]]:
+        """Find all links FROM the given document to other documents (outlinks).
+
+        Use this to see what a document references. For a full picture of
+        a note's place in the vault, use 'get_context' instead of calling
+        this separately. Call 'get_outlinks' directly when you only need
+        the outbound link list. Each result includes an 'exists' flag —
+        False means the link is broken (the target is missing from the
+        collection).
+
+        Args:
+            path: Relative path of the source document (e.g.
+                "notes/topic.md"). Case-sensitive.
+
+        Returns:
+            List of dicts, each with:
+
+            - target_path (str): Path of the linked document.
+            - link_text (str): The clickable text of the link.
+            - link_type (str): One of "markdown", "wikilink", or "reference".
+            - fragment (str | None): Heading anchor (e.g. "#section"), or null.
+            - raw_target (str): Literal link target as written in the source.
+            - exists (bool): True if the target document is indexed.
+
+        Raises:
+            ValueError: If no document exists at the given path.
+        """
+        results = await asyncio.to_thread(collection.get_outlinks, path)
+        return [asdict(r) for r in results]
+
+    @mcp.tool(
+        icons=_TOOL_ICONS["get_broken_links"],
+        annotations={
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+        },
+    )
+    async def get_broken_links(
+        folder: str | None = None,
+        collection: Collection = Depends(get_collection),
+    ) -> list[dict[str, Any]]:
+        """Find all links that point to non-existent documents (broken links).
+
+        Use this to audit link health across the collection. Call this when
+        'stats' shows broken_link_count > 0, or after a 'rename' that did
+        not use update_links=True, to see what links were left pointing to
+        the old path. A broken link means the target path does not match any
+        indexed document — the referenced note may have been deleted, renamed,
+        or never created.
+
+        Args:
+            folder: Optional folder filter. When provided, only checks
+                links from documents in this folder (e.g. "Journal").
+                Without this, checks all documents.
+
+        Returns:
+            List of dicts, each with:
+
+            - source_path (str): Path of the document containing the broken link.
+            - source_title (str): Title of the source document.
+            - target_path (str): The missing target path.
+            - link_text (str): The clickable text of the link.
+            - link_type (str): One of "markdown", "wikilink", or "reference".
+            - fragment (str | None): Heading anchor (e.g. "#section"), or null.
+            - raw_target (str): Literal link target as written in the source.
+        """
+        results = await asyncio.to_thread(collection.get_broken_links, folder=folder)
+        return [asdict(r) for r in results]
+
+    # --- Similarity tools (read-only) ---
+
+    @mcp.tool(
+        icons=_TOOL_ICONS["get_similar"],
+        annotations={
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+        },
+    )
+    async def get_similar(
+        path: str,
+        limit: int = 10,
+        collection: Collection = Depends(get_collection),
+    ) -> list[dict[str, Any]]:
+        """Find notes most semantically similar to the given document.
+
+        Uses stored embedding vectors — no re-embedding needed. The
+        reference document is excluded from results. Requires semantic
+        search to be configured (check 'stats' for
+        semantic_search_available). Returns an empty list if embeddings
+        are not available or the document has no stored vectors.
+
+        Args:
+            path: Relative path of the reference document (e.g.
+                "notes/topic.md"). Case-sensitive.
+            limit: Maximum number of similar notes to return (default 10).
+
+        Returns:
+            List of result dicts ranked by similarity (higher score is
+            more similar). Each contains: path, title, folder, content
+            (most similar chunk), score, search_type ("semantic").
+
+        Raises:
+            ValueError: If no document exists at the given path.
+        """
+        results = await asyncio.to_thread(collection.get_similar, path, limit=limit)
+        return [asdict(r) for r in results]
+
+    # --- Recently modified ---
+
+    @mcp.tool(
+        icons=_TOOL_ICONS["get_recent"],
+        annotations={
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+        },
+    )
+    async def get_recent(
+        limit: int = 20,
+        folder: str | None = None,
+        collection: Collection = Depends(get_collection),
+    ) -> list[dict[str, Any]]:
+        """Get the most recently modified notes in the collection.
+
+        Returns notes ordered by file modification time (most recent first).
+        Useful for surfacing recently changed content without a search query —
+        for example to summarize recent activity or resume work on recently
+        edited notes.
+
+        Args:
+            limit: Maximum number of notes to return (default 20).
+            folder: Optional folder filter. When provided, only returns
+                notes from this folder (e.g. "Journal").
+
+        Returns:
+            List of note info dicts, each with: path, title, folder,
+            frontmatter, modified_at (Unix timestamp), kind ("note").
+        """
+        results = await asyncio.to_thread(
+            collection.get_recent, limit=limit, folder=folder
+        )
+        return [asdict(r) for r in results]
+
+    # --- Context dossier ---
+
+    @mcp.tool(
+        icons=_TOOL_ICONS["get_context"],
+        annotations={
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+        },
+    )
+    async def get_context(
+        path: str,
+        similar_limit: int = 5,
+        link_limit: int = 10,
+        collection: Collection = Depends(get_collection),
+    ) -> dict[str, Any]:
+        """Get a consolidated context dossier for a document.
+
+        Returns everything useful about a note in one call: its metadata,
+        backlinks (documents that link to it), outlinks (documents it links
+        to), semantically similar notes, other notes in the same folder, and
+        indexed frontmatter tags. Use this instead of making 4-5 separate
+        tool calls when you need a full picture of a note's place in the
+        vault.
+
+        Args:
+            path: Relative path of the document (e.g. "notes/topic.md").
+                Case-sensitive.
+            similar_limit: Maximum number of similar notes to include
+                (default 5). Pass 0 to skip the similarity lookup — do this
+                when 'stats' shows semantic_search_available=False (embeddings
+                are not configured).
+            link_limit: Maximum number of backlinks and outlinks to include
+                each (default 10).
+
+        Returns:
+            Dict with: path, title, folder, frontmatter (dict),
+            modified_at (Unix timestamp), backlinks (list), outlinks (list),
+            similar (list of {path, title, score}), folder_notes (list of
+            path strings for other notes in the same folder, max 20), tags
+            (dict of indexed frontmatter field → list of values).
+            backlinks and outlinks are empty if link tracking is not
+            available. similar is empty if semantic search is not configured
+            or similar_limit is 0.
+
+        Raises:
+            ValueError: If no document exists at the given path.
+        """
+        result = await asyncio.to_thread(
+            collection.get_context,
+            path,
+            similar_limit=similar_limit,
+            link_limit=link_limit,
+        )
+        return asdict(result)
+
+    @mcp.tool(
+        icons=_TOOL_ICONS["get_orphan_notes"],
+        annotations={
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+        },
+    )
+    async def get_orphan_notes(
+        collection: Collection = Depends(get_collection),
+    ) -> list[dict[str, Any]]:
+        """Return all documents with no inbound links AND no outbound links.
+
+        An orphan note has no backlinks (no other note links to it) and no
+        outlinks (it links to nothing). Call this when 'stats' shows
+        orphan_count > 0 — on large vaults this returns many results and
+        there is no limit parameter. Useful for finding isolated notes that
+        may need to be connected to the rest of the vault or removed.
+
+        Returns:
+            List of dicts ordered by path, each with:
+
+            - path (str): Relative path of the orphan note.
+            - title (str): Title of the note.
+            - folder (str): Folder containing the note.
+            - frontmatter (dict): Parsed YAML frontmatter.
+            - modified_at (float): Unix timestamp of last modification.
+            - kind (str): Always "note".
+        """
+        results = await asyncio.to_thread(collection.get_orphan_notes)
+        return [asdict(r) for r in results]
+
+    @mcp.tool(
+        icons=_TOOL_ICONS["get_most_linked"],
+        annotations={
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+        },
+    )
+    async def get_most_linked(
+        limit: int = 10,
+        collection: Collection = Depends(get_collection),
+    ) -> list[dict[str, Any]]:
+        """Return the documents with the most inbound links, ranked by backlink count.
+
+        Useful for discovering hub notes — frequently-referenced notes that are
+        likely key concepts in the vault. For the specific documents that link to
+        a particular note, use get_backlinks instead.
+
+        Args:
+            limit: Maximum number of results to return. Default 10.
+
+        Returns:
+            List of dicts with path (str), title (str), and backlink_count (int
+            — number of distinct source documents linking to this note), ordered
+            by backlink_count descending.
+        """
+        results = await asyncio.to_thread(collection.get_most_linked, limit=limit)
+        return [asdict(r) for r in results]
+
+    # --- Index management tools ---
+
+    @mcp.tool(
+        icons=_TOOL_ICONS["reindex"],
+        annotations={
+            "readOnlyHint": False,
+            "destructiveHint": False,
+            "idempotentHint": True,
+        },
+    )
+    async def reindex(
+        collection: Collection = Depends(get_collection),
+    ) -> dict[str, Any]:
+        """Sync the search index with files changed on disk by an external process.
+
+        Only needed when files are modified outside this server — for example,
+        by a text editor, a sync tool, or another process writing directly to
+        the vault directory. Do NOT call this after using 'write', 'edit',
+        'delete', or 'rename' — those tools update the index immediately as
+        part of the operation.
+
+        Note: this also re-embeds changed documents in the vector index
+        when semantic search is configured. Use 'build_embeddings' with
+        force=True only to rebuild all embeddings from scratch (e.g. after
+        changing the embedding model).
+
+        Returns:
+            Dict with counts: added, modified, deleted, unchanged.
+        """
+        result = await asyncio.to_thread(collection.reindex)
+        return asdict(result)
+
+    @mcp.tool(
+        icons=_TOOL_ICONS["build_embeddings"],
+        annotations={
+            "readOnlyHint": False,
+            "destructiveHint": False,
+            "idempotentHint": True,
+        },
+    )
+    async def build_embeddings(
+        force: bool = False,
+        collection: Collection = Depends(get_collection),
+    ) -> dict[str, Any]:
+        """Rebuild vector embeddings for semantic and hybrid search.
+
+        Embeddings are built automatically on startup, so this is normally
+        not needed. Use force=True to rebuild from scratch after changing
+        the embedding model. Without force, skips if embeddings already exist.
+
+        Args:
+            force: When True, discards existing embeddings and rebuilds from
+                scratch. Use only if the embedding model has changed.
+                False (default) only embeds chunks not yet embedded.
+
+        Returns:
+            Dict with chunks_embedded: number of chunks newly embedded.
+        """
+        count = await asyncio.to_thread(collection.build_embeddings, force=force)
+        return {"chunks_embedded": count}
+
+    # --- Write tools (tag-based visibility) ---
+
+    @mcp.tool(
+        tags={"write"},
+        icons=_TOOL_ICONS["write"],
+        annotations={
+            "readOnlyHint": False,
+            "destructiveHint": False,
+            "idempotentHint": True,
+        },
+    )
+    async def write(
+        path: str,
+        content: str = "",
+        frontmatter: dict[str, Any] | None = None,
+        content_base64: str = "",
+        if_match: str | None = None,
+        collection: Collection = Depends(get_collection),
+    ) -> dict[str, Any]:
+        """Create or overwrite a document or attachment.
+
+        For .md documents: uses 'content' (markdown body) and optional
+        'frontmatter'. WARNING: replaces the entire file — use 'edit'
+        for targeted changes. The search index is updated immediately;
+        do not call 'reindex' afterward.
+
+        For attachments (pdf, png, etc.): uses 'content_base64' (base64-
+        encoded binary). 'content' and 'frontmatter' are ignored.
+        Parent directories are created automatically for both.
+
+        Args:
+            path: Relative path (e.g. "Journal/note.md" or
+                "assets/photo.png"). Extension determines handling.
+            content: Full markdown body for .md files (excluding
+                frontmatter). Ignored for attachments.
+            frontmatter: Optional YAML frontmatter dict for .md files,
+                e.g. {"title": "My Note", "tags": ["draft"]}.
+                Ignored for attachments.
+            content_base64: Base64-encoded binary content for attachment
+                files. Required when path is not .md.
+            if_match: Optional etag obtained from a previous 'read' call.
+                When provided, the write only proceeds if the file has not
+                been modified since that read (optimistic concurrency).
+                Omit to write unconditionally.
+
+        Returns:
+            Dict with path (str) and created (bool — true if new file,
+            false if overwrite).
+
+        Raises:
+            ValueError: If content_base64 is missing/invalid for
+                attachments, or the content exceeds the size limit.
+            McpError: If if_match is provided and the file has been
+                modified (ConcurrentModificationError).
+        """
+        if not path.endswith(".md"):
+            if not content_base64:
+                raise ValueError(
+                    f"content_base64 is required for non-.md attachments: {path}"
+                )
+            try:
+                raw_bytes = base64.b64decode(content_base64)
+            except Exception as exc:
+                raise ValueError(f"Invalid base64 in content_base64: {exc}") from exc
+            result = await asyncio.to_thread(
+                collection.write_attachment, path, raw_bytes, if_match=if_match
+            )
+            return asdict(result)
+        result = await asyncio.to_thread(
+            collection.write, path, content, frontmatter=frontmatter, if_match=if_match
+        )
+        return asdict(result)
+
+    @mcp.tool(
+        tags={"write"},
+        icons=_TOOL_ICONS["edit"],
+        annotations={
+            "readOnlyHint": False,
+            "destructiveHint": False,
+            "idempotentHint": False,
+        },
+    )
+    async def edit(
+        path: str,
+        old_text: str,
+        new_text: str,
+        if_match: str | None = None,
+        collection: Collection = Depends(get_collection),
+    ) -> dict[str, Any]:
+        """Make a targeted text replacement in an existing document.
+
+        Always call 'read' first to get the exact current text, then pass
+        a portion of it as old_text. The match is exact and must appear
+        only once — if not found the call fails (text changed or wrong);
+        if found multiple times the call fails (use a longer, unique
+        excerpt). Frontmatter can be edited: old_text may span the YAML
+        block. The search index is updated immediately; do not call
+        'reindex' afterward.
+
+        Args:
+            path: Relative path to the document.
+            old_text: Exact text to replace. Must appear exactly once in
+                the document (including frontmatter). Get this via 'read'.
+            new_text: Replacement text. May be longer or shorter.
+            if_match: Optional etag obtained from a previous 'read' call.
+                When provided, the edit only proceeds if the file has not
+                been modified since that read (optimistic concurrency).
+                Omit to edit unconditionally.
+
+        Returns:
+            Dict with path (str) and replacements (int, always 1).
+        """
+        result = await asyncio.to_thread(
+            collection.edit, path, old_text, new_text, if_match=if_match
+        )
+        return asdict(result)
+
+    @mcp.tool(
+        tags={"write"},
+        icons=_TOOL_ICONS["delete"],
+        annotations={
+            "readOnlyHint": False,
+            "destructiveHint": True,
+            "idempotentHint": True,
+        },
+    )
+    async def delete(
+        path: str,
+        if_match: str | None = None,
+        collection: Collection = Depends(get_collection),
+    ) -> dict[str, Any]:
+        """Permanently delete a document or attachment.
+
+        For .md documents: removes the file and immediately updates all search
+        indices — do not call 'reindex' afterward.
+        For attachments: only the file is deleted (no index to update).
+        IRREVERSIBLE unless git history exists. Confirm the path with
+        the user before calling.
+
+        Args:
+            path: Relative path to the document or attachment to delete.
+            if_match: Optional etag obtained from a previous 'read' call.
+                When provided, the deletion only proceeds if the file has
+                not been modified since that read (optimistic concurrency).
+                Omit to delete unconditionally.
+
+        Returns:
+            Dict with path (str) of the deleted file.
+        """
+        result = await asyncio.to_thread(collection.delete, path, if_match=if_match)
+        return asdict(result)
+
+    @mcp.tool(
+        tags={"write"},
+        icons=_TOOL_ICONS["rename"],
+        annotations={
+            "readOnlyHint": False,
+            "destructiveHint": False,
+            "idempotentHint": False,
+        },
+    )
+    async def rename(
+        old_path: str,
+        new_path: str,
+        if_match: str | None = None,
+        update_links: bool = False,
+        collection: Collection = Depends(get_collection),
+    ) -> dict[str, Any]:
+        """Rename or move a document or attachment. When renaming a .md note,
+        always pass update_links=True to rewrite links in other documents
+        that point to the old path — omitting this leaves those links broken.
+
+        For .md documents: the file and its search index entries are updated
+        immediately — do not call 'reindex' afterward.
+        For attachments: only the file is moved (no index update needed).
+        Parent directories for new_path are created automatically.
+
+        Args:
+            old_path: Current relative path (e.g. "drafts/idea.md"
+                or "assets/old.png").
+            new_path: Target relative path (e.g. "projects/idea.md"
+                or "assets/new.png"). Fails if new_path already exists.
+            if_match: Optional etag obtained from a previous 'read' call
+                for old_path. When provided, the rename only proceeds if
+                the file has not been modified since that read (optimistic
+                concurrency). Omit to rename unconditionally.
+            update_links: When True, all .md documents that link to old_path
+                are also updated so their links point to new_path. Replacement
+                is best-effort — failures are logged but do not prevent the
+                rename. Default False; set True whenever renaming a .md note
+                (omitting this leaves backlinks pointing to the old path).
+
+        Returns:
+            Dict with old_path (str), new_path (str), and updated_links (int)
+            counting the number of source documents whose links were updated.
+        """
+        result = await asyncio.to_thread(
+            collection.rename,
+            old_path,
+            new_path,
+            if_match=if_match,
+            update_links=update_links,
+        )
+        return asdict(result)
