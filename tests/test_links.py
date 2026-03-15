@@ -583,9 +583,7 @@ class TestRawTargetInFTS:
         assert links[0].raw_target == "My Note#heading"
         assert links[0].fragment == "heading"
 
-    def test_schema_migration_adds_column_to_existing_db(
-        self, tmp_path: Path
-    ) -> None:
+    def test_schema_migration_adds_column_to_existing_db(self, tmp_path: Path) -> None:
         """Opening an existing DB without raw_target column applies migration."""
         import sqlite3
 
