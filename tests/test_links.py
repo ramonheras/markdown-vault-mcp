@@ -1355,31 +1355,16 @@ class TestStatsLinkCounts:
         # island.md has no links in or out; other.md has a backlink
         assert col.stats().orphan_count == 1
 
-    def test_link_counts_zero_without_links_table(self, tmp_path: Path) -> None:
-        """stats() returns 0 for all link counts when no links table exists."""
-        import sqlite3
+    def test_link_counts_zero_without_links_table(self) -> None:
+        """count_* methods return 0 when the links table does not exist.
 
-        vault = tmp_path / "vault"
-        vault.mkdir()
-        idx_path = tmp_path / "idx.db"
-        # Build an old-style index without a links table.
-        conn = sqlite3.connect(str(idx_path))
-        conn.executescript(
-            """
-            CREATE TABLE documents (
-                id INTEGER PRIMARY KEY,
-                path TEXT UNIQUE NOT NULL,
-                title TEXT NOT NULL DEFAULT '',
-                folder TEXT NOT NULL DEFAULT '',
-                content_hash TEXT NOT NULL DEFAULT '',
-                modified_at REAL NOT NULL DEFAULT 0,
-                frontmatter_json TEXT NOT NULL DEFAULT '{}'
-            );
-            """
-        )
-        conn.close()
-        col = Collection(source_dir=vault, index_path=idx_path)
-        s = col.stats()
-        assert s.link_count == 0
-        assert s.broken_link_count == 0
-        assert s.orphan_count == 0
+        Simulates an old index file predating link tracking by dropping the
+        links table after schema creation and confirming the OperationalError
+        guard in _count_links_query returns 0 instead of propagating.
+        """
+        idx = FTSIndex(":memory:")
+        # Simulate an old index file that predates link tracking.
+        idx._conn.execute("DROP TABLE links")
+        assert idx.count_links() == 0
+        assert idx.count_broken_links() == 0
+        assert idx.count_orphans() == 0
