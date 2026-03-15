@@ -492,6 +492,7 @@ class RenameResult:
     """Result of a rename operation."""
     old_path: str
     new_path: str
+    updated_links: int = 0  # number of source docs updated (update_links=True)
 
 # --- Index types ---
 
@@ -665,7 +666,8 @@ class Collection:
     def delete(self, path: str,
                if_match: str | None = None) -> DeleteResult: ...
     def rename(self, old_path: str, new_path: str,
-               if_match: str | None = None) -> RenameResult: ...
+               if_match: str | None = None, *,
+               update_links: bool = False) -> RenameResult: ...
     def list(self, *, folder: str | None = None,
              pattern: str | None = None) -> list[NoteInfo]: ...
 
