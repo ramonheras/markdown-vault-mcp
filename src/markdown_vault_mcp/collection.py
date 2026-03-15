@@ -1297,6 +1297,7 @@ class Collection:
                 link_text=row["link_text"],
                 link_type=row["link_type"],
                 fragment=row["fragment"],
+                raw_target=row["raw_target"],
             )
             for row in rows
         ]
@@ -1330,6 +1331,7 @@ class Collection:
                 link_type=row["link_type"],
                 fragment=row["fragment"],
                 exists=bool(row["target_exists"]),
+                raw_target=row["raw_target"],
             )
             for row in rows
         ]
@@ -1465,6 +1467,7 @@ class Collection:
                     link_text=r["link_text"],
                     link_type=r["link_type"],
                     fragment=r["fragment"],
+                    raw_target=r["raw_target"],
                 )
                 for r in backlinks
             ]
@@ -1484,6 +1487,7 @@ class Collection:
                     link_type=r["link_type"],
                     fragment=r["fragment"],
                     exists=bool(r["target_exists"]),
+                    raw_target=r["raw_target"],
                 )
                 for r in outlinks
             ]

@@ -324,6 +324,7 @@ def extract_links(content: str, source_path: str) -> list[LinkInfo]:
                 link_text=text,
                 link_type="markdown",
                 fragment=fragment,
+                raw_target=raw_target,
             )
         )
 
@@ -355,6 +356,7 @@ def extract_links(content: str, source_path: str) -> list[LinkInfo]:
                 link_text=text,
                 link_type="reference",
                 fragment=fragment,
+                raw_target=raw_target,
             )
         )
 
@@ -371,6 +373,10 @@ def extract_links(content: str, source_path: str) -> list[LinkInfo]:
             fragment = raw_path[idx + 1 :] or None
             raw_path = raw_path[:idx]
 
+        # raw_target for wikilinks: path portion before .md is appended,
+        # with fragment re-attached so the original [[Note#section]] is preserved.
+        wikilink_raw_target = raw_path + ("#" + fragment if fragment else "")
+
         # Wikilinks without .md extension: append it.
         if not raw_path.lower().endswith(".md"):
             raw_path = raw_path + ".md"
@@ -384,6 +390,7 @@ def extract_links(content: str, source_path: str) -> list[LinkInfo]:
                 link_text=link_text,
                 link_type="wikilink",
                 fragment=fragment,
+                raw_target=wikilink_raw_target,
             )
         )
 

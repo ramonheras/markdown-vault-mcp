@@ -581,6 +581,7 @@ CREATE TABLE IF NOT EXISTS links (
     link_text TEXT NOT NULL DEFAULT '',
     link_type TEXT NOT NULL,          -- 'markdown', 'wikilink', 'reference'
     fragment TEXT,                    -- heading anchor, NULL if none
+    raw_target TEXT NOT NULL DEFAULT '',  -- literal link string as written in file
     FOREIGN KEY (source_id) REFERENCES documents(id) ON DELETE CASCADE
 );
 
