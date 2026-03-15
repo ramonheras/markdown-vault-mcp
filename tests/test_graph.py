@@ -9,7 +9,13 @@ import pytest
 
 from markdown_vault_mcp.collection import Collection
 from markdown_vault_mcp.fts_index import FTSIndex
-from markdown_vault_mcp.types import Chunk, LinkInfo, MostLinkedNote, NoteInfo, ParsedNote
+from markdown_vault_mcp.types import (
+    Chunk,
+    LinkInfo,
+    MostLinkedNote,
+    NoteInfo,
+    ParsedNote,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
