@@ -188,6 +188,7 @@ services:
       MARKDOWN_VAULT_MCP_INDEX_PATH: /data/state/index.db
       MARKDOWN_VAULT_MCP_EMBEDDINGS_PATH: /data/state/embeddings/embeddings
       MARKDOWN_VAULT_MCP_FASTEMBED_CACHE_DIR: /data/state/fastembed
+      # Included for consistency; used by the built-in OIDC provider if switched to it.
       FASTMCP_HOME: /data/state/fastmcp
     networks:
       - internal
