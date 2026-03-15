@@ -12,6 +12,7 @@ import fnmatch
 import json
 import logging
 import mimetypes
+import os.path as osp
 import queue
 import re
 import shutil
@@ -124,8 +125,6 @@ def _compute_new_raw_target(
         if source_path and old_path and raw_path_part != old_path:
             # Relative-to-source link: compute the correct new relative path so
             # cross-directory links continue to resolve after the rename.
-            import os.path as osp
-
             source_dir = str(Path(source_path).parent)
             new_rel = osp.relpath(new_path, source_dir)
             # os.path.relpath uses OS separators on Windows; normalise to /.

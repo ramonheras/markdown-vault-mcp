@@ -722,6 +722,16 @@ embedding metadata in-place. Triggers `on_write` with the new path. Raises
 `DocumentNotFoundError` if `old_path` does not exist. Raises
 `DocumentExistsError` if `new_path` already exists.
 
+When `update_links=True` and `old_path` is a `.md` document, every document
+that links to `old_path` is also updated so its links point to `new_path`.
+The replacement is **best-effort**: per-file failures are logged at `WARNING`
+but do not prevent the rename from succeeding. The `RenameResult.updated_links`
+count reflects source documents successfully rewritten. Link style is
+preserved: vault-root-relative links are rewritten as vault-root-relative;
+source-directory-relative links (e.g. `../notes/target.md`) are rewritten
+with the correct new relative path from the source file's directory.
+`update_links` is silently ignored for attachments (non-`.md` files).
+
 **`list()` pattern parameter**: if provided, `pattern` is a Unix glob matched
 against the relative path using `fnmatch.fnmatch()`. Example:
 `pattern="Journal/*.md"` returns only documents in the Journal folder.
