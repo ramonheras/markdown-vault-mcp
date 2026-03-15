@@ -88,12 +88,14 @@ def register_resources(mcp: FastMCP) -> None:
     ) -> str:
         """All tags grouped by indexed field."""
         stats = await asyncio.to_thread(collection.stats)
-        tag_lists: list[tuple[str, list[str]]] = await asyncio.gather(
-            *[
-                asyncio.to_thread(collection.list_tags, field)
-                for field in stats.indexed_frontmatter_fields
-            ]
-        )  # type: ignore[assignment]
+        tag_lists: list[list[str]] = list(
+            await asyncio.gather(
+                *[
+                    asyncio.to_thread(collection.list_tags, field)
+                    for field in stats.indexed_frontmatter_fields
+                ]
+            )
+        )
         grouped: dict[str, list[str]] = dict(
             zip(stats.indexed_frontmatter_fields, tag_lists, strict=False)
         )

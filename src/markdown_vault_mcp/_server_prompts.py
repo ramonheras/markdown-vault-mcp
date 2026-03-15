@@ -94,7 +94,7 @@ def register_prompts(mcp: FastMCP, templates_folder: str | None) -> None:
             template_name_clean = str(PurePosixPath(*resolved)) if resolved else ""
         template_path = (
             str(PurePosixPath(templates_folder) / template_name_clean)
-            if template_name_clean
+            if template_name_clean and templates_folder is not None
             else ""
         )
         return (
