@@ -47,6 +47,7 @@ from markdown_vault_mcp.types import (
     DeleteResult,
     EditResult,
     IndexStats,
+    MostLinkedNote,
     NoteContent,
     NoteContext,
     NoteInfo,
@@ -1558,18 +1559,18 @@ class Collection:
         rows = self._fts.get_orphan_notes()
         return [_fts_row_to_note_info(r) for r in rows]
 
-    def get_most_linked(self, *, limit: int = 10) -> list[dict]:
+    def get_most_linked(self, *, limit: int = 10) -> list[MostLinkedNote]:
         """Return the documents with the most inbound links.
 
         Args:
             limit: Maximum number of results to return. Default 10.
 
         Returns:
-            List of dicts with keys ``path``, ``title``, ``backlink_count``,
-            ordered by backlink_count descending.
+            List of :class:`~markdown_vault_mcp.types.MostLinkedNote` ordered
+            by backlink_count descending.
         """
         self._ensure_initialized()
-        return self._fts.get_most_linked(limit=limit)
+        return [MostLinkedNote(**row) for row in self._fts.get_most_linked(limit=limit)]
 
     def stats(self) -> CollectionStats:
         """Return collection-wide statistics.

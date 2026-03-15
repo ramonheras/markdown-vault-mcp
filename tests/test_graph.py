@@ -9,7 +9,7 @@ import pytest
 
 from markdown_vault_mcp.collection import Collection
 from markdown_vault_mcp.fts_index import FTSIndex
-from markdown_vault_mcp.types import Chunk, LinkInfo, NoteInfo, ParsedNote
+from markdown_vault_mcp.types import Chunk, LinkInfo, MostLinkedNote, NoteInfo, ParsedNote
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -262,20 +262,20 @@ class TestCollectionOrphanAndHub:
         assert "source.md" not in paths
         assert "source2.md" not in paths
 
-    def test_get_most_linked_returns_dicts(self, graph_vault: Path) -> None:
-        """Collection.get_most_linked() returns list of dicts."""
+    def test_get_most_linked_returns_dataclasses(self, graph_vault: Path) -> None:
+        """Collection.get_most_linked() returns list of MostLinkedNote dataclasses."""
         col = Collection(source_dir=graph_vault)
         col.build_index()
         results = col.get_most_linked()
-        assert all(isinstance(r, dict) for r in results)
+        assert all(isinstance(r, MostLinkedNote) for r in results)
 
     def test_get_most_linked_hub_is_first(self, graph_vault: Path) -> None:
         """The hub note (most backlinks) appears first."""
         col = Collection(source_dir=graph_vault)
         col.build_index()
         results = col.get_most_linked()
-        assert results[0]["path"] == "hub.md"
-        assert results[0]["backlink_count"] == 2
+        assert results[0].path == "hub.md"
+        assert results[0].backlink_count == 2
 
     def test_get_most_linked_limit(self, graph_vault: Path) -> None:
         """limit caps the result count."""
