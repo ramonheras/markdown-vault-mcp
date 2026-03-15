@@ -631,6 +631,25 @@ class TestRawTargetInFTS:
         rows = idx.get_outlinks("src.md")
         assert rows[0]["raw_target"] == "tgt.md"
 
+    def test_raw_target_returned_by_get_broken_links(self) -> None:
+        """raw_target is included in get_broken_links results."""
+        idx = FTSIndex(":memory:")
+        note = make_note(
+            path="source.md",
+            links=[
+                LinkInfo(
+                    target_path="missing/page.md",
+                    link_text="Missing",
+                    link_type="markdown",
+                    raw_target="../missing/page.md",
+                )
+            ],
+        )
+        idx.upsert_note(note)
+        rows = idx.get_broken_links()
+        assert len(rows) == 1
+        assert rows[0]["raw_target"] == "../missing/page.md"
+
 
 # ---------------------------------------------------------------------------
 # Collection: get_backlinks and get_outlinks

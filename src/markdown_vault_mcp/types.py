@@ -224,6 +224,7 @@ class BrokenLinkInfo:
     link_text: str
     link_type: Literal["markdown", "wikilink", "reference"]
     fragment: str | None = None
+    raw_target: str = ""
 
 
 @dataclass

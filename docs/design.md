@@ -533,6 +533,37 @@ class ChangeSet:
 # --- Graph types ---
 
 @dataclass
+class BacklinkInfo:
+    """A document that links to a given path."""
+    source_path: str
+    source_title: str
+    link_text: str
+    link_type: Literal["markdown", "wikilink", "reference"]
+    fragment: str | None = None
+    raw_target: str = ""              # literal link string as written in the source file
+
+@dataclass
+class OutlinkInfo:
+    """A link from a document to another path."""
+    target_path: str
+    link_text: str
+    link_type: Literal["markdown", "wikilink", "reference"]
+    fragment: str | None = None
+    raw_target: str = ""              # literal link string as written in the source file
+    exists: bool = False              # True if target_path is indexed in the collection
+
+@dataclass
+class BrokenLinkInfo:
+    """A link whose target does not exist in the collection."""
+    source_path: str
+    source_title: str
+    target_path: str
+    link_text: str
+    link_type: Literal["markdown", "wikilink", "reference"]
+    fragment: str | None = None
+    raw_target: str = ""              # literal link string as written in the source file
+
+@dataclass
 class MostLinkedNote:
     """A document with its inbound backlink count, returned by get_most_linked()."""
     path: str
