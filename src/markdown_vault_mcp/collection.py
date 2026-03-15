@@ -2254,13 +2254,17 @@ class Collection:
         old_path: str,
         new_path: str,
         backlinks: list[dict],
-    ) -> int:
+    ) -> list[tuple[Path, str]]:
         """Rewrite every source file that links to *old_path* so it points to *new_path*.
 
         Called by :meth:`rename` after the file has already been moved on disk
         and the FTS index updated.  Each source file is read, all of its links
         to *old_path* are rewritten in a single pass, then written back.
         Per-file failures are logged at ``WARNING`` and do not abort the batch.
+
+        This method must be called while :attr:`_write_lock` is held.  It does
+        **not** fire write callbacks itself — callers must do so after releasing
+        the lock, using the returned list of ``(abs_path, content)`` pairs.
 
         Args:
             old_path: Vault-relative path that was renamed (the old location).
@@ -2270,10 +2274,12 @@ class Collection:
                 ``raw_target``, and ``fragment`` keys.
 
         Returns:
-            Number of source documents successfully rewritten.
+            List of ``(abs_path, new_content)`` pairs for every source document
+            that was successfully rewritten.  Callers should fire a write
+            callback for each pair after releasing :attr:`_write_lock`.
         """
         if not backlinks:
-            return 0
+            return []
 
         by_source: dict[str, list[dict]] = defaultdict(list)
         for row in backlinks:
@@ -2285,7 +2291,7 @@ class Collection:
         if old_path in by_source:
             by_source[new_path] = by_source.pop(old_path)
 
-        updated = 0
+        pending_callbacks: list[tuple[Path, str]] = []
         for source_path, rows in by_source.items():
             try:
                 source_abs = self._validate_path(source_path)
@@ -2317,15 +2323,21 @@ class Collection:
                 )
                 self._fts.upsert_note(updated_note)
                 self._update_vector_index(updated_note)
-                self._fire_write_callback(source_abs, content, "edit")
-                updated += 1
-            except Exception as exc:
+                pending_callbacks.append((source_abs, content))
+            except (OSError, UnicodeDecodeError, ValueError) as exc:
                 logger.warning(
                     "update_links: failed to update %s: %s",
                     source_path,
                     exc,
                 )
-        return updated
+            except Exception as exc:
+                logger.warning(
+                    "update_links: unexpected error updating %s: %s",
+                    source_path,
+                    exc,
+                    exc_info=True,
+                )
+        return pending_callbacks
 
     def rename(
         self,
@@ -2374,6 +2386,7 @@ class Collection:
         """
         self._check_writable()
         updated_links = 0
+        backlink_callbacks: list[tuple[Path, str]] = []
 
         with self._write_lock:
             self._ensure_initialized()
@@ -2418,7 +2431,10 @@ class Collection:
 
                 callback_content = new_abs.read_text(encoding="utf-8")
 
-                updated_links += self._update_backlinks(old_path, new_path, backlinks)
+                backlink_callbacks = self._update_backlinks(
+                    old_path, new_path, backlinks
+                )
+                updated_links = len(backlink_callbacks)
             else:
                 old_abs = self._validate_attachment_path(old_path)
                 new_abs = self._validate_attachment_path(new_path)
@@ -2439,8 +2455,10 @@ class Collection:
 
                 callback_content = ""
 
-        # Fire git callback in background thread (outside write lock).
+        # Fire git callbacks in background thread (outside write lock).
         self._fire_write_callback(new_abs, callback_content, "rename")
+        for src_abs, src_content in backlink_callbacks:
+            self._fire_write_callback(src_abs, src_content, "edit")
 
         return RenameResult(
             old_path=old_path, new_path=new_path, updated_links=updated_links
