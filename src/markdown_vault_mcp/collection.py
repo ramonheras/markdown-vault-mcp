@@ -1566,7 +1566,7 @@ class Collection:
 
         # Backlinks — capped at link_limit; graceful if links table absent.
         try:
-            backlinks = self._fts.get_backlinks(path)[:link_limit]
+            backlinks = self._fts.get_backlinks(path, limit=link_limit)
             backlink_objs = [
                 BacklinkInfo(
                     source_path=r["source_path"],
@@ -1586,7 +1586,7 @@ class Collection:
 
         # Outlinks — capped at link_limit; graceful if links table absent.
         try:
-            outlinks = self._fts.get_outlinks(path)[:link_limit]
+            outlinks = self._fts.get_outlinks(path, limit=link_limit)
             outlink_objs = [
                 OutlinkInfo(
                     target_path=r["target_path"],
