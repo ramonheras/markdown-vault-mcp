@@ -146,9 +146,7 @@ def _open_connection(db_path: Path | str) -> sqlite3.Connection:
     # ALTER TABLE ADD COLUMN is idempotent-guarded via try/except because
     # SQLite only supports ADD COLUMN IF NOT EXISTS from version 3.35 onwards.
     try:
-        conn.execute(
-            "ALTER TABLE links ADD COLUMN raw_target TEXT NOT NULL DEFAULT ''"
-        )
+        conn.execute("ALTER TABLE links ADD COLUMN raw_target TEXT NOT NULL DEFAULT ''")
         conn.commit()
     except sqlite3.OperationalError:
         pass  # Column already exists — nothing to do.
