@@ -2249,6 +2249,96 @@ class Collection:
 
         return DeleteResult(path=path)
 
+    def _update_backlinks(
+        self,
+        old_path: str,
+        new_path: str,
+        backlinks: list[dict],
+    ) -> list[tuple[Path, str]]:
+        """Rewrite every source file that links to *old_path* so it points to *new_path*.
+
+        Called by :meth:`rename` after the file has already been moved on disk
+        and the FTS index updated.  Each source file is read, all of its links
+        to *old_path* are rewritten in a single pass, then written back.
+        Per-file failures are logged at ``WARNING`` and do not abort the batch.
+
+        This method must be called while :attr:`_write_lock` is held.  It does
+        **not** fire write callbacks itself — callers must do so after releasing
+        the lock, using the returned list of ``(abs_path, content)`` pairs.
+
+        Args:
+            old_path: Vault-relative path that was renamed (the old location).
+            new_path: Vault-relative path after the rename (the new location).
+            backlinks: Rows returned by :meth:`FTSIndex.get_backlinks` before
+                the rename — each must contain ``source_path``, ``link_type``,
+                ``raw_target``, and ``fragment`` keys.
+
+        Returns:
+            List of ``(abs_path, new_content)`` pairs for every source document
+            that was successfully rewritten.  Callers should fire a write
+            callback for each pair after releasing :attr:`_write_lock`.
+        """
+        if not backlinks:
+            return []
+
+        by_source: dict[str, list[dict]] = defaultdict(list)
+        for row in backlinks:
+            by_source[row["source_path"]].append(row)
+
+        # If the renamed file self-links, its source key is
+        # old_path — but the file now lives at new_path.  Remap
+        # before iterating so we read/write the correct file.
+        if old_path in by_source:
+            by_source[new_path] = by_source.pop(old_path)
+
+        pending_callbacks: list[tuple[Path, str]] = []
+        for source_path, rows in by_source.items():
+            try:
+                source_abs = self._validate_path(source_path)
+                if not source_abs.is_file():
+                    logger.warning(
+                        "_update_backlinks: skipping %s — file not found",
+                        source_path,
+                    )
+                    continue
+                content = source_abs.read_text(encoding="utf-8")
+                for row in rows:
+                    new_raw = _compute_new_raw_target(
+                        row["link_type"],
+                        row["raw_target"],
+                        row["fragment"],
+                        new_path,
+                        source_path=source_path,
+                        old_path=old_path,
+                    )
+                    content = _apply_link_replacement(
+                        content,
+                        row["link_type"],
+                        row["raw_target"],
+                        new_raw,
+                    )
+                source_abs.write_text(content, encoding="utf-8")
+                updated_note = parse_note(
+                    source_abs, self._source_dir, self._chunk_strategy
+                )
+                self._fts.upsert_note(updated_note)
+                self._update_vector_index(updated_note)
+                pending_callbacks.append((source_abs, content))
+            except (OSError, UnicodeDecodeError, ValueError, sqlite3.Error) as exc:
+                logger.warning(
+                    "_update_backlinks: failed to update %s: %s",
+                    source_path,
+                    exc,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "_update_backlinks: unexpected error updating %s: %s",
+                    source_path,
+                    exc,
+                    exc_info=True,
+                )
+        return pending_callbacks
+
     def rename(
         self,
         old_path: str,
@@ -2295,8 +2385,8 @@ class Collection:
                 non-.md paths) has an extension not in the attachment allowlist.
         """
         self._check_writable()
-        source_callbacks: list[tuple[Path, str]] = []
         updated_links = 0
+        backlink_callbacks: list[tuple[Path, str]] = []
 
         with self._write_lock:
             self._ensure_initialized()
@@ -2341,58 +2431,10 @@ class Collection:
 
                 callback_content = new_abs.read_text(encoding="utf-8")
 
-                # Update backlinkers — group rows by source file so each file
-                # is only read/written once even if it contains multiple links.
-                if backlinks:
-                    by_source: dict[str, list[dict]] = defaultdict(list)
-                    for row in backlinks:
-                        by_source[row["source_path"]].append(row)
-
-                    # If the renamed file self-links, its source key is
-                    # old_path — but the file now lives at new_path.  Remap
-                    # before iterating so we read/write the correct file.
-                    if old_path in by_source:
-                        by_source[new_path] = by_source.pop(old_path)
-
-                    for source_path, rows in by_source.items():
-                        try:
-                            source_abs = self._validate_path(source_path)
-                            if not source_abs.is_file():
-                                logger.warning(
-                                    "update_links: skipping %s — file not found",
-                                    source_path,
-                                )
-                                continue
-                            content = source_abs.read_text(encoding="utf-8")
-                            for row in rows:
-                                new_raw = _compute_new_raw_target(
-                                    row["link_type"],
-                                    row["raw_target"],
-                                    row["fragment"],
-                                    new_path,
-                                    source_path=source_path,
-                                    old_path=old_path,
-                                )
-                                content = _apply_link_replacement(
-                                    content,
-                                    row["link_type"],
-                                    row["raw_target"],
-                                    new_raw,
-                                )
-                            source_abs.write_text(content, encoding="utf-8")
-                            updated_note = parse_note(
-                                source_abs, self._source_dir, self._chunk_strategy
-                            )
-                            self._fts.upsert_note(updated_note)
-                            self._update_vector_index(updated_note)
-                            source_callbacks.append((source_abs, content))
-                            updated_links += 1
-                        except Exception as exc:
-                            logger.warning(
-                                "update_links: failed to update %s: %s",
-                                source_path,
-                                exc,
-                            )
+                backlink_callbacks = self._update_backlinks(
+                    old_path, new_path, backlinks
+                )
+                updated_links = len(backlink_callbacks)
             else:
                 old_abs = self._validate_attachment_path(old_path)
                 new_abs = self._validate_attachment_path(new_path)
@@ -2415,7 +2457,7 @@ class Collection:
 
         # Fire git callbacks in background thread (outside write lock).
         self._fire_write_callback(new_abs, callback_content, "rename")
-        for src_abs, src_content in source_callbacks:
+        for src_abs, src_content in backlink_callbacks:
             self._fire_write_callback(src_abs, src_content, "edit")
 
         return RenameResult(
