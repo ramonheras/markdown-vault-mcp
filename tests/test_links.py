@@ -814,7 +814,9 @@ class TestLinkLimitSQL:
             make_note(
                 path="source.md",
                 links=[
-                    LinkInfo(target_path=f"t{i}.md", link_text="T", link_type="markdown")
+                    LinkInfo(
+                        target_path=f"t{i}.md", link_text="T", link_type="markdown"
+                    )
                     for i in range(4)
                 ],
             )
@@ -847,7 +849,9 @@ class TestLinkLimitSQL:
             make_note(
                 path="source.md",
                 links=[
-                    LinkInfo(target_path=f"t{i}.md", link_text="T", link_type="markdown")
+                    LinkInfo(
+                        target_path=f"t{i}.md", link_text="T", link_type="markdown"
+                    )
                     for i in range(5)
                 ],
             )

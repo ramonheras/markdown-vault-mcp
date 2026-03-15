@@ -708,9 +708,7 @@ class FTSIndex:
             for row in cur.fetchall()
         ]
 
-    def get_backlinks(
-        self, path: str, *, limit: int | None = None
-    ) -> list[dict]:
+    def get_backlinks(self, path: str, *, limit: int | None = None) -> list[dict]:
         """Return all documents that link TO the given path.
 
         Args:
@@ -742,9 +740,7 @@ class FTSIndex:
         )
         return [dict(row) for row in cur.fetchall()]
 
-    def get_outlinks(
-        self, path: str, *, limit: int | None = None
-    ) -> list[dict]:
+    def get_outlinks(self, path: str, *, limit: int | None = None) -> list[dict]:
         """Return all links FROM the given document.
 
         Uses a LEFT JOIN to check target existence in a single query,
