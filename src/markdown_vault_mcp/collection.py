@@ -2324,7 +2324,7 @@ class Collection:
                 self._fts.upsert_note(updated_note)
                 self._update_vector_index(updated_note)
                 pending_callbacks.append((source_abs, content))
-            except (OSError, UnicodeDecodeError, ValueError) as exc:
+            except (OSError, UnicodeDecodeError, ValueError, sqlite3.Error) as exc:
                 logger.warning(
                     "update_links: failed to update %s: %s",
                     source_path,
