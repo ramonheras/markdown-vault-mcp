@@ -114,7 +114,7 @@ def _compute_new_raw_target(
         if old_path_part.lower().endswith(".md"):
             new_path_part = new_path
         else:
-            new_path_part = new_path[:-3] if new_path.endswith(".md") else new_path
+            new_path_part = new_path[:-3]
         return new_path_part + ("#" + fragment if fragment else "")
     else:
         # markdown and reference links.
