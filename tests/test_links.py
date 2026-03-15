@@ -840,6 +840,20 @@ class TestLinkLimitSQL:
             )
         assert len(idx.get_backlinks("hub.md")) == 5
 
+    def test_get_outlinks_no_limit_returns_all(self) -> None:
+        """get_outlinks without limit returns all rows (backward-compatible)."""
+        idx = FTSIndex(":memory:")
+        idx.upsert_note(
+            make_note(
+                path="source.md",
+                links=[
+                    LinkInfo(target_path=f"t{i}.md", link_text="T", link_type="markdown")
+                    for i in range(5)
+                ],
+            )
+        )
+        assert len(idx.get_outlinks("source.md")) == 5
+
 
 class TestCollectionReindex:
     def test_reindex_updates_links(self, tmp_path: Path) -> None:
