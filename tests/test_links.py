@@ -1379,7 +1379,6 @@ class TestStatsLinkCounts:
         )
         conn.close()
         col = Collection(source_dir=vault, index_path=idx_path)
-        col._ensure_initialized()  # force index load without rebuild
         s = col.stats()
         assert s.link_count == 0
         assert s.broken_link_count == 0

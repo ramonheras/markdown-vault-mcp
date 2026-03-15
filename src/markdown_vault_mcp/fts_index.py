@@ -907,9 +907,11 @@ class FTSIndex:
         """
         try:
             row = self._conn.execute("SELECT COUNT(*) FROM links").fetchone()
-            return int(row[0]) if row else 0
-        except sqlite3.OperationalError:
-            return 0
+            return int(row[0])
+        except sqlite3.OperationalError as e:
+            if "no such table" in str(e).lower():
+                return 0
+            raise
 
     def count_broken_links(self) -> int:
         """Return the number of links whose target is not in the documents table.
@@ -927,9 +929,11 @@ class FTSIndex:
                 )
                 """
             ).fetchone()
-            return int(row[0]) if row else 0
-        except sqlite3.OperationalError:
-            return 0
+            return int(row[0])
+        except sqlite3.OperationalError as e:
+            if "no such table" in str(e).lower():
+                return 0
+            raise
 
     def count_orphans(self) -> int:
         """Return the number of documents with no inbound or outbound links.
@@ -946,9 +950,11 @@ class FTSIndex:
                   AND NOT EXISTS (SELECT 1 FROM links WHERE target_path = d.path)
                 """
             ).fetchone()
-            return int(row[0]) if row else 0
-        except sqlite3.OperationalError:
-            return 0
+            return int(row[0])
+        except sqlite3.OperationalError as e:
+            if "no such table" in str(e).lower():
+                return 0
+            raise
 
     def close(self) -> None:
         """Close the underlying database connection.
