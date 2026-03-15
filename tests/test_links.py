@@ -1143,9 +1143,7 @@ class TestRenameUpdateLinks:
         # updated_links is less than the total of 7 (one failure)
         assert result.updated_links < 7
 
-    def test_update_links_wikilink_fragment_preserved(
-        self, rename_vault: Path
-    ) -> None:
+    def test_update_links_wikilink_fragment_preserved(self, rename_vault: Path) -> None:
         """Wikilink with fragment [[target#heading]] becomes [[renamed#heading]]."""
         col = Collection(source_dir=rename_vault, read_only=False)
         col.build_index()
