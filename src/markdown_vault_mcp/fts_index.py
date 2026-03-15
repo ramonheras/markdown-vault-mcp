@@ -843,16 +843,16 @@ class FTSIndex:
         cur = self._conn.execute(
             """
             SELECT path, title, folder, frontmatter_json, modified_at
-            FROM documents
-            WHERE id NOT IN (SELECT DISTINCT source_id FROM links)
-              AND path NOT IN (SELECT DISTINCT target_path FROM links)
+            FROM documents d
+            WHERE NOT EXISTS (SELECT 1 FROM links WHERE source_id = d.id)
+              AND NOT EXISTS (SELECT 1 FROM links WHERE target_path = d.path)
             ORDER BY path
             """
         )
         return [dict(row) for row in cur.fetchall()]
 
     def get_most_linked(self, limit: int = 10) -> list[dict]:
-        """Return the documents with the most inbound links (backlinks).
+        """Return the documents with the most distinct source documents linking to them.
 
         Args:
             limit: Maximum number of results to return.
@@ -865,10 +865,10 @@ class FTSIndex:
             """
             SELECT d.path,
                    d.title,
-                   COUNT(*) AS backlink_count
+                   COUNT(DISTINCT l.source_id) AS backlink_count
             FROM links l
             JOIN documents d ON d.path = l.target_path
-            GROUP BY l.target_path
+            GROUP BY d.path, d.title
             ORDER BY backlink_count DESC
             LIMIT ?
             """,

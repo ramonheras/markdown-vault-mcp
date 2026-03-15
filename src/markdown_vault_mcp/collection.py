@@ -1558,7 +1558,7 @@ class Collection:
         rows = self._fts.get_orphan_notes()
         return [_fts_row_to_note_info(r) for r in rows]
 
-    def get_most_linked(self, limit: int = 10) -> list[dict]:
+    def get_most_linked(self, *, limit: int = 10) -> list[dict]:
         """Return the documents with the most inbound links.
 
         Args:

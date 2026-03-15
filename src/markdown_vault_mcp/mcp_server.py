@@ -1028,7 +1028,7 @@ def create_server() -> FastMCP:
             — number of distinct source documents linking to this note), ordered
             by backlink_count descending.
         """
-        return await asyncio.to_thread(collection.get_most_linked, limit)
+        return await asyncio.to_thread(collection.get_most_linked, limit=limit)
 
     # --- Index management tools ---
 
