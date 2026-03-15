@@ -899,19 +899,35 @@ class FTSIndex:
         )
         return [dict(row) for row in cur.fetchall()]
 
+    def _count_links_query(self, sql: str) -> int:
+        """Execute a COUNT query, returning 0 if the links table does not exist.
+
+        Args:
+            sql: A SQL statement returning a single COUNT(*) row.
+
+        Returns:
+            The integer count, or 0 when the links table is absent (backward
+            compatibility with index files predating link tracking).
+
+        Raises:
+            sqlite3.OperationalError: For any database error other than a
+                missing links table.
+        """
+        try:
+            row = self._conn.execute(sql).fetchone()
+            return int(row[0])
+        except sqlite3.OperationalError as e:
+            if "no such table: links" in str(e).lower():
+                return 0
+            raise
+
     def count_links(self) -> int:
         """Return the total number of link rows in the links table.
 
         Returns:
             Total link count, or 0 if the links table does not exist.
         """
-        try:
-            row = self._conn.execute("SELECT COUNT(*) FROM links").fetchone()
-            return int(row[0])
-        except sqlite3.OperationalError as e:
-            if "no such table: links" in str(e).lower():
-                return 0
-            raise
+        return self._count_links_query("SELECT COUNT(*) FROM links")
 
     def count_broken_links(self) -> int:
         """Return the number of links whose target is not in the documents table.
@@ -919,21 +935,15 @@ class FTSIndex:
         Returns:
             Broken link count, or 0 if the links table does not exist.
         """
-        try:
-            row = self._conn.execute(
-                """
-                SELECT COUNT(*)
-                FROM links
-                WHERE NOT EXISTS (
-                    SELECT 1 FROM documents d WHERE d.path = links.target_path
-                )
-                """
-            ).fetchone()
-            return int(row[0])
-        except sqlite3.OperationalError as e:
-            if "no such table: links" in str(e).lower():
-                return 0
-            raise
+        return self._count_links_query(
+            """
+            SELECT COUNT(*)
+            FROM links
+            WHERE NOT EXISTS (
+                SELECT 1 FROM documents d WHERE d.path = links.target_path
+            )
+            """
+        )
 
     def count_orphans(self) -> int:
         """Return the number of documents with no inbound or outbound links.
@@ -941,20 +951,14 @@ class FTSIndex:
         Returns:
             Orphan count, or 0 if the links table does not exist.
         """
-        try:
-            row = self._conn.execute(
-                """
-                SELECT COUNT(*)
-                FROM documents d
-                WHERE NOT EXISTS (SELECT 1 FROM links WHERE source_id = d.id)
-                  AND NOT EXISTS (SELECT 1 FROM links WHERE target_path = d.path)
-                """
-            ).fetchone()
-            return int(row[0])
-        except sqlite3.OperationalError as e:
-            if "no such table: links" in str(e).lower():
-                return 0
-            raise
+        return self._count_links_query(
+            """
+            SELECT COUNT(*)
+            FROM documents d
+            WHERE NOT EXISTS (SELECT 1 FROM links WHERE source_id = d.id)
+              AND NOT EXISTS (SELECT 1 FROM links WHERE target_path = d.path)
+            """
+        )
 
     def close(self) -> None:
         """Close the underlying database connection.
