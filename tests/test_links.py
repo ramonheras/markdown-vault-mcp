@@ -266,6 +266,17 @@ class TestExtractWikilinks:
         assert links[0].target_path == "note.md"
         assert links[0].fragment == "heading"
 
+    def test_wikilink_dotmd_raw_target_keeps_extension(self) -> None:
+        """[[note.md]] produces raw_target='note.md', not 'note'.
+
+        When the author writes the .md extension explicitly in the wikilink,
+        raw_target preserves it.  This is the contract used by rename
+        update_links to reconstruct the exact replacement string.
+        """
+        links = extract_links("See [[note.md]]", "index.md")
+        assert len(links) == 1
+        assert links[0].raw_target == "note.md"
+
 
 # ---------------------------------------------------------------------------
 # extract_links: code block exclusion

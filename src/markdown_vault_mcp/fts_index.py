@@ -148,8 +148,9 @@ def _open_connection(db_path: Path | str) -> sqlite3.Connection:
     try:
         conn.execute("ALTER TABLE links ADD COLUMN raw_target TEXT NOT NULL DEFAULT ''")
         conn.commit()
-    except sqlite3.OperationalError:
-        pass  # Column already exists — nothing to do.
+    except sqlite3.OperationalError as e:
+        if "duplicate column name" not in str(e).lower():
+            raise  # Unexpected error — re-raise.
     # Ensure foreign_keys stays ON for subsequent statements (executescript
     # does not guarantee this survives across statement boundaries in all
     # SQLite versions).

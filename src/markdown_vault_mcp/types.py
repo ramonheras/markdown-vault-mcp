@@ -209,8 +209,8 @@ class OutlinkInfo:
     link_text: str
     link_type: Literal["markdown", "wikilink", "reference"]
     fragment: str | None = None
-    exists: bool = False
     raw_target: str = ""
+    exists: bool = False
 
 
 @dataclass
