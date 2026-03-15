@@ -1462,6 +1462,7 @@ class Collection:
                 link_text=row["link_text"],
                 link_type=row["link_type"],
                 fragment=row["fragment"],
+                raw_target=row["raw_target"],
             )
             for row in rows
         ]
