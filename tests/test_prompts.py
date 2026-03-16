@@ -133,9 +133,9 @@ class TestRegisterOneUserPromptArgValidation:
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
         """Reserved Python keyword as arg name is rejected with a warning, not a crash."""
-        from fastmcp import FastMCP
-
         import logging
+
+        from fastmcp import FastMCP
 
         from markdown_vault_mcp._server_prompts import _register_one_user_prompt
 
@@ -156,9 +156,9 @@ class TestRegisterOneUserPromptArgValidation:
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
         """Arg name with invalid characters is rejected with a warning."""
-        from fastmcp import FastMCP
-
         import logging
+
+        from fastmcp import FastMCP
 
         from markdown_vault_mcp._server_prompts import _register_one_user_prompt
 
