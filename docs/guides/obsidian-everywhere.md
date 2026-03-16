@@ -94,9 +94,6 @@ Current stable pull setting:
 MARKDOWN_VAULT_MCP_GIT_PULL_INTERVAL_S=600
 ```
 
-!!! note "Requires v1.5+"
-    The issue #89 sync-mode variables `MARKDOWN_VAULT_MCP_GIT_PULL_ON_STARTUP` and `MARKDOWN_VAULT_MCP_GIT_SAFETY_BRANCH` are planned for v1.5+ and are not active in current releases.
-
 Recommended related variables:
 
 ```bash
@@ -128,8 +125,7 @@ Verification checklist:
 
 ## Limitations & troubleshooting
 
-- Fast-forward-only policy: server pulls avoid automatic merges; divergent history requires manual intervention.
-- Safety branch behavior (planned): recovery via `GIT_SAFETY_BRANCH` is part of the sync-mode roadmap and tracked in #119.
+- Diverged branches: when both Obsidian and MCP commit on different files, the server rebases local commits onto upstream automatically. When the same file is edited on both sides, the server resolves the conflict by accepting the upstream version and saving the MCP version as a `*.conflict-mcp-YYYYMMDD-HHMMSS.md` file with `conflict_with` frontmatter on both files. Neither version is authoritative — reconcile manually or let the AI merge them.
 - Squash/cherry-pick detection limitation: rewritten commit history may not map cleanly for duplicate detection.
 - Git LFS: large binary attachments may need explicit LFS setup on every client and server.
 - iOS: no equivalent GitSync workflow is documented here for private repositories.

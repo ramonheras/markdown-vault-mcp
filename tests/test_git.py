@@ -1414,13 +1414,14 @@ class TestGitSyncOnce:
         assert (work / "local-note.md").exists()
         assert (work / "obsidian-note.md").exists()
 
-    def test_sync_once_diverged_conflict_skips(
+    def test_sync_once_diverged_conflict_creates_conflict_file(
         self,
         tmp_path: Path,
         git_repo_with_remote: tuple[Path, Path],
         caplog: pytest.LogCaptureFixture,
     ) -> None:
-        """sync_once() skips and aborts when diverged branches have a true conflict."""
+        """sync_once() resolves same-file conflict by saving MCP version as conflict file."""
+        import frontmatter as fm
 
         work, bare = git_repo_with_remote
 
@@ -1472,9 +1473,178 @@ class TestGitSyncOnce:
         )
 
         strategy = GitWriteStrategy(token=None, push_delay_s=0)
+        with caplog.at_level(logging.WARNING, logger="markdown_vault_mcp.git"):
+            did_advance = strategy.sync_once(work)
+
+        # Conflict resolved — HEAD advanced.
+        assert did_advance is True
+        assert any("conflict resolved" in r.message for r in caplog.records)
+
+        # Original file has upstream content.
+        assert "# Remote diverge" in (work / "README.md").read_text()
+
+        # Conflict file exists with MCP content.
+        conflict_files = list(work.glob("README.conflict-mcp-*.md"))
+        assert len(conflict_files) == 1
+        conflict_file = conflict_files[0]
+        assert "# Local diverge" in conflict_file.read_text()
+
+        # Both files have symmetric conflict_with frontmatter.
+        orig_post = fm.loads((work / "README.md").read_text())
+        conflict_post = fm.loads(conflict_file.read_text())
+
+        assert orig_post.metadata["conflict_with"] == conflict_file.name
+        assert conflict_post.metadata["conflict_with"] == "README.md"
+        assert "conflict_date" in orig_post.metadata
+        assert "conflict_date" in conflict_post.metadata
+
+    def test_sync_once_conflict_preserves_existing_frontmatter(
+        self,
+        tmp_path: Path,
+        git_repo_with_remote: tuple[Path, Path],
+    ) -> None:
+        """Conflict resolution preserves existing frontmatter on both files."""
+        import frontmatter as fm
+
+        work, bare = git_repo_with_remote
+
+        # Local commit with frontmatter.
+        (work / "note.md").write_text(
+            "---\ntitle: MCP Note\ntags: [test]\n---\n# MCP content\n"
+        )
+        subprocess.run(
+            ["git", "-C", str(work), "add", "."],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(work), "commit", "-m", "local note"],
+            check=True,
+            capture_output=True,
+        )
+
+        # Remote commit on same file with different frontmatter.
+        other = tmp_path / "other"
+        subprocess.run(
+            ["git", "clone", str(bare), str(other)],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(other), "config", "user.email", "test@test.com"],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(other), "config", "user.name", "Test"],
+            check=True,
+            capture_output=True,
+        )
+        (other / "note.md").write_text(
+            "---\ntitle: Obsidian Note\ntags: [vault]\n---\n# Obsidian content\n"
+        )
+        subprocess.run(
+            ["git", "-C", str(other), "add", "."],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(other), "commit", "-m", "remote note"],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(other), "push"],
+            check=True,
+            capture_output=True,
+        )
+
+        strategy = GitWriteStrategy(token=None, push_delay_s=0)
         did_advance = strategy.sync_once(work)
-        assert did_advance is False
-        assert "rebase failed" in caplog.text
+        assert did_advance is True
+
+        # Original: upstream frontmatter preserved + conflict fields added.
+        orig_post = fm.loads((work / "note.md").read_text())
+        assert orig_post.metadata["title"] == "Obsidian Note"
+        assert orig_post.metadata["tags"] == ["vault"]
+        assert "conflict_with" in orig_post.metadata
+
+        # Conflict file: MCP frontmatter preserved + conflict fields added.
+        conflict_files = list(work.glob("note.conflict-mcp-*.md"))
+        assert len(conflict_files) == 1
+        conflict_post = fm.loads(conflict_files[0].read_text())
+        assert conflict_post.metadata["title"] == "MCP Note"
+        assert conflict_post.metadata["tags"] == ["test"]
+        assert conflict_post.metadata["conflict_with"] == "note.md"
+
+    def test_sync_once_conflict_non_conflicting_files_preserved(
+        self,
+        tmp_path: Path,
+        git_repo_with_remote: tuple[Path, Path],
+    ) -> None:
+        """Non-conflicting local changes in the same commit survive the rebase."""
+
+        work, bare = git_repo_with_remote
+
+        # Local commit: modify README.md AND add a new file.
+        (work / "README.md").write_text("# Local diverge\n")
+        (work / "safe-note.md").write_text("# Safe note\n")
+        subprocess.run(
+            ["git", "-C", str(work), "add", "."],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(work), "commit", "-m", "local changes"],
+            check=True,
+            capture_output=True,
+        )
+
+        # Remote: only modify README.md (conflict), leave safe-note.md alone.
+        other = tmp_path / "other"
+        subprocess.run(
+            ["git", "clone", str(bare), str(other)],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(other), "config", "user.email", "test@test.com"],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(other), "config", "user.name", "Test"],
+            check=True,
+            capture_output=True,
+        )
+        (other / "README.md").write_text("# Remote diverge\n")
+        subprocess.run(
+            ["git", "-C", str(other), "add", "."],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(other), "commit", "-m", "remote diverge"],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(other), "push"],
+            check=True,
+            capture_output=True,
+        )
+
+        strategy = GitWriteStrategy(token=None, push_delay_s=0)
+        did_advance = strategy.sync_once(work)
+        assert did_advance is True
+
+        # Non-conflicting file preserved by the rebase.
+        assert (work / "safe-note.md").exists()
+        assert "# Safe note" in (work / "safe-note.md").read_text()
+
+        # Conflict file created for README.md.
+        conflict_files = list(work.glob("README.conflict-mcp-*.md"))
+        assert len(conflict_files) == 1
 
 
 class TestGitPullLoop:
