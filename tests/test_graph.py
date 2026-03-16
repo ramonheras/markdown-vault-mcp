@@ -445,6 +445,35 @@ class TestFTSGetConnectionPath:
         result = idx.get_connection_path("a.md", "b.md")
         assert result is None
 
+    def test_dangling_link_target_excluded_from_bfs(self) -> None:
+        """Ghost nodes (links to non-indexed notes) do not appear in paths.
+
+        a.md links to ghost.md (not indexed) and also to b.md.
+        BFS must not traverse ghost.md — it is not a document.
+        """
+        idx = self._make_idx()
+        idx.upsert_note(
+            make_note(
+                "a.md",
+                links=[
+                    LinkInfo(
+                        target_path="ghost.md", link_text="Ghost", link_type="markdown"
+                    ),
+                    LinkInfo(
+                        target_path="b.md", link_text="B", link_type="markdown"
+                    ),
+                ],
+            )
+        )
+        idx.upsert_note(make_note("b.md"))
+        # ghost.md is intentionally NOT upserted — it is a dangling link target.
+        # The path a→b should be found, and ghost.md must not appear anywhere.
+        result = idx.get_connection_path("a.md", "b.md")
+        assert result == ["a.md", "b.md"]
+        # Also verify ghost node does not appear in any path traversal.
+        assert result is not None
+        assert "ghost.md" not in result
+
     def test_max_depth_exceeded_returns_none(self) -> None:
         """Path exists at depth 3 but max_depth=2 returns None."""
         idx = self._make_idx()
