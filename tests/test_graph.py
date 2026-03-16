@@ -648,3 +648,34 @@ class TestMCPGetConnectionPath:
         assert data["found"] is False
         assert data["path"] == []
         assert data["hops"] == -1
+
+    async def test_source_equals_target(self, _mcp_env_path: None) -> None:
+        """get_connection_path tool returns found=True with 0 hops for source==target."""
+        from fastmcp import Client
+
+        from markdown_vault_mcp.mcp_server import create_server
+
+        server = create_server()
+        async with Client(server) as client:
+            result = await client.call_tool(
+                "get_connection_path", {"source": "a.md", "target": "a.md"}
+            )
+        data = _parse_tool_data(result)
+        assert data["found"] is True
+        assert data["path"] == ["a.md"]
+        assert data["hops"] == 0
+
+    async def test_invalid_source_raises_error(self, _mcp_env_path: None) -> None:
+        """get_connection_path tool surfaces ValueError for an unindexed source path."""
+        from fastmcp import Client
+        from fastmcp.exceptions import ToolError
+
+        from markdown_vault_mcp.mcp_server import create_server
+
+        server = create_server()
+        async with Client(server) as client:
+            with pytest.raises(ToolError):
+                await client.call_tool(
+                    "get_connection_path",
+                    {"source": "nonexistent.md", "target": "a.md"},
+                )

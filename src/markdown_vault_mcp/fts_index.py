@@ -941,7 +941,9 @@ class FTSIndex:
         # Load all edges into an undirected adjacency dict.
         adj: dict[str, set[str]] = {}
         cur = self._conn.execute(
-            "SELECT d.path, l.target_path FROM links l JOIN documents d ON d.id = l.source_id"
+            "SELECT d1.path, d2.path FROM links l"
+            " JOIN documents d1 ON d1.id = l.source_id"
+            " JOIN documents d2 ON d2.path = l.target_path"
         )
         for src, tgt in cur.fetchall():
             adj.setdefault(src, set()).add(tgt)

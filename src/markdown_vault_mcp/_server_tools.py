@@ -653,12 +653,9 @@ def register_tools(mcp: FastMCP) -> None:
             - hops (int): Number of edges in the path (len(path) - 1), or -1 if
               not found.
         """
-        try:
-            result = await asyncio.to_thread(
-                collection.get_connection_path, source, target, max_depth
-            )
-        except ValueError as exc:
-            raise ValueError(str(exc)) from exc
+        result = await asyncio.to_thread(
+            collection.get_connection_path, source, target, max_depth
+        )
 
         if result is None:
             return {"found": False, "path": [], "hops": -1}
