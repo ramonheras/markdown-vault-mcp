@@ -125,6 +125,7 @@ All configuration is via environment variables with the `MARKDOWN_VAULT_MCP_` pr
 | `MARKDOWN_VAULT_MCP_REQUIRED_FIELDS` | — | No | Comma-separated frontmatter fields required on every document; documents missing any are excluded from the index |
 | `MARKDOWN_VAULT_MCP_EXCLUDE` | — | No | Comma-separated glob patterns to exclude from scanning (e.g. `.obsidian/**,.trash/**`) |
 | `MARKDOWN_VAULT_MCP_TEMPLATES_FOLDER` | `_templates` | No | Relative folder path where note templates live (used by the `create_from_template` prompt) |
+| `MARKDOWN_VAULT_MCP_PROMPTS_FOLDER` | — | No | Path to a directory of `.md` prompt files that extend or override built-in prompts (see [User-defined prompts](#user-defined-prompts)) |
 
 ### Server identity
 

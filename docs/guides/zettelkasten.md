@@ -2,6 +2,9 @@
 
 A Zettelkasten is a personal knowledge management system based on atomic notes, cross-linking, and emergent discovery. This guide shows how to use markdown-vault-mcp as your Zettelkasten backend, leveraging its search, linking, and graph navigation tools to build a connected knowledge base.
 
+!!! note
+    This is one of many ways to organize a vault with markdown-vault-mcp. The server is a generic markdown collection backend — Zettelkasten conventions are applied in this guide but not required or enforced by the server.
+
 ## Vault Setup
 
 ### Recommended folder structure
