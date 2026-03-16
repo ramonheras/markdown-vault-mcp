@@ -125,6 +125,7 @@ All configuration is via environment variables with the `MARKDOWN_VAULT_MCP_` pr
 | `MARKDOWN_VAULT_MCP_REQUIRED_FIELDS` | — | No | Comma-separated frontmatter fields required on every document; documents missing any are excluded from the index |
 | `MARKDOWN_VAULT_MCP_EXCLUDE` | — | No | Comma-separated glob patterns to exclude from scanning (e.g. `.obsidian/**,.trash/**`) |
 | `MARKDOWN_VAULT_MCP_TEMPLATES_FOLDER` | `_templates` | No | Relative folder path where note templates live (used by the `create_from_template` prompt) |
+| `MARKDOWN_VAULT_MCP_PROMPTS_FOLDER` | — | No | Path to a directory of `.md` prompt files that extend or override built-in prompts (see [User-defined prompts](#user-defined-prompts)) |
 
 ### Server identity
 
@@ -305,6 +306,7 @@ markdown-vault-mcp reindex [--source-dir PATH] [--index-path PATH]
 | `get_context` | Get a consolidated context dossier for a note (backlinks, outlinks, similar, folder peers, tags, modified time) |
 | `get_orphan_notes` | Find all notes with no inbound or outbound links |
 | `get_most_linked` | Find the most-linked-to notes ranked by backlink count |
+| `get_connection_path` | Find the shortest path between two notes via BFS on the undirected link graph (max 10 hops) |
 
 Write tools (`write`, `edit`, `delete`, `rename`) are only available when `MARKDOWN_VAULT_MCP_READ_ONLY=false`.
 
@@ -339,6 +341,12 @@ Prompt templates guide the LLM through multi-step workflows using the vault tool
 Write prompts (`research`, `discuss`, `create_from_template`) are only available when `MARKDOWN_VAULT_MCP_READ_ONLY=false`.
 
 Templates are regular markdown files. If placeholder template text pollutes search results, add your templates folder to `MARKDOWN_VAULT_MCP_EXCLUDE` (for example `_templates/**`).
+
+### User-defined prompts
+
+Mount a directory of `.md` prompt files to override or extend the built-in prompts. Set `MARKDOWN_VAULT_MCP_PROMPTS_FOLDER` to the path. Each file's frontmatter defines `description`, `arguments` (a list of objects, each with `name`, `description`, and `required` fields), and optional `tags`. A user prompt with the same name as a built-in replaces it.
+
+For a complete example — including Zettelkasten capture, development, and review prompts — see the [Zettelkasten guide](https://pvliesdonk.github.io/markdown-vault-mcp/guides/zettelkasten/).
 
 ## Attachments
 
