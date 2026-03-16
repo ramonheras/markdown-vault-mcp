@@ -8,6 +8,7 @@ legacy :func:`git_write_strategy` factory for backward compatibility.
 from __future__ import annotations
 
 import contextlib
+import datetime
 import logging
 import os
 import stat
@@ -16,6 +17,8 @@ import tempfile
 import threading
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
+
+import frontmatter
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -557,6 +560,210 @@ class GitWriteStrategy:
                 "Install git or set MARKDOWN_VAULT_MCP_GIT_LFS=false to suppress this error."
             )
 
+    def _resolve_rebase_conflicts(
+        self,
+        git_root: Path,
+        env: dict[str, str] | None,
+    ) -> list[tuple[str, str]]:
+        """Resolve rebase conflicts by accepting theirs and saving ours.
+
+        Called when ``git rebase @{upstream}`` has stopped at a conflict.
+        For each conflicting file, saves the MCP version from
+        ``REBASE_HEAD``, then accepts the upstream version via
+        ``git checkout --ours``.  Continues the rebase, looping if
+        multiple commits conflict.
+
+        Returns:
+            A list of ``(relative_path, saved_content)`` tuples for the
+            files that had conflicts.  May be partial (not all commits
+            resolved) if the iteration limit is hit; the caller is
+            responsible for aborting any in-progress rebase before
+            writing the conflict files.
+        """
+        root = str(git_root)
+        saved: dict[str, str] = {}
+        max_iterations = 50  # safety limit
+
+        for _ in range(max_iterations):
+            # Identify conflicting files.
+            result = subprocess.run(
+                ["git", "-C", root, "diff", "--name-only", "--diff-filter=U"],
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+            conflicting = [f for f in result.stdout.strip().splitlines() if f]
+            if not conflicting:
+                # No conflicts — rebase may have stopped for another reason.
+                break
+
+            for rel_path in conflicting:
+                # Save the MCP version (the commit being rebased).
+                show_result = subprocess.run(
+                    ["git", "-C", root, "show", f"REBASE_HEAD:{rel_path}"],
+                    capture_output=True,
+                    text=True,
+                    env=env,
+                )
+                if show_result.returncode == 0:
+                    saved[rel_path] = show_result.stdout
+                else:
+                    logger.warning(
+                        "Git pull: could not read MCP version of %s, skipping conflict file",
+                        rel_path,
+                    )
+
+                # Accept upstream's version.  During rebase, --ours is the
+                # branch being rebased onto (upstream), --theirs is the
+                # commit being replayed (our local MCP commit).
+                subprocess.run(
+                    ["git", "-C", root, "checkout", "--ours", "--", rel_path],
+                    capture_output=True,
+                    text=True,
+                    env=env,
+                    check=True,
+                )
+                subprocess.run(
+                    ["git", "-C", root, "add", "--", rel_path],
+                    capture_output=True,
+                    text=True,
+                    env=env,
+                    check=True,
+                )
+
+            # Continue the rebase.  If another commit conflicts, the loop
+            # iterates again.  ``--no-edit`` avoids opening an editor for
+            # any automatically generated merge messages.
+            cont = subprocess.run(
+                ["git", "-C", root, "rebase", "--continue"],
+                capture_output=True,
+                text=True,
+                env={**(env or {}), "GIT_EDITOR": "true"},
+            )
+            if cont.returncode == 0:
+                # Rebase completed successfully.
+                return list(saved.items())
+            # returncode != 0 means the next commit also has conflicts —
+            # loop around and resolve again.
+
+        # Exhausted iterations or no conflicting files after non-zero continue.
+        logger.error(
+            "Git pull: conflict resolution loop exceeded %d iterations", max_iterations
+        )
+        return list(saved.items())
+
+    def _write_conflict_files(
+        self,
+        git_root: Path,
+        saved: list[tuple[str, str]],
+        env: dict[str, str] | None,
+    ) -> list[str]:
+        """Write conflict files and add ``conflict_with`` frontmatter to both sides.
+
+        For each ``(relative_path, content)`` in *saved*:
+
+        1. Write the MCP version as ``<stem>.conflict-mcp-<timestamp><ext>``
+           with ``conflict_with`` and ``conflict_date`` frontmatter.
+        2. Merge ``conflict_with`` and ``conflict_date`` into the original
+           file's existing frontmatter.
+
+        Returns:
+            List of conflict file relative paths that were written.
+        """
+        root = str(git_root)
+        now = datetime.datetime.now(tz=datetime.UTC)
+        timestamp = now.strftime("%Y%m%d-%H%M%S")
+        conflict_date = now.isoformat(timespec="seconds")
+        written: list[str] = []
+
+        for rel_path, mcp_content in saved:
+            original = Path(rel_path)
+            conflict_name = f"{original.stem}.conflict-mcp-{timestamp}{original.suffix}"
+            conflict_rel = str(original.parent / conflict_name)
+
+            # --- Write conflict file (MCP version) ---
+            try:
+                post = frontmatter.loads(mcp_content)
+            except Exception:
+                # If frontmatter parsing fails, treat as plain content.
+                logger.warning(
+                    "Git pull: failed to parse frontmatter for conflict file %s; treating as plain content",
+                    conflict_rel,
+                    exc_info=True,
+                )
+                post = frontmatter.Post(mcp_content)
+
+            post.metadata["conflict_with"] = rel_path
+            post.metadata["conflict_date"] = conflict_date
+
+            conflict_abs = git_root / conflict_rel
+            conflict_abs.parent.mkdir(parents=True, exist_ok=True)
+            conflict_abs.write_text(frontmatter.dumps(post), encoding="utf-8")
+
+            # --- Update original file with conflict_with frontmatter ---
+            original_abs = git_root / rel_path
+            if original_abs.exists():
+                try:
+                    orig_post = frontmatter.loads(
+                        original_abs.read_text(encoding="utf-8")
+                    )
+                except Exception:
+                    logger.warning(
+                        "Git pull: failed to parse frontmatter for original file %s; treating as plain content",
+                        rel_path,
+                        exc_info=True,
+                    )
+                    orig_post = frontmatter.Post(
+                        original_abs.read_text(encoding="utf-8")
+                    )
+                orig_post.metadata["conflict_with"] = conflict_rel
+                orig_post.metadata["conflict_date"] = conflict_date
+                original_abs.write_text(frontmatter.dumps(orig_post), encoding="utf-8")
+
+            written.append(conflict_rel)
+
+        if not written:
+            return written
+
+        # Stage only the files we touched — the original files (updated with
+        # conflict_with frontmatter) and the new conflict files.
+        paths_to_add = [rel_path for rel_path, _ in saved] + written
+        subprocess.run(
+            ["git", "-C", root, "add", "--", *paths_to_add],
+            capture_output=True,
+            text=True,
+            env=env,
+            check=True,
+        )
+
+        n = len(written)
+        file_list = ", ".join(written)
+        commit_result = subprocess.run(
+            [
+                "git",
+                "-C",
+                root,
+                "-c",
+                f"user.name={self._commit_name}",
+                "-c",
+                f"user.email={self._commit_email}",
+                "commit",
+                "-m",
+                f"conflict: saved {n} MCP version(s) for manual reconciliation\n\n{file_list}",
+            ],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        if commit_result.returncode != 0:
+            logger.error(
+                "Git pull: conflict commit failed (rc=%d): %s",
+                commit_result.returncode,
+                (commit_result.stderr or commit_result.stdout or "").strip(),
+            )
+
+        return written
+
     def sync_once(self, repo_path: Path) -> bool:
         """Fetch and update once, returning True if HEAD advanced.
 
@@ -649,26 +856,82 @@ class GitWriteStrategy:
                         logger.info(
                             "Git pull: ff-only not possible, rebased local commits onto upstream"
                         )
-                    except subprocess.CalledProcessError as rebase_exc:
-                        # True conflict — abort and stay put until resolved manually.
-                        # returncode is checked so a failed abort doesn't leave
-                        # the repo stuck in a mid-rebase state silently.
-                        abort_proc = subprocess.run(
-                            ["git", "-C", str(git_root), "rebase", "--abort"],
+                    except subprocess.CalledProcessError:
+                        # True conflict — resolve by accepting theirs and
+                        # saving the MCP version as a conflict file.
+                        saved = self._resolve_rebase_conflicts(git_root, env)
+
+                        # Check if a rebase is still in progress (e.g. the
+                        # loop exited via break because no conflicting files
+                        # were found but rebase --continue had returned
+                        # non-zero, or the iteration limit was hit).
+                        rebase_head = subprocess.run(
+                            [
+                                "git",
+                                "-C",
+                                str(git_root),
+                                "rev-parse",
+                                "--verify",
+                                "REBASE_HEAD",
+                            ],
                             capture_output=True,
                             text=True,
                             env=env,
                         )
-                        if abort_proc.returncode != 0:
-                            logger.error(
-                                "Git pull: failed to abort rebase after conflict: %s",
-                                (abort_proc.stderr or "").strip(),
+                        rebase_in_progress = rebase_head.returncode == 0
+
+                        if rebase_in_progress:
+                            # Abort the incomplete rebase before committing
+                            # conflict files so the working tree is clean.
+                            abort_proc = subprocess.run(
+                                ["git", "-C", str(git_root), "rebase", "--abort"],
+                                capture_output=True,
+                                text=True,
+                                env=env,
                             )
-                        logger.warning(
-                            "Git pull: rebase failed (conflict?), skipping: %s",
-                            (rebase_exc.stderr or "").strip(),
-                        )
-                        return False
+                            if abort_proc.returncode != 0:
+                                logger.error(
+                                    "Git pull: failed to abort rebase: %s",
+                                    (abort_proc.stderr or "").strip(),
+                                )
+                            # After abort, the working tree reverts to the
+                            # pre-rebase state (MCP commits), so the original
+                            # files contain MCP content, not upstream content.
+                            # Restore the upstream version for each conflicting
+                            # file so _write_conflict_files reads the right side.
+                            for rel_path, _ in saved:
+                                subprocess.run(
+                                    [
+                                        "git",
+                                        "-C",
+                                        str(git_root),
+                                        "checkout",
+                                        "@{upstream}",
+                                        "--",
+                                        rel_path,
+                                    ],
+                                    capture_output=True,
+                                    text=True,
+                                    env=env,
+                                )
+
+                        if saved:
+                            written = self._write_conflict_files(git_root, saved, env)
+                            for cf in written:
+                                logger.warning(
+                                    "Git pull: conflict resolved, saved MCP version as %s",
+                                    cf,
+                                )
+                            logger.info(
+                                "Git pull: rebase completed with %d conflict file(s)",
+                                len(written),
+                            )
+                        else:
+                            # Resolution failed entirely — stay put.
+                            logger.warning(
+                                "Git pull: conflict resolution failed, skipping"
+                            )
+                            return False
 
                 new_head = subprocess.run(
                     ["git", "-C", str(git_root), "rev-parse", "HEAD"],
