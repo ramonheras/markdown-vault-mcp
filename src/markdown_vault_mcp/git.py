@@ -558,7 +558,12 @@ class GitWriteStrategy:
             )
 
     def sync_once(self, repo_path: Path) -> bool:
-        """Fetch + ff-only update once, returning True if HEAD advanced."""
+        """Fetch and update once, returning True if HEAD advanced.
+
+        Tries fast-forward first; falls back to rebase when the local
+        and upstream branches have diverged (e.g. Obsidian and MCP both
+        committed on different files).  Aborts on true conflicts.
+        """
         if self._closed or not self._enable_pull:
             return False
 
@@ -618,11 +623,15 @@ class GitWriteStrategy:
                         check=True,
                         env=env,
                     )
-                except subprocess.CalledProcessError:
+                except subprocess.CalledProcessError as ff_exc:
                     # ff-only failed — the branches have diverged.  Attempt
                     # rebase to replay local MCP commits on top of upstream.
                     # This handles the common case where Obsidian and the MCP
                     # server both committed independently on different files.
+                    logger.debug(
+                        "Git pull: ff-only failed, attempting rebase: %s",
+                        (ff_exc.stderr or "").strip(),
+                    )
                     try:
                         subprocess.run(
                             [
@@ -642,12 +651,19 @@ class GitWriteStrategy:
                         )
                     except subprocess.CalledProcessError as rebase_exc:
                         # True conflict — abort and stay put until resolved manually.
-                        subprocess.run(
+                        # returncode is checked so a failed abort doesn't leave
+                        # the repo stuck in a mid-rebase state silently.
+                        abort_proc = subprocess.run(
                             ["git", "-C", str(git_root), "rebase", "--abort"],
                             capture_output=True,
                             text=True,
                             env=env,
                         )
+                        if abort_proc.returncode != 0:
+                            logger.error(
+                                "Git pull: failed to abort rebase after conflict: %s",
+                                (abort_proc.stderr or "").strip(),
+                            )
                         logger.warning(
                             "Git pull: rebase failed (conflict?), skipping: %s",
                             (rebase_exc.stderr or "").strip(),
