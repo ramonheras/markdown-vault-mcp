@@ -6,6 +6,7 @@ import datetime
 import json
 import logging
 import sqlite3
+from collections import deque
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -898,6 +899,87 @@ class FTSIndex:
             (limit,),
         )
         return [dict(row) for row in cur.fetchall()]
+
+    def get_connection_path(
+        self, source_path: str, target_path: str, max_depth: int = 10
+    ) -> list[str] | None:
+        """Return the shortest undirected path between two notes via BFS.
+
+        Treats the link graph as undirected — a link in either direction
+        counts as a connection.  Raises ``ValueError`` if either path is
+        not in the documents table.
+
+        Args:
+            source_path: Vault-relative path of the starting note.
+            target_path: Vault-relative path of the destination note.
+            max_depth: Maximum path length (number of edges).  Clamped to
+                ``[1, 10]``.  Defaults to ``10``.
+
+        Returns:
+            Ordered list of vault-relative paths from *source_path* to
+            *target_path* (inclusive), or ``None`` if no path exists within
+            *max_depth* hops.
+
+        Raises:
+            ValueError: If *source_path* or *target_path* is not found in
+                the documents table.
+        """
+        max_depth = max(1, min(10, max_depth))
+
+        # Validate both endpoints exist.
+        for path in (source_path, target_path):
+            row = self._conn.execute(
+                "SELECT 1 FROM documents WHERE path = ?", (path,)
+            ).fetchone()
+            if row is None:
+                raise ValueError(f"Path not found in index: {path!r}")
+
+        # Trivial case.
+        if source_path == target_path:
+            return [source_path]
+
+        # Load all edges into an undirected adjacency dict.
+        adj: dict[str, set[str]] = {}
+        cur = self._conn.execute(
+            "SELECT d1.path, d2.path FROM links l"
+            " JOIN documents d1 ON d1.id = l.source_id"
+            " JOIN documents d2 ON d2.path = l.target_path"
+        )
+        for src, tgt in cur.fetchall():
+            adj.setdefault(src, set()).add(tgt)
+            adj.setdefault(tgt, set()).add(src)
+
+        # BFS with depth tracking.
+        queue: deque[tuple[str, list[str]]] = deque()
+        queue.append((source_path, [source_path]))
+        visited: set[str] = {source_path}
+
+        while queue:
+            current, path = queue.popleft()
+            if len(path) - 1 >= max_depth:
+                continue
+            for neighbour in adj.get(current, set()):
+                if neighbour in visited:
+                    continue
+                new_path = [*path, neighbour]
+                if neighbour == target_path:
+                    logger.debug(
+                        "get_connection_path: found path %s → %s in %d hops",
+                        source_path,
+                        target_path,
+                        len(new_path) - 1,
+                    )
+                    return new_path
+                visited.add(neighbour)
+                queue.append((neighbour, new_path))
+
+        logger.debug(
+            "get_connection_path: no path found between %r and %r within depth %d",
+            source_path,
+            target_path,
+            max_depth,
+        )
+        return None
 
     def _count_links_query(self, sql: str) -> int:
         """Execute a COUNT query, returning 0 if the links table does not exist.

@@ -616,6 +616,51 @@ def register_tools(mcp: FastMCP) -> None:
         results = await asyncio.to_thread(collection.get_most_linked, limit=limit)
         return [asdict(r) for r in results]
 
+    @mcp.tool(
+        icons=_TOOL_ICONS["get_connection_path"],
+        annotations={
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+        },
+    )
+    async def get_connection_path(
+        source: str,
+        target: str,
+        max_depth: int = 10,
+        collection: Collection = Depends(get_collection),
+    ) -> dict[str, Any]:
+        """Find the shortest connection path between two notes in the link graph.
+
+        Treats links as undirected — a link from A to B or B to A both count
+        as a connection. Uses BFS; max_depth is clamped to [1, 10].
+
+        Useful for discovering how two seemingly unrelated notes are connected
+        through the vault's link structure (the "six degrees of separation" for
+        your notes).
+
+        Args:
+            source: Vault-relative path of the starting note (e.g. 'Ideas/spark.md').
+            target: Vault-relative path of the destination note.
+            max_depth: Maximum number of hops to search. Default 10, max 10.
+
+        Returns:
+            A dict with the following fields:
+
+            - `found` (bool): Whether a path was found within `max_depth` hops.
+            - `path` (list[str]): Ordered list of note paths from source to target,
+              or an empty list if not found.
+            - `hops` (int): Number of edges in the path (`len(path) - 1`), or -1 if
+              not found.
+        """
+        result: list[str] | None = await asyncio.to_thread(
+            collection.get_connection_path, source, target, max_depth
+        )
+
+        if result is None:
+            return {"found": False, "path": [], "hops": -1}
+        return {"found": True, "path": result, "hops": len(result) - 1}
+
     # --- Index management tools ---
 
     @mcp.tool(

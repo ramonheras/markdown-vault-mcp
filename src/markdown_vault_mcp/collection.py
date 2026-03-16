@@ -1682,6 +1682,32 @@ class Collection:
         self._ensure_initialized()
         return [MostLinkedNote(**row) for row in self._fts.get_most_linked(limit=limit)]
 
+    def get_connection_path(
+        self, source: str, target: str, max_depth: int = 10
+    ) -> list[str] | None:
+        """Return the shortest undirected path between two notes.
+
+        Treats the link graph as undirected — a link in either direction
+        counts as a connection.  Uses BFS with a configurable depth cap.
+
+        Args:
+            source: Vault-relative path of the starting note.
+            target: Vault-relative path of the destination note.
+            max_depth: Maximum path length in edges.  Clamped to ``[1, 10]``.
+                Defaults to ``10``.
+
+        Returns:
+            Ordered list of vault-relative paths from *source* to *target*
+            (inclusive), or ``None`` if unreachable within *max_depth* hops.
+
+        Raises:
+            ValueError: If *source* or *target* is not found in the index.
+        """
+        self._ensure_initialized()
+        self._validate_path(source)
+        self._validate_path(target)
+        return self._fts.get_connection_path(source, target, max_depth=max_depth)
+
     def stats(self) -> CollectionStats:
         """Return collection-wide statistics.
 

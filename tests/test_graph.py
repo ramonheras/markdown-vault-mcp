@@ -364,3 +364,345 @@ class TestMCPGraphTools:
             result = await client.call_tool("get_most_linked", {"limit": 1})
         items = _parse_tool_data(result)
         assert len(items) == 1
+
+
+# ---------------------------------------------------------------------------
+# FTSIndex.get_connection_path
+# ---------------------------------------------------------------------------
+
+
+class TestFTSGetConnectionPath:
+    """Unit tests for FTSIndex.get_connection_path BFS logic."""
+
+    def _make_idx(self) -> FTSIndex:
+        return FTSIndex(":memory:")
+
+    def test_direct_link_returns_two_hops(self) -> None:
+        """A→B link yields path [A, B] with 1 hop."""
+        idx = self._make_idx()
+        idx.upsert_note(
+            make_note(
+                "a.md",
+                links=[
+                    LinkInfo(target_path="b.md", link_text="B", link_type="markdown")
+                ],
+            )
+        )
+        idx.upsert_note(make_note("b.md"))
+        result = idx.get_connection_path("a.md", "b.md")
+        assert result == ["a.md", "b.md"]
+
+    def test_two_hop_path(self) -> None:
+        """A→B→C query returns [A, B, C]."""
+        idx = self._make_idx()
+        idx.upsert_note(
+            make_note(
+                "a.md",
+                links=[
+                    LinkInfo(target_path="b.md", link_text="B", link_type="markdown")
+                ],
+            )
+        )
+        idx.upsert_note(
+            make_note(
+                "b.md",
+                links=[
+                    LinkInfo(target_path="c.md", link_text="C", link_type="markdown")
+                ],
+            )
+        )
+        idx.upsert_note(make_note("c.md"))
+        result = idx.get_connection_path("a.md", "c.md")
+        assert result == ["a.md", "b.md", "c.md"]
+
+    def test_reverse_direction_undirected(self) -> None:
+        """Only A→B exists; querying B→A still returns [B, A]."""
+        idx = self._make_idx()
+        idx.upsert_note(
+            make_note(
+                "a.md",
+                links=[
+                    LinkInfo(target_path="b.md", link_text="B", link_type="markdown")
+                ],
+            )
+        )
+        idx.upsert_note(make_note("b.md"))
+        result = idx.get_connection_path("b.md", "a.md")
+        assert result == ["b.md", "a.md"]
+
+    def test_self_path(self) -> None:
+        """Source == target returns a single-element list."""
+        idx = self._make_idx()
+        idx.upsert_note(make_note("a.md"))
+        result = idx.get_connection_path("a.md", "a.md")
+        assert result == ["a.md"]
+
+    def test_no_connection_returns_none(self) -> None:
+        """Isolated note with no links returns None."""
+        idx = self._make_idx()
+        idx.upsert_note(make_note("a.md"))
+        idx.upsert_note(make_note("b.md"))
+        result = idx.get_connection_path("a.md", "b.md")
+        assert result is None
+
+    def test_dangling_link_target_excluded_from_bfs(self) -> None:
+        """Ghost nodes (links to non-indexed notes) do not appear in paths.
+
+        a.md links to ghost.md (not indexed) and also to b.md.
+        BFS must not traverse ghost.md — it is not a document.
+        """
+        idx = self._make_idx()
+        idx.upsert_note(
+            make_note(
+                "a.md",
+                links=[
+                    LinkInfo(
+                        target_path="ghost.md", link_text="Ghost", link_type="markdown"
+                    ),
+                    LinkInfo(target_path="b.md", link_text="B", link_type="markdown"),
+                ],
+            )
+        )
+        idx.upsert_note(make_note("b.md"))
+        # ghost.md is intentionally NOT upserted — it is a dangling link target.
+        # The path a→b should be found, and ghost.md must not appear anywhere.
+        result = idx.get_connection_path("a.md", "b.md")
+        assert result == ["a.md", "b.md"]
+        # Also verify ghost node does not appear in any path traversal.
+        assert result is not None
+        assert "ghost.md" not in result
+
+    def test_max_depth_exceeded_returns_none(self) -> None:
+        """Path exists at depth 3 but max_depth=2 returns None."""
+        idx = self._make_idx()
+        idx.upsert_note(
+            make_note(
+                "a.md",
+                links=[
+                    LinkInfo(target_path="b.md", link_text="B", link_type="markdown")
+                ],
+            )
+        )
+        idx.upsert_note(
+            make_note(
+                "b.md",
+                links=[
+                    LinkInfo(target_path="c.md", link_text="C", link_type="markdown")
+                ],
+            )
+        )
+        idx.upsert_note(
+            make_note(
+                "c.md",
+                links=[
+                    LinkInfo(target_path="d.md", link_text="D", link_type="markdown")
+                ],
+            )
+        )
+        idx.upsert_note(make_note("d.md"))
+        # Path A→B→C→D exists (depth 3); cap at 2 → not found.
+        assert idx.get_connection_path("a.md", "d.md", max_depth=2) is None
+        # With depth 3 it should be found.
+        result = idx.get_connection_path("a.md", "d.md", max_depth=3)
+        assert result == ["a.md", "b.md", "c.md", "d.md"]
+
+    def test_max_depth_clamped_low(self) -> None:
+        """max_depth=0 is clamped to 1; direct link still found."""
+        idx = self._make_idx()
+        idx.upsert_note(
+            make_note(
+                "a.md",
+                links=[
+                    LinkInfo(target_path="b.md", link_text="B", link_type="markdown")
+                ],
+            )
+        )
+        idx.upsert_note(make_note("b.md"))
+        result = idx.get_connection_path("a.md", "b.md", max_depth=0)
+        assert result == ["a.md", "b.md"]
+
+    def test_max_depth_clamped_high(self) -> None:
+        """max_depth=99 is clamped to 10; search still runs normally."""
+        idx = self._make_idx()
+        idx.upsert_note(
+            make_note(
+                "a.md",
+                links=[
+                    LinkInfo(target_path="b.md", link_text="B", link_type="markdown")
+                ],
+            )
+        )
+        idx.upsert_note(make_note("b.md"))
+        result = idx.get_connection_path("a.md", "b.md", max_depth=99)
+        assert result == ["a.md", "b.md"]
+
+    def test_nonexistent_source_raises_value_error(self) -> None:
+        """ValueError raised when source_path is not in documents table."""
+        idx = self._make_idx()
+        idx.upsert_note(make_note("b.md"))
+        with pytest.raises(ValueError, match=r"missing\.md"):
+            idx.get_connection_path("missing.md", "b.md")
+
+    def test_nonexistent_target_raises_value_error(self) -> None:
+        """ValueError raised when target_path is not in documents table."""
+        idx = self._make_idx()
+        idx.upsert_note(make_note("a.md"))
+        with pytest.raises(ValueError, match=r"missing\.md"):
+            idx.get_connection_path("a.md", "missing.md")
+
+
+# ---------------------------------------------------------------------------
+# Collection.get_connection_path
+# ---------------------------------------------------------------------------
+
+
+class TestCollectionGetConnectionPath:
+    """Integration tests for Collection.get_connection_path."""
+
+    @pytest.fixture
+    def path_vault(self, tmp_path: Path) -> Path:
+        """Vault: a.md → b.md → c.md, plus isolated.md."""
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        (vault / "a.md").write_text("# A\n\nSee [B](b.md).\n", encoding="utf-8")
+        (vault / "b.md").write_text("# B\n\nSee [C](c.md).\n", encoding="utf-8")
+        (vault / "c.md").write_text("# C\n\nEnd of chain.\n", encoding="utf-8")
+        (vault / "isolated.md").write_text(
+            "# Isolated\n\nNo links.\n", encoding="utf-8"
+        )
+        return vault
+
+    def test_direct_connection(self, path_vault: Path) -> None:
+        """Direct link a→b returns [a.md, b.md]."""
+        col = Collection(source_dir=path_vault)
+        col.build_index()
+        result = col.get_connection_path("a.md", "b.md")
+        assert result == ["a.md", "b.md"]
+
+    def test_two_hop_connection(self, path_vault: Path) -> None:
+        """Two-hop path a→b→c returns [a.md, b.md, c.md]."""
+        col = Collection(source_dir=path_vault)
+        col.build_index()
+        result = col.get_connection_path("a.md", "c.md")
+        assert result == ["a.md", "b.md", "c.md"]
+
+    def test_undirected_reverse(self, path_vault: Path) -> None:
+        """Reverse direction (c→a) is reachable via undirected graph."""
+        col = Collection(source_dir=path_vault)
+        col.build_index()
+        result = col.get_connection_path("c.md", "a.md")
+        assert result is not None
+        assert result[0] == "c.md"
+        assert result[-1] == "a.md"
+
+    def test_unreachable_returns_none(self, path_vault: Path) -> None:
+        """Isolated note returns None."""
+        col = Collection(source_dir=path_vault)
+        col.build_index()
+        result = col.get_connection_path("a.md", "isolated.md")
+        assert result is None
+
+    def test_path_traversal_rejected(self, path_vault: Path) -> None:
+        """Path traversal in source/target raises ValueError."""
+        col = Collection(source_dir=path_vault)
+        col.build_index()
+        with pytest.raises(ValueError):
+            col.get_connection_path("../etc/passwd", "a.md")
+
+
+# ---------------------------------------------------------------------------
+# MCP tool: get_connection_path
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def mcp_path_vault(tmp_path: Path) -> Path:
+    """Vault for MCP connection-path tests: a→b→c, plus isolated."""
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    (vault / "a.md").write_text("# A\n\nSee [B](b.md).\n", encoding="utf-8")
+    (vault / "b.md").write_text("# B\n\nSee [C](c.md).\n", encoding="utf-8")
+    (vault / "c.md").write_text("# C\n\nEnd.\n", encoding="utf-8")
+    (vault / "isolated.md").write_text("# Isolated\n\nNo links.\n", encoding="utf-8")
+    return vault
+
+
+@pytest.fixture
+def _mcp_env_path(mcp_path_vault: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _CLEAR_VARS = [
+        "MARKDOWN_VAULT_MCP_SOURCE_DIR",
+        "MARKDOWN_VAULT_MCP_DB_PATH",
+        "MARKDOWN_VAULT_MCP_EMBEDDINGS_PATH",
+        "MARKDOWN_VAULT_MCP_BEARER_TOKEN",
+        "MARKDOWN_VAULT_MCP_OIDC_CONFIG_URL",
+        "MARKDOWN_VAULT_MCP_READ_ONLY",
+    ]
+    for var in _CLEAR_VARS:
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", str(mcp_path_vault))
+
+
+class TestMCPGetConnectionPath:
+    async def test_found_path(self, _mcp_env_path: None) -> None:
+        """get_connection_path tool returns found=True and correct path."""
+        from fastmcp import Client
+
+        from markdown_vault_mcp.mcp_server import create_server
+
+        server = create_server()
+        async with Client(server) as client:
+            result = await client.call_tool(
+                "get_connection_path", {"source": "a.md", "target": "c.md"}
+            )
+        data = _parse_tool_data(result)
+        assert data["found"] is True
+        assert data["path"] == ["a.md", "b.md", "c.md"]
+        assert data["hops"] == 2
+
+    async def test_not_found_path(self, _mcp_env_path: None) -> None:
+        """get_connection_path tool returns found=False when no path exists."""
+        from fastmcp import Client
+
+        from markdown_vault_mcp.mcp_server import create_server
+
+        server = create_server()
+        async with Client(server) as client:
+            result = await client.call_tool(
+                "get_connection_path",
+                {"source": "a.md", "target": "isolated.md"},
+            )
+        data = _parse_tool_data(result)
+        assert data["found"] is False
+        assert data["path"] == []
+        assert data["hops"] == -1
+
+    async def test_source_equals_target(self, _mcp_env_path: None) -> None:
+        """get_connection_path tool returns found=True with 0 hops for source==target."""
+        from fastmcp import Client
+
+        from markdown_vault_mcp.mcp_server import create_server
+
+        server = create_server()
+        async with Client(server) as client:
+            result = await client.call_tool(
+                "get_connection_path", {"source": "a.md", "target": "a.md"}
+            )
+        data = _parse_tool_data(result)
+        assert data["found"] is True
+        assert data["path"] == ["a.md"]
+        assert data["hops"] == 0
+
+    async def test_invalid_source_raises_error(self, _mcp_env_path: None) -> None:
+        """get_connection_path tool surfaces ValueError for an unindexed source path."""
+        from fastmcp import Client
+        from fastmcp.exceptions import ToolError
+
+        from markdown_vault_mcp.mcp_server import create_server
+
+        server = create_server()
+        async with Client(server) as client:
+            with pytest.raises(ToolError):
+                await client.call_tool(
+                    "get_connection_path",
+                    {"source": "nonexistent.md", "target": "a.md"},
+                )
