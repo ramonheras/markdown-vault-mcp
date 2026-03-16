@@ -72,11 +72,17 @@ Configure `MARKDOWN_VAULT_MCP_INDEXED_FIELDS` to make `type` and `tags` structur
 export MARKDOWN_VAULT_MCP_INDEXED_FIELDS=type,tags
 ```
 
-Then you can search by note type or tag:
+Then you can search by note type or tag using the Python API:
+
+```python
+results = collection.search("query", filters={"type": "permanent"})
+results = collection.search("query", filters={"tags": "system-design"})
+```
+
+Or restrict to a folder via the CLI:
 
 ```bash
-markdown-vault-mcp search "query" --filters '{"type": "permanent"}'
-markdown-vault-mcp search "query" --filters '{"tags": "system-design"}'
+markdown-vault-mcp search "query" --folder Notes
 ```
 
 ### Filename conventions
@@ -180,6 +186,7 @@ Returns:
 - `similar` — semantically related notes not yet linked
 - `folder_notes` — other notes in the same folder
 - `tags` — frontmatter tags for grouping
+- `modified_at` — last modification timestamp
 
 **Find related notes you haven't linked yet:**
 

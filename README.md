@@ -306,6 +306,7 @@ markdown-vault-mcp reindex [--source-dir PATH] [--index-path PATH]
 | `get_context` | Get a consolidated context dossier for a note (backlinks, outlinks, similar, folder peers, tags, modified time) |
 | `get_orphan_notes` | Find all notes with no inbound or outbound links |
 | `get_most_linked` | Find the most-linked-to notes ranked by backlink count |
+| `get_connection_path` | Find the shortest path between two notes via BFS on the undirected link graph (max 10 hops) |
 
 Write tools (`write`, `edit`, `delete`, `rename`) are only available when `MARKDOWN_VAULT_MCP_READ_ONLY=false`.
 
@@ -343,7 +344,7 @@ Templates are regular markdown files. If placeholder template text pollutes sear
 
 ### User-defined prompts
 
-Mount a directory of `.md` prompt files to override or extend the built-in prompts. Set `MARKDOWN_VAULT_MCP_PROMPTS_FOLDER` to the path. Each file's frontmatter defines `description`, `arguments` (name, description, required), and optional `tags`. A user prompt with the same name as a built-in replaces it.
+Mount a directory of `.md` prompt files to override or extend the built-in prompts. Set `MARKDOWN_VAULT_MCP_PROMPTS_FOLDER` to the path. Each file's frontmatter defines `description`, `arguments` (a list of objects, each with `name`, `description`, and `required` fields), and optional `tags`. A user prompt with the same name as a built-in replaces it.
 
 For a complete example — including Zettelkasten capture, development, and review prompts — see the [Zettelkasten guide](https://pvliesdonk.github.io/markdown-vault-mcp/guides/zettelkasten/).
 
