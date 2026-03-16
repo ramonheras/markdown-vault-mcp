@@ -645,12 +645,12 @@ def register_tools(mcp: FastMCP) -> None:
             max_depth: Maximum number of hops to search. Default 10, max 10.
 
         Returns:
-            A dict with:
+            A dict with the following fields:
 
-            - found (bool): Whether a path was found within max_depth hops.
-            - path (list[str]): Ordered list of note paths from source to target,
+            - `found` (bool): Whether a path was found within `max_depth` hops.
+            - `path` (list[str]): Ordered list of note paths from source to target,
               or an empty list if not found.
-            - hops (int): Number of edges in the path (len(path) - 1), or -1 if
+            - `hops` (int): Number of edges in the path (`len(path) - 1`), or -1 if
               not found.
         """
         result = await asyncio.to_thread(
