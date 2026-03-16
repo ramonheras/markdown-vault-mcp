@@ -1686,8 +1686,9 @@ class TestGitSyncOnce:
 
         result = strategy._resolve_rebase_conflicts(tmp_path, env=None)
 
-        # Should return whatever was saved (50 iterations x 1 file each).
-        assert len(result) == 50
+        # The same file conflicted in all 50 iterations; deduplication keeps only
+        # the last version, so the result is a single unique entry.
+        assert len(result) == 1
         assert result[0] == ("README.md", "# MCP content\n")
 
     def test_write_conflict_files_commit_failure_is_logged(

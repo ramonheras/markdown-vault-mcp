@@ -570,16 +570,18 @@ class GitWriteStrategy:
         Called when ``git rebase @{upstream}`` has stopped at a conflict.
         For each conflicting file, saves the MCP version from
         ``REBASE_HEAD``, then accepts the upstream version via
-        ``git checkout --theirs``.  Continues the rebase, looping if
+        ``git checkout --ours``.  Continues the rebase, looping if
         multiple commits conflict.
 
         Returns:
             A list of ``(relative_path, saved_content)`` tuples for the
-            files that had conflicts.  Empty if resolution failed
-            entirely (caller should abort).
+            files that had conflicts.  May be partial (not all commits
+            resolved) if the iteration limit is hit; the caller is
+            responsible for aborting any in-progress rebase before
+            writing the conflict files.
         """
         root = str(git_root)
-        saved: list[tuple[str, str]] = []
+        saved: dict[str, str] = {}
         max_iterations = 50  # safety limit
 
         for _ in range(max_iterations):
@@ -604,7 +606,7 @@ class GitWriteStrategy:
                     env=env,
                 )
                 if show_result.returncode == 0:
-                    saved.append((rel_path, show_result.stdout))
+                    saved[rel_path] = show_result.stdout
                 else:
                     logger.warning(
                         "Git pull: could not read MCP version of %s, skipping conflict file",
@@ -619,12 +621,14 @@ class GitWriteStrategy:
                     capture_output=True,
                     text=True,
                     env=env,
+                    check=True,
                 )
                 subprocess.run(
                     ["git", "-C", root, "add", "--", rel_path],
                     capture_output=True,
                     text=True,
                     env=env,
+                    check=True,
                 )
 
             # Continue the rebase.  If another commit conflicts, the loop
@@ -638,7 +642,7 @@ class GitWriteStrategy:
             )
             if cont.returncode == 0:
                 # Rebase completed successfully.
-                return saved
+                return list(saved.items())
             # returncode != 0 means the next commit also has conflicts —
             # loop around and resolve again.
 
@@ -646,7 +650,7 @@ class GitWriteStrategy:
         logger.error(
             "Git pull: conflict resolution loop exceeded %d iterations", max_iterations
         )
-        return saved
+        return list(saved.items())
 
     def _write_conflict_files(
         self,
@@ -723,20 +727,14 @@ class GitWriteStrategy:
 
         # Stage only the files we touched — the original files (updated with
         # conflict_with frontmatter) and the new conflict files.
-        for rel_path, _ in saved:
-            subprocess.run(
-                ["git", "-C", root, "add", "--", rel_path],
-                capture_output=True,
-                text=True,
-                env=env,
-            )
-        for conflict_rel in written:
-            subprocess.run(
-                ["git", "-C", root, "add", "--", conflict_rel],
-                capture_output=True,
-                text=True,
-                env=env,
-            )
+        paths_to_add = [rel_path for rel_path, _ in saved] + written
+        subprocess.run(
+            ["git", "-C", root, "add", "--", *paths_to_add],
+            capture_output=True,
+            text=True,
+            env=env,
+            check=True,
+        )
 
         n = len(written)
         file_list = ", ".join(written)
@@ -895,6 +893,26 @@ class GitWriteStrategy:
                                 logger.error(
                                     "Git pull: failed to abort rebase: %s",
                                     (abort_proc.stderr or "").strip(),
+                                )
+                            # After abort, the working tree reverts to the
+                            # pre-rebase state (MCP commits), so the original
+                            # files contain MCP content, not upstream content.
+                            # Restore the upstream version for each conflicting
+                            # file so _write_conflict_files reads the right side.
+                            for rel_path, _ in saved:
+                                subprocess.run(
+                                    [
+                                        "git",
+                                        "-C",
+                                        str(git_root),
+                                        "checkout",
+                                        "@{upstream}",
+                                        "--",
+                                        rel_path,
+                                    ],
+                                    capture_output=True,
+                                    text=True,
+                                    env=env,
                                 )
 
                         if saved:
