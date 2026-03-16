@@ -653,7 +653,7 @@ def register_tools(mcp: FastMCP) -> None:
             - `hops` (int): Number of edges in the path (`len(path) - 1`), or -1 if
               not found.
         """
-        result = await asyncio.to_thread(
+        result: list[str] | None = await asyncio.to_thread(
             collection.get_connection_path, source, target, max_depth
         )
 

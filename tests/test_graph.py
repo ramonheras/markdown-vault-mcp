@@ -459,9 +459,7 @@ class TestFTSGetConnectionPath:
                     LinkInfo(
                         target_path="ghost.md", link_text="Ghost", link_type="markdown"
                     ),
-                    LinkInfo(
-                        target_path="b.md", link_text="B", link_type="markdown"
-                    ),
+                    LinkInfo(target_path="b.md", link_text="B", link_type="markdown"),
                 ],
             )
         )
