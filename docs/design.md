@@ -981,7 +981,7 @@ template functions with no collection dependency.
 Resources return JSON (``mime_type="application/json"``). The ToC resource
 queries the existing ``sections`` table — no file I/O.
 
-**Prompts**: 6 built-in prompt templates:
+**Prompts**: 6 built-in prompt templates, plus optional user-defined prompts:
 
 | Prompt | Parameters | Tags | Description |
 |--------|-----------|------|-------------|
@@ -994,6 +994,33 @@ queries the existing ``sections`` table — no file I/O.
 
 Write-tagged prompts are hidden in read-only mode by the same
 ``mcp.disable(tags={"write"})`` call that hides write tools.
+
+**User-defined prompts**: when ``MARKDOWN_VAULT_MCP_PROMPTS_FOLDER`` is set,
+``register_prompts()`` scans the directory for ``.md`` files at startup and
+registers each as an MCP prompt. The file stem becomes the prompt name.
+Frontmatter defines metadata:
+
+```yaml
+---
+description: "One-line description shown to clients"
+arguments:
+  - name: path
+    description: "Path to the note"
+    required: true
+  - name: topic
+    description: "Optional topic focus"
+    required: false
+tags:
+  - write   # optional: hidden in read-only mode
+---
+
+Prompt content here. Use $path and $topic as placeholders (string.Template syntax).
+```
+
+**Override semantics**: if a user-defined prompt has the same name as a
+built-in, the built-in is skipped and the user's version is registered.
+This allows domain-specific workflows (e.g. a ``zettelkasten`` prompt) to
+live outside the core server and be mounted at deployment time.
 
 ## Configuration
 
@@ -1017,6 +1044,7 @@ For MCP server deployment:
 | `MARKDOWN_VAULT_MCP_REQUIRED_FIELDS` | Comma-separated required frontmatter fields | none |
 | `MARKDOWN_VAULT_MCP_EXCLUDE` | Comma-separated glob patterns to exclude | none |
 | `MARKDOWN_VAULT_MCP_TEMPLATES_FOLDER` | Relative folder path for note templates used by `create_from_template` | `_templates` |
+| `MARKDOWN_VAULT_MCP_PROMPTS_FOLDER` | Path to a directory of user-defined `.md` prompt files; each file becomes an MCP prompt (user prompts override built-ins by name) | disabled |
 | `MARKDOWN_VAULT_MCP_GIT_REPO_URL` | HTTPS URL for managed git mode (clone + remote validation) | disabled |
 | `MARKDOWN_VAULT_MCP_GIT_USERNAME` | Username for HTTPS token auth prompts | `x-access-token` |
 | `MARKDOWN_VAULT_MCP_GIT_TOKEN` | Token/password for HTTPS git auth | disabled |

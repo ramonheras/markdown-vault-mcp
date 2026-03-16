@@ -218,6 +218,9 @@ def create_server() -> FastMCP:
       (default ``"markdown-vault-mcp"``).
     - ``MARKDOWN_VAULT_MCP_INSTRUCTIONS``: system-level instructions injected
       into LLM context (default: dynamic description reflecting read-only state).
+    - ``MARKDOWN_VAULT_MCP_PROMPTS_FOLDER``: directory of user-defined ``.md``
+      prompt files.  User prompts with the same name as a built-in override the
+      built-in.  Default: disabled.
 
     Returns:
         A fully configured :class:`~fastmcp.FastMCP` instance ready to run.
@@ -267,7 +270,11 @@ def create_server() -> FastMCP:
 
     register_tools(mcp)
     register_resources(mcp)
-    register_prompts(mcp, templates_folder=config.templates_folder)
+    register_prompts(
+        mcp,
+        templates_folder=config.templates_folder,
+        prompts_folder=config.prompts_folder,
+    )
 
     # --- Visibility: hide write-tagged components in read-only mode ---
 
