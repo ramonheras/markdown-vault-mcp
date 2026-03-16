@@ -1493,7 +1493,9 @@ class TestGitSyncOnce:
         orig_post = fm.loads((work / "README.md").read_text())
         conflict_post = fm.loads(conflict_file.read_text())
 
-        assert orig_post.metadata["conflict_with"] == conflict_file.name
+        assert orig_post.metadata["conflict_with"] == str(
+            conflict_file.relative_to(work)
+        )
         assert conflict_post.metadata["conflict_with"] == "README.md"
         assert "conflict_date" in orig_post.metadata
         assert "conflict_date" in conflict_post.metadata
@@ -1645,6 +1647,125 @@ class TestGitSyncOnce:
         # Conflict file created for README.md.
         conflict_files = list(work.glob("README.conflict-mcp-*.md"))
         assert len(conflict_files) == 1
+
+    def test_resolve_rebase_conflicts_max_iterations_returns_saved(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """_resolve_rebase_conflicts returns saved content when iteration limit hit."""
+        from types import SimpleNamespace
+
+        strategy = GitWriteStrategy(token=None, push_delay_s=0)
+
+        call_count = 0
+
+        def fake_run(cmd: list[str], **_kwargs: object) -> SimpleNamespace:
+            nonlocal call_count
+            call_count += 1
+            # diff --name-only --diff-filter=U: always return a conflicting file.
+            if "--diff-filter=U" in cmd:
+                return SimpleNamespace(returncode=0, stdout="README.md\n", stderr="")
+            # git show REBASE_HEAD:README.md: return fake MCP content.
+            if "show" in cmd:
+                return SimpleNamespace(
+                    returncode=0, stdout="# MCP content\n", stderr=""
+                )
+            # git checkout --ours: succeed silently.
+            if "checkout" in cmd:
+                return SimpleNamespace(returncode=0, stdout="", stderr="")
+            # git add: succeed silently.
+            if cmd[3] == "add" and "--diff-filter=U" not in cmd:
+                return SimpleNamespace(returncode=0, stdout="", stderr="")
+            # rebase --continue: always fail (simulates never-ending conflicts).
+            if "rebase" in cmd and "--continue" in cmd:
+                return SimpleNamespace(returncode=1, stdout="", stderr="conflict")
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        monkeypatch.setattr("markdown_vault_mcp.git.subprocess.run", fake_run)
+
+        result = strategy._resolve_rebase_conflicts(tmp_path, env=None)
+
+        # Should return whatever was saved (50 iterations x 1 file each).
+        assert len(result) == 50
+        assert result[0] == ("README.md", "# MCP content\n")
+
+    def test_write_conflict_files_commit_failure_is_logged(
+        self,
+        git_repo: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """_write_conflict_files logs ERROR when git commit fails but does not raise."""
+        strategy = GitWriteStrategy(token=None, push_delay_s=0)
+
+        # Create a real file for the original path.
+        (git_repo / "note.md").write_text("# Original\n")
+
+        saved = [("note.md", "# MCP version\n")]
+
+        import subprocess as sp
+
+        real_run = sp.run
+
+        def patched_run(cmd: list[str], **kwargs: object) -> object:
+            # Make git commit return failure.
+            if isinstance(cmd, list) and "commit" in cmd:
+                from types import SimpleNamespace
+
+                return SimpleNamespace(
+                    returncode=1, stdout="", stderr="nothing to commit"
+                )
+            return real_run(cmd, **kwargs)
+
+        import unittest.mock as mock
+
+        with (
+            mock.patch(
+                "markdown_vault_mcp.git.subprocess.run", side_effect=patched_run
+            ),
+            caplog.at_level(logging.ERROR, logger="markdown_vault_mcp.git"),
+        ):
+            written = strategy._write_conflict_files(git_repo, saved, env=None)
+
+        # The method still returns the written conflict file paths.
+        assert len(written) == 1
+        # The ERROR was logged.
+        assert any("conflict commit failed" in r.message for r in caplog.records)
+
+    def test_write_conflict_files_invalid_frontmatter_logs_warning(
+        self,
+        git_repo: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """_write_conflict_files logs WARNING for unparseable frontmatter but still writes files."""
+        strategy = GitWriteStrategy(token=None, push_delay_s=0)
+
+        # Write an original file with invalid YAML frontmatter.
+        (git_repo / "broken.md").write_text("---\n{invalid: yaml: [\n---\n# Body\n")
+
+        # The saved MCP content also has invalid frontmatter.
+        saved = [("broken.md", "---\n{invalid: yaml: [\n---\n# MCP Body\n")]
+
+        import unittest.mock as mock
+
+        with (
+            mock.patch(
+                "markdown_vault_mcp.git.frontmatter.loads",
+                side_effect=Exception("yaml parse error"),
+            ),
+            caplog.at_level(logging.WARNING, logger="markdown_vault_mcp.git"),
+        ):
+            written = strategy._write_conflict_files(git_repo, saved, env=None)
+
+        # Conflict file was still written despite parse errors.
+        assert len(written) == 1
+        conflict_path = git_repo / written[0]
+        assert conflict_path.exists()
+        assert "conflict_with" in conflict_path.read_text()
+
+        # Both frontmatter-parse warnings were logged.
+        warnings = [r for r in caplog.records if "frontmatter" in r.message]
+        assert len(warnings) >= 1
 
 
 class TestGitPullLoop:

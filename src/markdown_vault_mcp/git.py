@@ -642,11 +642,11 @@ class GitWriteStrategy:
             # returncode != 0 means the next commit also has conflicts —
             # loop around and resolve again.
 
-        # Exhausted iterations — should not happen in practice.
+        # Exhausted iterations or no conflicting files after non-zero continue.
         logger.error(
             "Git pull: conflict resolution loop exceeded %d iterations", max_iterations
         )
-        return []
+        return saved
 
     def _write_conflict_files(
         self,
@@ -682,6 +682,11 @@ class GitWriteStrategy:
                 post = frontmatter.loads(mcp_content)
             except Exception:
                 # If frontmatter parsing fails, treat as plain content.
+                logger.warning(
+                    "Git pull: failed to parse frontmatter for conflict file %s; treating as plain content",
+                    conflict_rel,
+                    exc_info=True,
+                )
                 post = frontmatter.Post(mcp_content)
 
             post.metadata["conflict_with"] = rel_path
@@ -699,6 +704,11 @@ class GitWriteStrategy:
                         original_abs.read_text(encoding="utf-8")
                     )
                 except Exception:
+                    logger.warning(
+                        "Git pull: failed to parse frontmatter for original file %s; treating as plain content",
+                        rel_path,
+                        exc_info=True,
+                    )
                     orig_post = frontmatter.Post(
                         original_abs.read_text(encoding="utf-8")
                     )
@@ -711,17 +721,26 @@ class GitWriteStrategy:
         if not written:
             return written
 
-        # Stage all changes and commit.
-        subprocess.run(
-            ["git", "-C", root, "add", "--all"],
-            capture_output=True,
-            text=True,
-            env=env,
-        )
+        # Stage only the files we touched — the original files (updated with
+        # conflict_with frontmatter) and the new conflict files.
+        for rel_path, _ in saved:
+            subprocess.run(
+                ["git", "-C", root, "add", "--", rel_path],
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+        for conflict_rel in written:
+            subprocess.run(
+                ["git", "-C", root, "add", "--", conflict_rel],
+                capture_output=True,
+                text=True,
+                env=env,
+            )
 
         n = len(written)
         file_list = ", ".join(written)
-        subprocess.run(
+        commit_result = subprocess.run(
             [
                 "git",
                 "-C",
@@ -738,6 +757,12 @@ class GitWriteStrategy:
             text=True,
             env=env,
         )
+        if commit_result.returncode != 0:
+            logger.error(
+                "Git pull: conflict commit failed (rc=%d): %s",
+                commit_result.returncode,
+                (commit_result.stderr or commit_result.stdout or "").strip(),
+            )
 
         return written
 
@@ -837,6 +862,41 @@ class GitWriteStrategy:
                         # True conflict — resolve by accepting theirs and
                         # saving the MCP version as a conflict file.
                         saved = self._resolve_rebase_conflicts(git_root, env)
+
+                        # Check if a rebase is still in progress (e.g. the
+                        # loop exited via break because no conflicting files
+                        # were found but rebase --continue had returned
+                        # non-zero, or the iteration limit was hit).
+                        rebase_head = subprocess.run(
+                            [
+                                "git",
+                                "-C",
+                                str(git_root),
+                                "rev-parse",
+                                "--verify",
+                                "REBASE_HEAD",
+                            ],
+                            capture_output=True,
+                            text=True,
+                            env=env,
+                        )
+                        rebase_in_progress = rebase_head.returncode == 0
+
+                        if rebase_in_progress:
+                            # Abort the incomplete rebase before committing
+                            # conflict files so the working tree is clean.
+                            abort_proc = subprocess.run(
+                                ["git", "-C", str(git_root), "rebase", "--abort"],
+                                capture_output=True,
+                                text=True,
+                                env=env,
+                            )
+                            if abort_proc.returncode != 0:
+                                logger.error(
+                                    "Git pull: failed to abort rebase: %s",
+                                    (abort_proc.stderr or "").strip(),
+                                )
+
                         if saved:
                             written = self._write_conflict_files(git_root, saved, env)
                             for cf in written:
@@ -849,18 +909,7 @@ class GitWriteStrategy:
                                 len(written),
                             )
                         else:
-                            # Resolution failed — abort and stay put.
-                            abort_proc = subprocess.run(
-                                ["git", "-C", str(git_root), "rebase", "--abort"],
-                                capture_output=True,
-                                text=True,
-                                env=env,
-                            )
-                            if abort_proc.returncode != 0:
-                                logger.error(
-                                    "Git pull: failed to abort rebase: %s",
-                                    (abort_proc.stderr or "").strip(),
-                                )
+                            # Resolution failed entirely — stay put.
                             logger.warning(
                                 "Git pull: conflict resolution failed, skipping"
                             )
