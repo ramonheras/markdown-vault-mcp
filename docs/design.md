@@ -671,6 +671,37 @@ is stored without it.
 **Wikilinks**: `[[Note Title]]` appends `.md` → `Note Title.md`. The path is
 stored as-is (no case-insensitive lookup at extraction time).
 
+### Graph Traversal
+
+The `links` table is a directed graph where notes are nodes and links are edges.
+`FTSIndex` provides a BFS-based traversal treating the graph as **undirected** —
+a link from A→B or B→A both count as a connection.
+
+**`get_connection_path(source_path, target_path, max_depth=10)`**
+
+Returns the shortest path between two notes as an ordered `list[str]`, or
+`None` if unreachable within `max_depth` hops. `max_depth` is clamped to
+`[1, 10]`.
+
+Algorithm:
+1. Validate both endpoints exist in the `documents` table (raises `ValueError`
+   if missing).
+2. Trivial case: `source == target` → returns `[source]`.
+3. Load all edges into an undirected adjacency dict:
+   `{path: set(neighbours)}` — both forward and reverse directions.
+4. BFS from `source`, tracking the full path at each node. Early exit when
+   `target` is found. Nodes beyond `max_depth` edges are not expanded.
+
+The adjacency dict is built per-query from the `links` table; it is not cached
+between calls. For typical vault sizes (hundreds to low thousands of notes),
+this is fast enough that caching adds complexity without measurable benefit.
+
+`Collection.get_connection_path()` wraps the FTS call and applies path
+traversal protection via `_validate_path()` before delegating.
+
+The MCP tool `get_connection_path` returns
+`{"found": bool, "path": list[str], "hops": int}`.
+
 ## Module Design
 
 ### `collection.py` -- Thin Facade
@@ -934,6 +965,7 @@ pattern). Each tool is annotated with MCP `ToolAnnotations`:
 | `get_context` | Get consolidated context dossier for a note | `True` | `False` | `True` |
 | `get_orphan_notes` | Find notes with no inbound or outbound links | `True` | `False` | `True` |
 | `get_most_linked` | Find notes ranked by number of inbound links | `True` | `False` | `True` |
+| `get_connection_path` | Shortest undirected path between two notes (BFS, max 10 hops) | `True` | `False` | `True` |
 
 **Tool name note**: the MCP tool is registered as `list_documents` (not `list`)
 to avoid shadowing Python's built-in `list`. The underlying `Collection.list()`
