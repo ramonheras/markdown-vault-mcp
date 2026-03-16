@@ -175,7 +175,7 @@ Returns:
 - `backlinks` — notes that link here (who cites this idea?)
 - `outlinks` — notes this links to (what does this build on?)
 - `similar` — semantically related notes not yet linked
-- `folder_peers` — other notes in the same folder
+- `folder_notes` — other notes in the same folder
 - `tags` — frontmatter tags for grouping
 
 **Find related notes you haven't linked yet:**
@@ -183,7 +183,7 @@ Returns:
 ```python
 similar = collection.get_similar("Notes/consensus.md", limit=10)
 for note in similar:
-    print(f"Similar: {note.title} ({note.similarity_score:.2f})")
+    print(f"Similar: {note.title} ({note.score:.2f})")
 ```
 
 **Discover indirect connections:**
@@ -371,19 +371,15 @@ The prompt will:
 3. Gather required values (title, source, etc.)
 4. Create the note with filled-in frontmatter
 
-**Create templates dynamically:**
+**Invoke via MCP prompt:**
 
-```python
-# List available templates
-templates = collection.list_templates()  # returns ["fleeting", "literature", "permanent", "moc"]
+`create_from_template` is an MCP prompt, not a Python API method. Invoke it through your MCP client (e.g., Claude):
 
-# Create a note from a template with user values
-collection.create_from_template(
-    template_name="literature",
-    title="Distributed Consensus",
-    source="https://example.com/paper.pdf"
-)
 ```
+Use the create_from_template prompt with template_name="literature"
+```
+
+The prompt will call `list_documents(folder=<templates_folder>)` to enumerate templates, then `read` the chosen one, then `write` the filled note — all through vault tools.
 
 ## Using the Zettelkasten Prompt
 
@@ -424,7 +420,6 @@ Before writing your first note, run `stats()` to understand your vault's shape:
 stats = collection.stats()
 print(f"Documents: {stats.document_count}")
 print(f"Broken links: {stats.broken_link_count}")
-print(f"Hub notes (most linked): {stats.most_linked_count}")
 print(f"Orphaned notes: {stats.orphan_count}")
 ```
 
