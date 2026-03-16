@@ -7,6 +7,7 @@ Call :func:`register_prompts` after constructing the
 
 from __future__ import annotations
 
+import keyword
 import logging
 import re
 from pathlib import Path, PurePosixPath
@@ -123,13 +124,15 @@ def _register_one_user_prompt(mcp: FastMCP, name: str, defn: dict[str, Any]) -> 
     else:
         # Validate all argument names before building the exec'd function.
         # Malicious frontmatter could inject arbitrary Python via exec() if
-        # names are not restricted to valid identifiers.
+        # names are not restricted to valid identifiers, or if names happen
+        # to be reserved keywords (which would cause a SyntaxError in exec).
         for arg in arg_defs:
-            if not _VALID_IDENT.match(arg["name"]):
+            arg_name = arg["name"]
+            if not _VALID_IDENT.match(arg_name) or keyword.iskeyword(arg_name):
                 logger.warning(
                     "User prompt %r has invalid argument name %r — skipping prompt",
                     name,
-                    arg["name"],
+                    arg_name,
                 )
                 return
 
@@ -150,7 +153,15 @@ def _register_one_user_prompt(mcp: FastMCP, name: str, defn: dict[str, Any]) -> 
             f"    return _Template(tmpl).safe_substitute({sub_args})\n"
         )
         local_ns: dict[str, Any] = {"tmpl": content_template, "_Template": Template}
-        exec(fn_src, local_ns)
+        try:
+            exec(fn_src, local_ns)
+        except SyntaxError:
+            logger.warning(
+                "User prompt %r generated invalid function signature — skipping prompt",
+                name,
+                exc_info=True,
+            )
+            return
         fn = local_ns["prompt_fn"]
 
     fn.__name__ = name

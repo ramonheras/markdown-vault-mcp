@@ -4,7 +4,7 @@ Tests cover:
 - _load_user_prompt_defs: happy path, non-existent dir, non-.md files
 - Override: user prompt with same name as built-in replaces the built-in
 - No-arg prompt: content returned as-is
-- Args prompt: {placeholder} substitution works
+- Args prompt: $placeholder substitution works
 - Write tag: prompt tagged "write" gets FastMCP write tag
 """
 
@@ -124,6 +124,56 @@ class TestLoadUserPromptDefs:
             result = _load_user_prompt_defs(str(tmp_path))
         assert "broken" not in result
         assert "Failed to parse" in caplog.text
+
+
+class TestRegisterOneUserPromptArgValidation:
+    """Security: invalid and keyword arg names are rejected without crashing."""
+
+    def test_skips_prompt_with_keyword_arg_name(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Reserved Python keyword as arg name is rejected with a warning, not a crash."""
+        from fastmcp import FastMCP
+
+        import logging
+
+        from markdown_vault_mcp._server_prompts import _register_one_user_prompt
+
+        mcp = FastMCP("test")
+        defn: dict = {
+            "description": "bad prompt",
+            "arguments": [{"name": "class", "description": "", "required": True}],
+            "tags": [],
+            "content": "Hello $class",
+        }
+        with caplog.at_level(
+            logging.WARNING, logger="markdown_vault_mcp._server_prompts"
+        ):
+            _register_one_user_prompt(mcp, "bad_prompt", defn)
+        assert "invalid argument name" in caplog.text
+
+    def test_skips_prompt_with_non_identifier_arg_name(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Arg name with invalid characters is rejected with a warning."""
+        from fastmcp import FastMCP
+
+        import logging
+
+        from markdown_vault_mcp._server_prompts import _register_one_user_prompt
+
+        mcp = FastMCP("test")
+        defn: dict = {
+            "description": "bad prompt",
+            "arguments": [{"name": "my-arg", "description": "", "required": True}],
+            "tags": [],
+            "content": "Hello",
+        }
+        with caplog.at_level(
+            logging.WARNING, logger="markdown_vault_mcp._server_prompts"
+        ):
+            _register_one_user_prompt(mcp, "bad_prompt2", defn)
+        assert "invalid argument name" in caplog.text
 
 
 # ---------------------------------------------------------------------------
