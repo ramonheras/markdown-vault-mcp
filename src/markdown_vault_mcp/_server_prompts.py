@@ -25,6 +25,10 @@ logger = logging.getLogger(__name__)
 # This prevents exec() injection via malicious frontmatter argument names.
 _VALID_IDENT = re.compile(r"^[a-zA-Z_]\w*$")
 
+# Argument names that would shadow variables injected into the exec() namespace,
+# causing silent wrong output (tmpl) or TypeError at invocation (_Template).
+_RESERVED_EXEC_NAMES = frozenset({"tmpl", "_Template"})
+
 
 def _load_user_prompt_defs(prompts_folder: str | None) -> dict[str, dict[str, Any]]:
     """Scan *prompts_folder* and return a dict of prompt definitions.
@@ -128,9 +132,13 @@ def _register_one_user_prompt(mcp: FastMCP, name: str, defn: dict[str, Any]) -> 
         # to be reserved keywords (which would cause a SyntaxError in exec).
         for arg in arg_defs:
             arg_name = arg["name"]
-            if not _VALID_IDENT.match(arg_name) or keyword.iskeyword(arg_name):
+            if (
+                not _VALID_IDENT.match(arg_name)
+                or keyword.iskeyword(arg_name)
+                or arg_name in _RESERVED_EXEC_NAMES
+            ):
                 logger.warning(
-                    "User prompt %r has invalid argument name %r — skipping prompt",
+                    "User prompt %r has invalid or reserved argument name %r — skipping prompt",
                     name,
                     arg_name,
                 )

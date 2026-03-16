@@ -150,7 +150,7 @@ class TestRegisterOneUserPromptArgValidation:
             logging.WARNING, logger="markdown_vault_mcp._server_prompts"
         ):
             _register_one_user_prompt(mcp, "bad_prompt", defn)
-        assert "invalid argument name" in caplog.text
+        assert "invalid or reserved argument name" in caplog.text
 
     def test_skips_prompt_with_non_identifier_arg_name(
         self, caplog: pytest.LogCaptureFixture
@@ -173,7 +173,30 @@ class TestRegisterOneUserPromptArgValidation:
             logging.WARNING, logger="markdown_vault_mcp._server_prompts"
         ):
             _register_one_user_prompt(mcp, "bad_prompt2", defn)
-        assert "invalid argument name" in caplog.text
+        assert "invalid or reserved argument name" in caplog.text
+
+    def test_skips_prompt_with_reserved_exec_name(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Arg names 'tmpl'/'_Template' shadow exec closure vars — must be rejected."""
+        import logging
+
+        from fastmcp import FastMCP
+
+        from markdown_vault_mcp._server_prompts import _register_one_user_prompt
+
+        mcp = FastMCP("test")
+        defn: dict = {
+            "description": "bad prompt",
+            "arguments": [{"name": "tmpl", "description": "", "required": True}],
+            "tags": [],
+            "content": "Hello $tmpl",
+        }
+        with caplog.at_level(
+            logging.WARNING, logger="markdown_vault_mcp._server_prompts"
+        ):
+            _register_one_user_prompt(mcp, "bad_exec_name", defn)
+        assert "invalid or reserved argument name" in caplog.text
 
 
 # ---------------------------------------------------------------------------
