@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+import subprocess
 import time
 from typing import TYPE_CHECKING
 
@@ -140,7 +142,6 @@ class TestFindGitRoot:
 class TestGitWriteStrategy:
     def test_commit_on_write(self, git_repo: Path) -> None:
         """Strategy commits after a write operation."""
-        import subprocess
 
         callback = git_write_strategy()
         test_file = git_repo / "note.md"
@@ -158,7 +159,6 @@ class TestGitWriteStrategy:
 
     def test_commit_on_edit(self, git_repo: Path) -> None:
         """Strategy commits after an edit operation."""
-        import subprocess
 
         callback = git_write_strategy()
 
@@ -180,7 +180,6 @@ class TestGitWriteStrategy:
 
     def test_commit_on_delete(self, git_repo: Path) -> None:
         """Strategy stages deletion after a delete operation."""
-        import subprocess
 
         callback = git_write_strategy()
 
@@ -199,7 +198,6 @@ class TestGitWriteStrategy:
 
     def test_commit_on_rename(self, git_repo: Path) -> None:
         """Strategy stages both old deletion and new addition on rename."""
-        import subprocess
 
         callback = git_write_strategy()
 
@@ -230,7 +228,6 @@ class TestGitWriteStrategy:
 
     def test_commit_on_rename_of_untracked_file(self, git_repo: Path) -> None:
         """Rename of a never-committed file: only new path is committed."""
-        import subprocess
 
         callback = git_write_strategy()
 
@@ -273,7 +270,6 @@ class TestGitWriteStrategy:
 
     def test_no_op_write_skips_commit(self, git_repo: Path) -> None:
         """Writing identical content should not produce an error commit."""
-        import subprocess
 
         callback = git_write_strategy()
 
@@ -319,7 +315,6 @@ class TestGitWriteStrategyClass:
         self, git_repo_with_remote: tuple[Path, Path]
     ) -> None:
         """flush() pushes accumulated commits to the bare remote."""
-        import subprocess
 
         work, bare = git_repo_with_remote
 
@@ -348,7 +343,6 @@ class TestGitWriteStrategyClass:
 
     def test_close_flushes(self, git_repo_with_remote: tuple[Path, Path]) -> None:
         """close() flushes pending push and marks strategy as closed."""
-        import subprocess
 
         work, bare = git_repo_with_remote
 
@@ -380,7 +374,6 @@ class TestGitWriteStrategyClass:
         self, git_repo_with_remote: tuple[Path, Path]
     ) -> None:
         """Timer-based push fires after push_delay_s of idle."""
-        import subprocess
 
         work, bare = git_repo_with_remote
 
@@ -416,7 +409,6 @@ class TestGitWriteStrategyClass:
         self, git_repo_with_remote: tuple[Path, Path]
     ) -> None:
         """Multiple rapid writes result in a single deferred push."""
-        import subprocess
 
         work, bare = git_repo_with_remote
 
@@ -458,7 +450,6 @@ class TestGitWriteStrategyClass:
         self, git_repo_with_remote: tuple[Path, Path]
     ) -> None:
         """Push with token uses GIT_ASKPASS against a local bare remote."""
-        import subprocess
 
         work, bare = git_repo_with_remote
 
@@ -477,7 +468,7 @@ class TestGitWriteStrategyClass:
 
     def test_token_not_in_command_args(self, tmp_path: Path) -> None:
         """Token must not appear in any git command-line arguments."""
-        import subprocess
+
         from unittest.mock import patch
 
         recorded_cmds: list[list[str]] = []
@@ -540,7 +531,6 @@ class TestGitWriteStrategyClass:
 
     def test_git_env_askpass_uses_configured_username(self) -> None:
         """Askpass helper returns username for username prompts."""
-        import subprocess
 
         strategy = GitWriteStrategy(token="topsecret", username="oauth2")
         env = strategy._git_env()
@@ -570,7 +560,6 @@ class TestGitWriteStrategyClass:
         self, git_repo_with_remote: tuple[Path, Path]
     ) -> None:
         """On first invocation, unpushed local commits are pushed."""
-        import subprocess
 
         work, bare = git_repo_with_remote
 
@@ -642,7 +631,6 @@ class TestConfigIntegration:
 
     def test_git_repo_url_enables_managed_mode(self, tmp_path: Path) -> None:
         """Managed mode uses configured pull interval and write callback."""
-        import subprocess
 
         from markdown_vault_mcp.config import CollectionConfig
 
@@ -736,7 +724,7 @@ class TestCheckIdentity:
         self, git_repo: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
         """_check_identity warns when git config has no user.email."""
-        import subprocess
+
         from unittest.mock import patch
 
         # Remove user.email from the repo config so git config returns empty.
@@ -818,8 +806,7 @@ class TestTokenRedactionInLogs:
         self, git_repo: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
         """CalledProcessError in __call__ redacts token from logged stderr."""
-        import logging
-        import subprocess
+
         from unittest.mock import patch
 
         secret = "ghp_supersecret_token_xyz"
@@ -851,8 +838,7 @@ class TestTokenRedactionInLogs:
         self, git_repo: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
         """_do_push_safe redacts token when push raises CalledProcessError."""
-        import logging
-        import subprocess
+
         from unittest.mock import patch
 
         secret = "ghp_push_secret_abc123"
@@ -880,7 +866,7 @@ class TestTokenRedactionInLogs:
         self, git_repo: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
         """_do_push_safe catches generic Exception and logs it without propagating."""
-        import logging
+
         from unittest.mock import patch
 
         strategy = GitWriteStrategy(token=None, push_delay_s=0)
@@ -902,8 +888,7 @@ class TestTokenRedactionInLogs:
         self, git_repo_with_remote: tuple[Path, Path], caplog: pytest.LogCaptureFixture
     ) -> None:
         """_push_if_unpushed redacts token in logged error when startup push fails."""
-        import logging
-        import subprocess
+
         from unittest.mock import patch
 
         work, _bare = git_repo_with_remote
@@ -950,7 +935,7 @@ class TestGitLfsSupport:
         self, git_repo: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
         """When git_lfs=True, git lfs pull is called during first invocation."""
-        import logging
+
         from unittest.mock import patch
 
         strategy = GitWriteStrategy(git_lfs=True)
@@ -1015,8 +1000,7 @@ class TestGitLfsSupport:
         self, git_repo: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
         """LFS pull failure is logged at ERROR but does not propagate."""
-        import logging
-        import subprocess
+
         from unittest.mock import patch
 
         strategy = GitWriteStrategy(git_lfs=True)
@@ -1041,7 +1025,7 @@ class TestGitLfsSupport:
         self, git_repo: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
         """When git-lfs is not on PATH, logs ERROR and does not propagate."""
-        import logging
+
         from unittest.mock import patch
 
         strategy = GitWriteStrategy(git_lfs=True)
@@ -1152,7 +1136,7 @@ class TestCommitterIdentityInCommit:
 
     def test_default_committer_in_commit_flags(self, git_repo: Path) -> None:
         """_stage_and_commit uses default committer identity in -c flags."""
-        import subprocess
+
         from unittest.mock import patch
 
         recorded_cmds: list[list[str]] = []
@@ -1185,7 +1169,7 @@ class TestCommitterIdentityInCommit:
 
     def test_custom_committer_in_commit_flags(self, git_repo: Path) -> None:
         """_stage_and_commit uses custom committer identity in -c flags."""
-        import subprocess
+
         from unittest.mock import patch
 
         recorded_cmds: list[list[str]] = []
@@ -1262,7 +1246,6 @@ class TestGitSyncOnce:
         self, tmp_path: Path, git_repo_with_remote: tuple[Path, Path]
     ) -> None:
         """sync_once() fast-forwards when the remote has advanced."""
-        import subprocess
 
         work, bare = git_repo_with_remote
 
@@ -1309,7 +1292,6 @@ class TestGitSyncOnce:
         self, tmp_path: Path, git_repo_with_remote: tuple[Path, Path]
     ) -> None:
         """sync_once() forwards the auth env to git lfs pull."""
-        import subprocess
 
         work, bare = git_repo_with_remote
 
@@ -1359,18 +1341,90 @@ class TestGitSyncOnce:
         assert captured[-1] is not None
         assert "GIT_ASKPASS" in captured[-1]
 
-    def test_sync_once_diverged_skips(
+    def test_sync_once_diverged_clean_rebases(
         self,
         tmp_path: Path,
         git_repo_with_remote: tuple[Path, Path],
         caplog: pytest.LogCaptureFixture,
     ) -> None:
-        """sync_once() does not merge/rebase when ff-only is not possible."""
-        import subprocess
+        """sync_once() rebases local commits onto upstream when branches diverge cleanly.
+
+        This is the common Obsidian scenario: both sides committed on different
+        files so the rebase applies without conflict.
+        """
 
         work, bare = git_repo_with_remote
 
-        # Create a local-only commit (do not push).
+        # Create a local-only commit on a different file (do not push).
+        (work / "local-note.md").write_text("# Local note\n")
+        subprocess.run(
+            ["git", "-C", str(work), "add", "."],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(work), "commit", "-m", "local note"],
+            check=True,
+            capture_output=True,
+        )
+
+        # Advance remote on a separate clone (different file).
+        other = tmp_path / "other"
+        subprocess.run(
+            ["git", "clone", str(bare), str(other)],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(other), "config", "user.email", "test@test.com"],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(other), "config", "user.name", "Test"],
+            check=True,
+            capture_output=True,
+        )
+        (other / "obsidian-note.md").write_text("# Obsidian note\n")
+        subprocess.run(
+            ["git", "-C", str(other), "add", "."],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(other), "commit", "-m", "obsidian note"],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(other), "push"],
+            check=True,
+            capture_output=True,
+        )
+
+        strategy = GitWriteStrategy(token=None, push_delay_s=0)
+        with caplog.at_level(logging.INFO, logger="markdown_vault_mcp.git"):
+            did_advance = strategy.sync_once(work)
+
+        assert did_advance is True
+        assert any(
+            "rebased local commits onto upstream" in r.message for r in caplog.records
+        )
+        # Both files should be present after the rebase.
+        assert (work / "local-note.md").exists()
+        assert (work / "obsidian-note.md").exists()
+
+    def test_sync_once_diverged_conflict_skips(
+        self,
+        tmp_path: Path,
+        git_repo_with_remote: tuple[Path, Path],
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """sync_once() skips and aborts when diverged branches have a true conflict."""
+
+        work, bare = git_repo_with_remote
+
+        # Create a local-only commit on README.md (do not push).
         (work / "README.md").write_text("# Local diverge\n")
         subprocess.run(
             ["git", "-C", str(work), "add", "."],
@@ -1383,7 +1437,7 @@ class TestGitSyncOnce:
             capture_output=True,
         )
 
-        # Advance remote on a separate clone.
+        # Advance remote on a separate clone, also modifying README.md.
         other = tmp_path / "other"
         subprocess.run(
             ["git", "clone", str(bare), str(other)],
@@ -1420,7 +1474,7 @@ class TestGitSyncOnce:
         strategy = GitWriteStrategy(token=None, push_delay_s=0)
         did_advance = strategy.sync_once(work)
         assert did_advance is False
-        assert "ff-only update failed" in caplog.text
+        assert "rebase failed" in caplog.text
 
 
 class TestGitPullLoop:
@@ -1590,7 +1644,6 @@ class TestManagedGitMode:
         self, tmp_path: Path, git_repo_with_remote: tuple[Path, Path]
     ) -> None:
         """Managed mode rejects existing repos with a different origin URL."""
-        import subprocess
 
         work, _bare = git_repo_with_remote
         other_bare = tmp_path / "other.git"
@@ -1676,7 +1729,7 @@ class TestManagedGitMode:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Managed mode errors when an existing git repo has no origin remote."""
-        import subprocess
+
         from types import SimpleNamespace
 
         from markdown_vault_mcp.exceptions import ConfigurationError
@@ -1709,7 +1762,6 @@ class TestManagedGitMode:
         self, git_repo_with_remote: tuple[Path, Path]
     ) -> None:
         """Local-only mode commits writes and never pushes to origin."""
-        import subprocess
 
         work, bare = git_repo_with_remote
 
