@@ -49,7 +49,7 @@ title: "Note title"
 type: fleeting | literature | permanent | moc
 tags: [tag1, tag2]
 source: "URL or citation"  # for literature notes only
-created: 2026-03-15
+created: YYYY-MM-DD
 ---
 ```
 
@@ -80,7 +80,7 @@ markdown-vault-mcp search "query" --filters '{"tags": "system-design"}'
 
 The server uses file paths as note identity. Choose any naming scheme:
 
-- **Timestamp-based:** `202603151700-distributed-consensus.md` — sorts chronologically, no collisions
+- **Timestamp-based:** `YYYYMMDDHHMM-distributed-consensus.md` — sorts chronologically, no collisions
 - **Title-based:** `distributed-consensus.md` — human-readable, easier to read in logs
 - **Luhmann-style IDs:** `1a.2b.3c.md` — mimics paper ZK, encodes hierarchy (rarely needed)
 
@@ -195,7 +195,10 @@ path = collection.get_connection_path(
     target="Notes/fault-tolerance.md",
     max_depth=5
 )
-print(f"Connection: {' -> '.join(path)}")
+if path:
+    print(f"Connection: {' -> '.join(path)}")
+else:
+    print("No connection found within max_depth")
 ```
 
 **Add links to notes:**
@@ -316,7 +319,7 @@ A **MOC** (Map of Content) is a curated hub note that aggregates links to relate
 title: "Distributed Systems (MOC)"
 type: moc
 tags: [moc, systems]
-created: 2026-03-15
+created: YYYY-MM-DD
 ---
 
 # Distributed Systems
@@ -432,7 +435,7 @@ This gives you a baseline for the monthly review.
 - Who already links to this note (validation that it matters)
 - What this note links to (avoid circular references)
 - Semantically similar notes (discover missed connections)
-- Folder peers (similar notes nearby)
+- Folder notes (all other notes in the same folder, from `context.folder_notes`)
 
 ### Hybrid search beats keyword-only
 
