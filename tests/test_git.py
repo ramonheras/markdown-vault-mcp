@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from typing import TYPE_CHECKING
 
@@ -1359,18 +1360,90 @@ class TestGitSyncOnce:
         assert captured[-1] is not None
         assert "GIT_ASKPASS" in captured[-1]
 
-    def test_sync_once_diverged_skips(
+    def test_sync_once_diverged_clean_rebases(
         self,
         tmp_path: Path,
         git_repo_with_remote: tuple[Path, Path],
         caplog: pytest.LogCaptureFixture,
     ) -> None:
-        """sync_once() does not merge/rebase when ff-only is not possible."""
+        """sync_once() rebases local commits onto upstream when branches diverge cleanly.
+
+        This is the common Obsidian scenario: both sides committed on different
+        files so the rebase applies without conflict.
+        """
         import subprocess
 
         work, bare = git_repo_with_remote
 
-        # Create a local-only commit (do not push).
+        # Create a local-only commit on a different file (do not push).
+        (work / "local-note.md").write_text("# Local note\n")
+        subprocess.run(
+            ["git", "-C", str(work), "add", "."],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(work), "commit", "-m", "local note"],
+            check=True,
+            capture_output=True,
+        )
+
+        # Advance remote on a separate clone (different file).
+        other = tmp_path / "other"
+        subprocess.run(
+            ["git", "clone", str(bare), str(other)],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(other), "config", "user.email", "test@test.com"],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(other), "config", "user.name", "Test"],
+            check=True,
+            capture_output=True,
+        )
+        (other / "obsidian-note.md").write_text("# Obsidian note\n")
+        subprocess.run(
+            ["git", "-C", str(other), "add", "."],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(other), "commit", "-m", "obsidian note"],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(other), "push"],
+            check=True,
+            capture_output=True,
+        )
+
+        strategy = GitWriteStrategy(token=None, push_delay_s=0)
+        with caplog.at_level(logging.INFO, logger="markdown_vault_mcp.git"):
+            did_advance = strategy.sync_once(work)
+
+        assert did_advance is True
+        assert any("rebased local commits onto upstream" in r.message for r in caplog.records)
+        # Both files should be present after the rebase.
+        assert (work / "local-note.md").exists()
+        assert (work / "obsidian-note.md").exists()
+
+    def test_sync_once_diverged_conflict_skips(
+        self,
+        tmp_path: Path,
+        git_repo_with_remote: tuple[Path, Path],
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """sync_once() skips and aborts when diverged branches have a true conflict."""
+        import subprocess
+
+        work, bare = git_repo_with_remote
+
+        # Create a local-only commit on README.md (do not push).
         (work / "README.md").write_text("# Local diverge\n")
         subprocess.run(
             ["git", "-C", str(work), "add", "."],
@@ -1383,7 +1456,7 @@ class TestGitSyncOnce:
             capture_output=True,
         )
 
-        # Advance remote on a separate clone.
+        # Advance remote on a separate clone, also modifying README.md.
         other = tmp_path / "other"
         subprocess.run(
             ["git", "clone", str(bare), str(other)],
@@ -1420,7 +1493,7 @@ class TestGitSyncOnce:
         strategy = GitWriteStrategy(token=None, push_delay_s=0)
         did_advance = strategy.sync_once(work)
         assert did_advance is False
-        assert "ff-only update failed" in caplog.text
+        assert "rebase failed" in caplog.text
 
 
 class TestGitPullLoop:

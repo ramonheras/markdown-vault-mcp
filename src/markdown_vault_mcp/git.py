@@ -618,12 +618,41 @@ class GitWriteStrategy:
                         check=True,
                         env=env,
                     )
-                except subprocess.CalledProcessError as exc:
-                    logger.warning(
-                        "Git pull: ff-only update failed (diverged?), skipping: %s",
-                        (exc.stderr or "").strip(),
-                    )
-                    return False
+                except subprocess.CalledProcessError:
+                    # ff-only failed — the branches have diverged.  Attempt
+                    # rebase to replay local MCP commits on top of upstream.
+                    # This handles the common case where Obsidian and the MCP
+                    # server both committed independently on different files.
+                    try:
+                        subprocess.run(
+                            [
+                                "git",
+                                "-C",
+                                str(git_root),
+                                "rebase",
+                                "@{upstream}",
+                            ],
+                            capture_output=True,
+                            text=True,
+                            check=True,
+                            env=env,
+                        )
+                        logger.info(
+                            "Git pull: ff-only not possible, rebased local commits onto upstream"
+                        )
+                    except subprocess.CalledProcessError as rebase_exc:
+                        # True conflict — abort and stay put until resolved manually.
+                        subprocess.run(
+                            ["git", "-C", str(git_root), "rebase", "--abort"],
+                            capture_output=True,
+                            text=True,
+                            env=env,
+                        )
+                        logger.warning(
+                            "Git pull: rebase failed (conflict?), skipping: %s",
+                            (rebase_exc.stderr or "").strip(),
+                        )
+                        return False
 
                 new_head = subprocess.run(
                     ["git", "-C", str(git_root), "rev-parse", "HEAD"],
