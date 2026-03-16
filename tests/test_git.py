@@ -806,7 +806,6 @@ class TestTokenRedactionInLogs:
         self, git_repo: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
         """CalledProcessError in __call__ redacts token from logged stderr."""
-        import logging
 
         from unittest.mock import patch
 
@@ -839,7 +838,6 @@ class TestTokenRedactionInLogs:
         self, git_repo: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
         """_do_push_safe redacts token when push raises CalledProcessError."""
-        import logging
 
         from unittest.mock import patch
 
@@ -868,7 +866,7 @@ class TestTokenRedactionInLogs:
         self, git_repo: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
         """_do_push_safe catches generic Exception and logs it without propagating."""
-        import logging
+
         from unittest.mock import patch
 
         strategy = GitWriteStrategy(token=None, push_delay_s=0)
@@ -890,7 +888,6 @@ class TestTokenRedactionInLogs:
         self, git_repo_with_remote: tuple[Path, Path], caplog: pytest.LogCaptureFixture
     ) -> None:
         """_push_if_unpushed redacts token in logged error when startup push fails."""
-        import logging
 
         from unittest.mock import patch
 
@@ -938,7 +935,7 @@ class TestGitLfsSupport:
         self, git_repo: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
         """When git_lfs=True, git lfs pull is called during first invocation."""
-        import logging
+
         from unittest.mock import patch
 
         strategy = GitWriteStrategy(git_lfs=True)
@@ -1003,7 +1000,6 @@ class TestGitLfsSupport:
         self, git_repo: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
         """LFS pull failure is logged at ERROR but does not propagate."""
-        import logging
 
         from unittest.mock import patch
 
@@ -1029,7 +1025,7 @@ class TestGitLfsSupport:
         self, git_repo: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
         """When git-lfs is not on PATH, logs ERROR and does not propagate."""
-        import logging
+
         from unittest.mock import patch
 
         strategy = GitWriteStrategy(git_lfs=True)
