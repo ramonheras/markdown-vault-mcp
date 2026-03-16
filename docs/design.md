@@ -1014,7 +1014,7 @@ tags:
   - write   # optional: hidden in read-only mode
 ---
 
-Prompt content here. Use {path} and {topic} as placeholders.
+Prompt content here. Use $path and $topic as placeholders (string.Template syntax).
 ```
 
 **Override semantics**: if a user-defined prompt has the same name as a

@@ -76,7 +76,7 @@ class TestLoadUserPromptDefs:
             "    description: Output style\n"
             "    required: false\n"
             "---\n"
-            "Do something with {path} in {style} style."
+            "Do something with $path in $style style."
         )
         (tmp_path / "custom.md").write_text(content, encoding="utf-8")
         result = _load_user_prompt_defs(str(tmp_path))
@@ -108,6 +108,22 @@ class TestLoadUserPromptDefs:
         (tmp_path / "beta.md").write_text("Beta content", encoding="utf-8")
         result = _load_user_prompt_defs(str(tmp_path))
         assert set(result.keys()) == {"alpha", "beta"}
+
+    def test_skips_malformed_frontmatter(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # Invalid YAML that causes python-frontmatter to raise
+        (tmp_path / "broken.md").write_text(
+            "---\n: invalid: yaml: [\n---\nContent.", encoding="utf-8"
+        )
+        import logging
+
+        with caplog.at_level(
+            logging.WARNING, logger="markdown_vault_mcp._server_prompts"
+        ):
+            result = _load_user_prompt_defs(str(tmp_path))
+        assert "broken" not in result
+        assert "Failed to parse" in caplog.text
 
 
 # ---------------------------------------------------------------------------
@@ -201,7 +217,7 @@ class TestUserPromptWithArgs:
             "    description: File path\n"
             "    required: true\n"
             "---\n"
-            "Read the file at {path} and summarize it."
+            "Read the file at $path and summarize it."
         )
         (prompts_dir / "myread.md").write_text(content, encoding="utf-8")
         monkeypatch.setenv("MARKDOWN_VAULT_MCP_PROMPTS_FOLDER", str(prompts_dir))
@@ -211,7 +227,7 @@ class TestUserPromptWithArgs:
             result = await client.get_prompt("myread", {"path": "notes/foo.md"})
         text = result.messages[0].content.text
         assert "notes/foo.md" in text
-        assert "{path}" not in text
+        assert "$path" not in text
 
     @pytest.mark.usefixtures("_clear_vars")
     async def test_optional_arg_defaults_to_empty(
@@ -225,7 +241,7 @@ class TestUserPromptWithArgs:
             "  - name: style\n"
             "    required: false\n"
             "---\n"
-            "Output in [{style}] style."
+            "Output in [$style] style."
         )
         (prompts_dir / "styled.md").write_text(content, encoding="utf-8")
         monkeypatch.setenv("MARKDOWN_VAULT_MCP_PROMPTS_FOLDER", str(prompts_dir))
@@ -253,7 +269,7 @@ class TestUserPromptOverride:
             "  - name: path\n"
             "    required: true\n"
             "---\n"
-            "CUSTOM SUMMARIZE for {path}"
+            "CUSTOM SUMMARIZE for $path"
         )
         (prompts_dir / "summarize.md").write_text(content, encoding="utf-8")
         monkeypatch.setenv("MARKDOWN_VAULT_MCP_PROMPTS_FOLDER", str(prompts_dir))

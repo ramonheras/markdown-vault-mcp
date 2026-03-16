@@ -432,9 +432,13 @@ def load_config() -> CollectionConfig:
     logger.debug("load_config: templates_folder=%s", templates_folder)
 
     raw_prompts_folder = (_env("PROMPTS_FOLDER") or "").strip()
-    prompts_folder: str | None = (
-        raw_prompts_folder.replace("\\", "/").rstrip("/") or None
-    )
+    if raw_prompts_folder:
+        pf = Path(raw_prompts_folder.replace("\\", "/"))
+        if not pf.is_absolute():
+            pf = source_dir / pf
+        prompts_folder: str | None = str(pf)
+    else:
+        prompts_folder = None
     logger.debug("load_config: prompts_folder=%s", prompts_folder)
 
     return CollectionConfig(

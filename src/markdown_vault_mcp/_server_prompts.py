@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import re
 from pathlib import Path, PurePosixPath
+from string import Template
 from typing import Any
 
 import frontmatter
@@ -18,6 +19,10 @@ from fastmcp import FastMCP
 from ._icons import _TOOL_ICONS
 
 logger = logging.getLogger(__name__)
+
+# Only valid Python identifiers are allowed as argument names in user prompts.
+# This prevents exec() injection via malicious frontmatter argument names.
+_VALID_IDENT = re.compile(r"^[a-zA-Z_]\w*$")
 
 
 def _load_user_prompt_defs(prompts_folder: str | None) -> dict[str, dict[str, Any]]:
@@ -116,8 +121,22 @@ def _register_one_user_prompt(mcp: FastMCP, name: str, defn: dict[str, Any]) -> 
 
         fn = _make_no_arg(content_template)
     else:
+        # Validate all argument names before building the exec'd function.
+        # Malicious frontmatter could inject arbitrary Python via exec() if
+        # names are not restricted to valid identifiers.
+        for arg in arg_defs:
+            if not _VALID_IDENT.match(arg["name"]):
+                logger.warning(
+                    "User prompt %r has invalid argument name %r — skipping prompt",
+                    name,
+                    arg["name"],
+                )
+                return
+
         # Build a function with the correct typed signature via exec so
         # FastMCP can introspect argument names and required status.
+        # Template substitution uses string.Template ($var / ${var}) rather
+        # than str.format() to prevent attribute-traversal format-string attacks.
         param_parts: list[str] = []
         for arg in arg_defs:
             if arg.get("required", False):
@@ -125,12 +144,12 @@ def _register_one_user_prompt(mcp: FastMCP, name: str, defn: dict[str, Any]) -> 
             else:
                 param_parts.append(f'{arg["name"]}: str = ""')
         params_str = ", ".join(param_parts)
-        format_args = ", ".join(f"{a['name']}={a['name']}" for a in arg_defs)
+        sub_args = ", ".join(f"{a['name']}={a['name']}" for a in arg_defs)
         fn_src = (
             f"def prompt_fn({params_str}) -> str:\n"
-            f"    return tmpl.format({format_args})\n"
+            f"    return _Template(tmpl).safe_substitute({sub_args})\n"
         )
-        local_ns: dict[str, Any] = {"tmpl": content_template}
+        local_ns: dict[str, Any] = {"tmpl": content_template, "_Template": Template}
         exec(fn_src, local_ns)
         fn = local_ns["prompt_fn"]
 
