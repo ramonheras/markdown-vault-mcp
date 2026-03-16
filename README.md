@@ -340,6 +340,12 @@ Write prompts (`research`, `discuss`, `create_from_template`) are only available
 
 Templates are regular markdown files. If placeholder template text pollutes search results, add your templates folder to `MARKDOWN_VAULT_MCP_EXCLUDE` (for example `_templates/**`).
 
+### User-defined prompts
+
+Mount a directory of `.md` prompt files to override or extend the built-in prompts. Set `MARKDOWN_VAULT_MCP_PROMPTS_FOLDER` to the path. Each file's frontmatter defines `description`, `arguments` (name, description, required), and optional `tags`. A user prompt with the same name as a built-in replaces it.
+
+For a complete example — including Zettelkasten capture, development, and review prompts — see the [Zettelkasten guide](https://pvliesdonk.github.io/markdown-vault-mcp/guides/zettelkasten/).
+
 ## Attachments
 
 In addition to Markdown notes, the server can read, write, delete, rename, and list non-markdown files (PDFs, images, spreadsheets, etc.). All existing tools are overloaded — no new tool names.
