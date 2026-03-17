@@ -253,11 +253,30 @@ class TestExtractWikilinks:
         # raw_target re-attaches the fragment to the stem (no .md)
         assert links[0].raw_target == "note#section"
 
-    def test_wikilink_relative_path(self) -> None:
-        """Wikilinks with subdirectory paths resolve against source dir."""
+    def test_wikilink_path_stored_as_is(self) -> None:
+        """Wikilinks with a path component are stored as-is for vault-wide resolution.
+
+        Obsidian resolves [[folder/Note]] vault-wide (not relative to the source
+        document).  The scanner stores the path unchanged; FTSIndex.resolve_vault_wikilinks()
+        resolves it against the full document set after indexing.
+        """
         links = extract_links("See [[subdir/note]]", "Journal/today.md")
         assert len(links) == 1
-        assert links[0].target_path == "Journal/subdir/note.md"
+        assert links[0].target_path == "subdir/note.md"
+
+    def test_wikilink_explicit_relative_resolved_against_source(self) -> None:
+        """Wikilinks with ./ or ../ prefix resolve relative to source document.
+
+        Explicit relative prefixes opt out of vault-wide resolution and
+        use the same path resolution as regular markdown links.
+        """
+        links = extract_links("See [[../notes/topic]]", "Journal/today.md")
+        assert len(links) == 1
+        assert links[0].target_path == "notes/topic.md"
+
+        links2 = extract_links("See [[./sibling]]", "Journal/today.md")
+        assert len(links2) == 1
+        assert links2[0].target_path == "Journal/sibling.md"
 
     def test_wikilink_dotmd_with_fragment(self) -> None:
         """[[note.md#heading]] keeps .md, splits fragment."""
@@ -1368,3 +1387,166 @@ class TestStatsLinkCounts:
         assert idx.count_links() == 0
         assert idx.count_broken_links() == 0
         assert idx.count_orphans() == 0
+
+
+# ---------------------------------------------------------------------------
+# resolve_vault_wikilinks: Obsidian vault-wide wikilink resolution
+# ---------------------------------------------------------------------------
+
+
+class TestResolveVaultWikilinks:
+    """FTSIndex.resolve_vault_wikilinks() and Collection integration tests."""
+
+    def test_bare_wikilink_resolves_vault_wide(self, tmp_path: Path) -> None:
+        """[[Note]] resolves to notes/Note.md anywhere in the vault."""
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        (vault / "journal").mkdir()
+        (vault / "journal" / "today.md").write_text(
+            "# Today\n\nSee [[MyNote]].\n", encoding="utf-8"
+        )
+        (vault / "notes").mkdir()
+        (vault / "notes" / "MyNote.md").write_text("# My Note\n", encoding="utf-8")
+
+        col = Collection(source_dir=vault)
+        col.build_index()
+
+        # The wikilink must resolve to notes/MyNote.md, not journal/MyNote.md.
+        outlinks = col.get_outlinks("journal/today.md")
+        assert len(outlinks) == 1
+        assert outlinks[0].target_path == "notes/MyNote.md"
+        assert outlinks[0].exists is True
+
+        # Must not appear in broken links.
+        assert col.get_broken_links() == []
+        assert col.stats().broken_link_count == 0
+
+    def test_bare_wikilink_shortest_path_wins(self, tmp_path: Path) -> None:
+        """When multiple vault documents match, shortest path is selected."""
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        (vault / "source.md").write_text("# Source\n\nSee [[Note]].\n", encoding="utf-8")
+        (vault / "a").mkdir()
+        (vault / "a" / "Note.md").write_text("# Note A\n", encoding="utf-8")
+        (vault / "a" / "b").mkdir()
+        (vault / "a" / "b" / "Note.md").write_text("# Note B\n", encoding="utf-8")
+
+        col = Collection(source_dir=vault)
+        col.build_index()
+
+        outlinks = col.get_outlinks("source.md")
+        assert len(outlinks) == 1
+        # a/Note.md is shorter than a/b/Note.md.
+        assert outlinks[0].target_path == "a/Note.md"
+        assert outlinks[0].exists is True
+
+    def test_bare_wikilink_genuine_broken(self, tmp_path: Path) -> None:
+        """[[NonExistent]] where no document matches stays broken."""
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        (vault / "source.md").write_text(
+            "# Source\n\nSee [[NonExistent]].\n", encoding="utf-8"
+        )
+
+        col = Collection(source_dir=vault)
+        col.build_index()
+
+        broken = col.get_broken_links()
+        assert len(broken) == 1
+        assert broken[0].raw_target == "NonExistent"
+        assert col.stats().broken_link_count == 1
+
+    def test_wikilink_with_path_separator_resolves_vault_wide(
+        self, tmp_path: Path
+    ) -> None:
+        """[[folder/Note]] resolves to any vault document ending in folder/Note.md."""
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        (vault / "source.md").write_text(
+            "# Source\n\nSee [[folder/Note]].\n", encoding="utf-8"
+        )
+        (vault / "sub").mkdir()
+        (vault / "sub" / "folder").mkdir()
+        (vault / "sub" / "folder" / "Note.md").write_text("# Note\n", encoding="utf-8")
+
+        col = Collection(source_dir=vault)
+        col.build_index()
+
+        outlinks = col.get_outlinks("source.md")
+        assert len(outlinks) == 1
+        assert outlinks[0].target_path == "sub/folder/Note.md"
+        assert outlinks[0].exists is True
+        assert col.get_broken_links() == []
+
+    def test_reindex_resolves_new_wikilinks(self, tmp_path: Path) -> None:
+        """resolve_vault_wikilinks() runs after reindex(), fixing new documents."""
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        (vault / "source.md").write_text(
+            "# Source\n\nSee [[Target]].\n", encoding="utf-8"
+        )
+
+        col = Collection(source_dir=vault)
+        col.build_index()
+
+        # Initially broken — Target.md does not exist.
+        assert col.stats().broken_link_count == 1
+
+        # Add the target document and trigger reindex.
+        (vault / "notes").mkdir()
+        (vault / "notes" / "Target.md").write_text("# Target\n", encoding="utf-8")
+        col.reindex()
+
+        # Now the wikilink should resolve.
+        assert col.stats().broken_link_count == 0
+        outlinks = col.get_outlinks("source.md")
+        assert outlinks[0].target_path == "notes/Target.md"
+        assert outlinks[0].exists is True
+
+    def test_resolve_vault_wikilinks_returns_count(self) -> None:
+        """resolve_vault_wikilinks() returns the number of rows updated."""
+        idx = FTSIndex(":memory:")
+        notes = [
+            make_note(
+                path="sub/page.md",
+                links=[
+                    LinkInfo(
+                        target_path="Target.md",
+                        link_text="Target",
+                        link_type="wikilink",
+                        raw_target="Target",
+                    )
+                ],
+            ),
+            make_note(path="notes/Target.md"),
+        ]
+        idx.build_from_notes(notes)
+
+        # build_from_notes already called resolve_vault_wikilinks internally.
+        # Running it again should return 0 (nothing left to resolve).
+        assert idx.resolve_vault_wikilinks() == 0
+
+        # Confirm the link was resolved during build_from_notes.
+        outlinks = idx.get_outlinks("sub/page.md")
+        assert outlinks[0]["target_path"] == "notes/Target.md"
+
+    def test_root_level_exact_match_preferred_over_subdir(
+        self, tmp_path: Path
+    ) -> None:
+        """[[Note]] where Note.md exists at vault root resolves to root."""
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        (vault / "source.md").write_text(
+            "# Source\n\nSee [[Note]].\n", encoding="utf-8"
+        )
+        (vault / "Note.md").write_text("# Note at root\n", encoding="utf-8")
+        (vault / "sub").mkdir()
+        (vault / "sub" / "Note.md").write_text("# Note in sub\n", encoding="utf-8")
+
+        col = Collection(source_dir=vault)
+        col.build_index()
+
+        outlinks = col.get_outlinks("source.md")
+        assert len(outlinks) == 1
+        # Note.md (length 7) is shorter than sub/Note.md (length 11).
+        assert outlinks[0].target_path == "Note.md"

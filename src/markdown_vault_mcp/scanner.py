@@ -381,9 +381,17 @@ def extract_links(content: str, source_path: str) -> list[LinkInfo]:
         if not raw_path.lower().endswith(".md"):
             raw_path = raw_path + ".md"
 
-        resolved, path_fragment = _resolve_link_path(raw_path, source_path)
-        # Prefer the wikilink-level fragment; fall back to any in the path.
-        fragment = fragment or path_fragment
+        # Obsidian vault-wide resolution semantics:
+        # Only explicit relative prefixes (./  ../) use source-relative path
+        # resolution.  All other wikilinks — bare [[Note]] and path-qualified
+        # [[folder/Note]] — are stored as-is so that
+        # FTSIndex.resolve_vault_wikilinks() can resolve them vault-wide
+        # against the full indexed document set.
+        if raw_path.startswith("./") or raw_path.startswith("../"):
+            resolved, path_fragment = _resolve_link_path(raw_path, source_path)
+            fragment = fragment or path_fragment
+        else:
+            resolved = raw_path
         links.append(
             LinkInfo(
                 target_path=resolved,

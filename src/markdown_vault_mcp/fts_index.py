@@ -438,6 +438,7 @@ class FTSIndex:
                     note.path,
                 )
         logger.info("build_from_notes: indexed %d chunks total", total_chunks)
+        self.resolve_vault_wikilinks()
         return total_chunks
 
     def upsert_note(self, note: ParsedNote) -> int:
@@ -776,6 +777,64 @@ class FTSIndex:
             params,
         )
         return [dict(row) for row in cur.fetchall()]
+
+    def resolve_vault_wikilinks(self) -> int:
+        """Resolve vault-wide wikilink ``target_path`` values against the document set.
+
+        Obsidian resolves bare wikilinks (e.g. ``[[Note]]``) by searching the
+        entire vault for a document whose filename matches, picking the shortest
+        path (fewest path components) when multiple candidates exist.  Wikilinks
+        with an explicit path (e.g. ``[[folder/Note]]``) are resolved to any
+        document whose path ends with ``folder/Note.md``, again preferring the
+        shortest match.
+
+        This method performs a bulk SQL UPDATE on all ``wikilink`` rows whose
+        ``target_path`` does not yet match an indexed document.  It must be
+        called after the full document set has been indexed.
+
+        Uses ``substr``/``length`` comparisons instead of ``LIKE`` to avoid
+        wildcard-escaping issues with filenames that contain ``%`` or ``_``.
+
+        Returns:
+            Number of link rows whose ``target_path`` was updated.
+        """
+        with self._conn:
+            cur = self._conn.execute(
+                """
+                UPDATE links
+                SET target_path = (
+                    SELECT d.path
+                    FROM documents d
+                    WHERE d.path = links.target_path
+                       OR (
+                           length(d.path) > length(links.target_path)
+                           AND substr(d.path,
+                                      length(d.path) - length(links.target_path))
+                               = '/' || links.target_path
+                       )
+                    ORDER BY length(d.path) ASC
+                    LIMIT 1
+                )
+                WHERE link_type = 'wikilink'
+                  AND NOT EXISTS (
+                      SELECT 1 FROM documents d WHERE d.path = links.target_path
+                  )
+                  AND EXISTS (
+                      SELECT 1 FROM documents d
+                      WHERE d.path = links.target_path
+                         OR (
+                             length(d.path) > length(links.target_path)
+                             AND substr(d.path,
+                                        length(d.path) - length(links.target_path))
+                                 = '/' || links.target_path
+                         )
+                  )
+                """
+            )
+        updated = cur.rowcount
+        if updated:
+            logger.debug("resolve_vault_wikilinks: resolved %d wikilink(s)", updated)
+        return updated
 
     def get_broken_links(self, *, folder: str | None = None) -> list[dict]:
         """Return all links whose target does not exist as an indexed document.
