@@ -1023,6 +1023,9 @@ class Collection:
         all_files = list(self._source_dir.glob("**/*.md"))
         skipped = len(all_files) - len(notes)
 
+        # Resolve vault-wide wikilinks now that all documents are indexed.
+        self._fts.resolve_vault_wikilinks()
+
         # Update tracker state so reindex() knows the baseline.
         self._tracker.update_state(notes)
 
@@ -1156,6 +1159,10 @@ class Collection:
             # Persist updated vector index.
             if self._vectors is not None and self._embeddings_path is not None:
                 self._vectors.save(self._embeddings_path)
+
+            # Re-resolve vault-wide wikilinks: adding/removing documents may
+            # fix previously broken links or expose new ones.
+            self._fts.resolve_vault_wikilinks()
 
             # Update tracker state: rebuild from current FTS index contents.
             state_notes: list[ParsedNote] = [

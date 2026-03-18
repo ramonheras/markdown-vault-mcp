@@ -777,6 +777,93 @@ class FTSIndex:
         )
         return [dict(row) for row in cur.fetchall()]
 
+    def resolve_vault_wikilinks(self) -> int:
+        """Resolve vault-wide wikilink ``target_path`` values against the document set.
+
+        Obsidian resolves bare wikilinks (e.g. ``[[Note]]``) by searching the
+        entire vault for a document whose filename matches, picking the shortest
+        path (fewest path components) when multiple candidates exist.  Wikilinks
+        with an explicit path (e.g. ``[[folder/Note]]``) are resolved to any
+        document whose path ends with ``folder/Note.md``, again preferring the
+        shortest match.
+
+        Resolution anchors on ``raw_target`` (the original wikilink text as
+        written) rather than the current ``target_path``.  This ensures
+        re-resolution works correctly after a target document is moved or
+        renamed — the original stem is always available regardless of how many
+        times the index has been rebuilt.
+
+        Wikilinks with an explicit relative prefix (``./`` or ``../``) are
+        skipped; they are resolved relative to the source document at scan time
+        and do not participate in vault-wide resolution.
+
+        Call this method after all documents have been indexed
+        (``Collection.build_index()`` and ``Collection.reindex()`` do this
+        automatically).  Callers that add documents via :meth:`upsert_note`
+        directly are responsible for calling this method once all upserts are
+        complete.
+
+        Uses ``substr``/``length`` comparisons instead of ``LIKE`` to avoid
+        wildcard-escaping issues with filenames that contain ``%`` or ``_``.
+
+        Returns:
+            Number of link rows whose ``target_path`` was updated.
+        """
+        # Load all document paths once into a Python set/list for in-memory
+        # matching — avoids O(N) SQL round-trips (one SELECT per wikilink row).
+        doc_paths: list[str] = [
+            r["path"]
+            for r in self._conn.execute("SELECT path FROM documents").fetchall()
+        ]
+
+        # Fetch all wikilinks eligible for vault-wide resolution.
+        # Explicit relative prefixes (./  ../) are excluded — those were
+        # resolved at scan time and must not be overwritten.
+        rows = self._conn.execute(
+            """
+            SELECT id, raw_target, target_path
+            FROM links
+            WHERE link_type = 'wikilink'
+              AND raw_target NOT LIKE './%'
+              AND raw_target NOT LIKE '../%'
+            """
+        ).fetchall()
+
+        # Resolve each wikilink in Python, then batch-UPDATE.
+        updates: list[tuple[str, int]] = []
+        for row in rows:
+            # Derive the search filename from raw_target:
+            # 1. Strip any trailing fragment (#heading).
+            stem = row["raw_target"]
+            if "#" in stem:
+                stem = stem[: stem.index("#")]
+            if not stem:
+                continue
+            # 2. Append .md if not already present.
+            search_target = stem if stem.lower().endswith(".md") else stem + ".md"
+
+            # Find the best match: exact path or suffix match, shortest wins.
+            candidates = [
+                p
+                for p in doc_paths
+                if p == search_target or p.endswith("/" + search_target)
+            ]
+            if not candidates:
+                continue  # Genuinely broken — no document matches.
+            new_path = min(candidates, key=len)
+            if new_path != row["target_path"]:
+                updates.append((new_path, row["id"]))
+
+        with self._conn:
+            self._conn.executemany(
+                "UPDATE links SET target_path = ? WHERE id = ?", updates
+            )
+        updated = len(updates)
+
+        if updated:
+            logger.debug("resolve_vault_wikilinks: resolved %d wikilink(s)", updated)
+        return updated
+
     def get_broken_links(self, *, folder: str | None = None) -> list[dict]:
         """Return all links whose target does not exist as an indexed document.
 

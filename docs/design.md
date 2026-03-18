@@ -660,16 +660,34 @@ Links are extracted from markdown content during `parse_note()` and stored in th
 are not extracted. External URLs (`http://`, `https://`, `mailto:`) and pure anchors
 (`#heading`) are skipped.
 
-**Path resolution**: relative paths are resolved against the source document's
-directory. `../sibling.md` from `Journal/2024/today.md` resolves to
-`Journal/sibling.md`. Traversal above the vault root clamps to root.
+**Path resolution for markdown links**: relative paths are resolved against the
+source document's directory. `../sibling.md` from `Journal/2024/today.md` resolves
+to `Journal/sibling.md`. Traversal above the vault root clamps to root.
 
 **Fragment handling**: `path.md#heading` splits into `target_path=path.md` and
 `fragment=heading`. The fragment is preserved on `LinkInfo` but the target path
 is stored without it.
 
-**Wikilinks**: `[[Note Title]]` appends `.md` → `Note Title.md`. The path is
-stored as-is (no case-insensitive lookup at extraction time).
+**Wikilink resolution (Obsidian semantics)**: Wikilinks follow Obsidian's
+vault-wide resolution rules rather than relative path resolution:
+
+- **Bare wikilinks** (`[[Note]]`, `[[folder/Note]]`): the scanner stores the
+  path as-is after appending `.md` (e.g. `Note.md`, `folder/Note.md`). After
+  all documents are indexed, `FTSIndex.resolve_vault_wikilinks()` performs a
+  bulk SQL UPDATE that resolves each unmatched wikilink target vault-wide:
+  it searches for any document whose path equals the target or ends with
+  `/target`. When multiple candidates match, the shortest path (fewest path
+  components) wins. This mirrors Obsidian's tie-breaking rule.
+
+- **Explicit relative wikilinks** (`[[./note]]`, `[[../note]]`): the `./` or
+  `../` prefix opts out of vault-wide resolution. These are resolved against
+  the source document's directory at scan time, identical to markdown links.
+
+- `[[Note Title]]` appends `.md` → `Note Title.md` before resolution.
+
+`resolve_vault_wikilinks()` is called automatically at the end of
+`Collection.build_index()` and `Collection.reindex()` so that the `links`
+table always reflects the fully resolved vault state.
 
 ### Graph Traversal
 
