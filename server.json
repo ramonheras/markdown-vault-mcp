@@ -2,8 +2,9 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.pvliesdonk/markdown-vault-mcp",
   "title": "Markdown Vault MCP",
-  "description": "Generic markdown vault MCP server with FTS5 + semantic search",
+  "description": "Generic markdown vault MCP server with FTS5 + semantic search, frontmatter-aware indexing, and incremental reindexing",
   "version": "1.13.0",
+  "websiteUrl": "https://pvliesdonk.github.io/markdown-vault-mcp/",
   "repository": {
     "url": "https://github.com/pvliesdonk/markdown-vault-mcp",
     "source": "github"
@@ -13,9 +14,44 @@
       "registryType": "pypi",
       "identifier": "markdown-vault-mcp",
       "version": "1.13.0",
+      "runtimeHint": "uvx",
       "transport": {
         "type": "stdio"
-      }
+      },
+      "environmentVariables": [
+        {
+          "name": "MARKDOWN_VAULT_MCP_SOURCE_DIR",
+          "description": "Absolute path to the markdown vault directory",
+          "isRequired": true
+        },
+        {
+          "name": "MARKDOWN_VAULT_MCP_READ_ONLY",
+          "description": "Disable write tools (true/false, default true)",
+          "isRequired": false
+        },
+        {
+          "name": "MARKDOWN_VAULT_MCP_BEARER_TOKEN",
+          "description": "Bearer token for authentication",
+          "isRequired": false,
+          "isSecret": true
+        },
+        {
+          "name": "MARKDOWN_VAULT_MCP_OIDC_CONFIG_URL",
+          "description": "OIDC discovery endpoint URL (e.g. https://auth.example.com/.well-known/openid-configuration)",
+          "isRequired": false
+        },
+        {
+          "name": "MARKDOWN_VAULT_MCP_OIDC_CLIENT_ID",
+          "description": "OIDC client ID",
+          "isRequired": false
+        },
+        {
+          "name": "MARKDOWN_VAULT_MCP_OIDC_CLIENT_SECRET",
+          "description": "OIDC client secret",
+          "isRequired": false,
+          "isSecret": true
+        }
+      ]
     },
     {
       "registryType": "oci",
@@ -30,6 +66,40 @@
           "name": "--port",
           "default": 8000,
           "description": "Port for the HTTP transport"
+        }
+      ],
+      "environmentVariables": [
+        {
+          "name": "MARKDOWN_VAULT_MCP_SOURCE_DIR",
+          "description": "Path to the vault directory inside the container (default /data/vault)",
+          "isRequired": false
+        },
+        {
+          "name": "MARKDOWN_VAULT_MCP_READ_ONLY",
+          "description": "Disable write tools (true/false, default true)",
+          "isRequired": false
+        },
+        {
+          "name": "MARKDOWN_VAULT_MCP_BEARER_TOKEN",
+          "description": "Bearer token for authentication",
+          "isRequired": false,
+          "isSecret": true
+        },
+        {
+          "name": "MARKDOWN_VAULT_MCP_OIDC_CONFIG_URL",
+          "description": "OIDC discovery endpoint URL",
+          "isRequired": false
+        },
+        {
+          "name": "MARKDOWN_VAULT_MCP_OIDC_CLIENT_ID",
+          "description": "OIDC client ID",
+          "isRequired": false
+        },
+        {
+          "name": "MARKDOWN_VAULT_MCP_OIDC_CLIENT_SECRET",
+          "description": "OIDC client secret",
+          "isRequired": false,
+          "isSecret": true
         }
       ]
     }
