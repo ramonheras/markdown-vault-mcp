@@ -196,7 +196,7 @@ Simple static token auth for HTTP deployments. Set a single env var — clients 
 
 Full OAuth 2.1 authentication for HTTP deployments. OIDC activates when all four required variables are set. See [Authentication](#authentication) for setup details.
 
-> **Precedence:** If both `BEARER_TOKEN` and OIDC variables are set, bearer token auth takes precedence.
+> **Multi-auth:** If both `BEARER_TOKEN` and all OIDC variables are set, the server accepts **either** credential — a valid bearer token or a valid OIDC session. This is useful when different clients use different auth flows (e.g. Claude web via OIDC and Claude Code via bearer token).
 
 | Variable | Required | Description |
 |----------|----------|-------------|
@@ -399,11 +399,12 @@ Override with `MARKDOWN_VAULT_MCP_ATTACHMENT_EXTENSIONS`. Use `*` to allow all n
 
 ## Authentication
 
-The server supports three auth modes, resolved in order of precedence:
+The server supports four auth modes:
 
-1. **Bearer token** — set `MARKDOWN_VAULT_MCP_BEARER_TOKEN` to a secret string
-2. **OIDC** — full OAuth 2.1 flow via `OIDC_CONFIG_URL`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, and `BASE_URL`
-3. **No auth** — server accepts all connections (default)
+1. **Multi-auth** — both bearer token and OIDC configured; either credential accepted (e.g. Claude web via OIDC + Claude Code via bearer token on the same instance)
+2. **Bearer token** — set `MARKDOWN_VAULT_MCP_BEARER_TOKEN` to a secret string
+3. **OIDC** — full OAuth 2.1 flow via `OIDC_CONFIG_URL`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, and `BASE_URL`
+4. **No auth** — server accepts all connections (default)
 
 **Auth requires `--transport http` (or `sse`).** It has no effect with `--transport stdio`.
 

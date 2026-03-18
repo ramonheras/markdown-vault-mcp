@@ -7,15 +7,16 @@ This guide covers how to protect your markdown-vault-mcp server with authenticat
 
 ## Auth modes
 
-The server supports three authentication modes, resolved in order of precedence:
+The server supports four authentication modes:
 
-| Priority | Mode | When to use | Configuration |
-|----------|------|-------------|---------------|
-| 1 | **Bearer token** | Simple deployments behind a VPN, Docker compose stacks, development | Set `MARKDOWN_VAULT_MCP_BEARER_TOKEN` |
-| 2 | **OIDC** | Production with user identity, SSO, multi-user access | Set all four OIDC variables |
-| 3 | **No auth** | Local stdio usage, trusted networks | Default (nothing to configure) |
+| Mode | When to use | Configuration |
+|------|-------------|---------------|
+| **Multi-auth** | Mixed clients — e.g. Claude web (OIDC) + Claude Code (bearer token) on the same server | Set both `MARKDOWN_VAULT_MCP_BEARER_TOKEN` and all four OIDC variables |
+| **Bearer token** | Simple deployments behind a VPN, Docker compose stacks, development | Set `MARKDOWN_VAULT_MCP_BEARER_TOKEN` only |
+| **OIDC** | Production with user identity, SSO, multi-user access | Set all four OIDC variables only |
+| **No auth** | Local stdio usage, trusted networks | Default (nothing to configure) |
 
-If both bearer token and OIDC are configured, bearer token wins and a warning is logged.
+When both bearer token and OIDC are configured, the server accepts **either** credential — a valid bearer token or a valid OIDC session. This is useful when different clients require different authentication flows against the same vault instance.
 
 ---
 
@@ -145,7 +146,7 @@ Authentication only works with HTTP transport. If you're using `--transport stdi
 
 - Verify the env var is set and non-empty (whitespace-only values are ignored)
 - Check that clients send `Authorization: Bearer <token>` (not `Basic` or other schemes)
-- If OIDC is also configured, bearer token takes precedence — check logs for the warning
+- If OIDC is also configured, multi-auth is active — both bearer and OIDC are accepted simultaneously
 
 ### OIDC redirect fails
 
