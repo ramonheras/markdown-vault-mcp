@@ -1176,7 +1176,7 @@ The server supports four auth modes:
 3. **OIDC** — full OAuth 2.1 flow via `OIDCProxy` (only bearer token absent; requires `BASE_URL`, `OIDC_CONFIG_URL`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`)
 4. **No auth** — server accepts all connections (default)
 
-When both `BEARER_TOKEN` and the OIDC variables are set, the server uses `MultiAuth(verifiers=[bearer, oidc])` so that bearer-token clients and OIDC clients can connect to the same instance.
+When both `BEARER_TOKEN` and the OIDC variables are set, the server uses `MultiAuth(server=oidc_auth, verifiers=[bearer_auth])` so that bearer-token clients and OIDC clients can connect to the same instance. `OIDCProxy` goes in `server=` so that `MultiAuth.get_routes()` delegates the OAuth authorization, token, and discovery endpoints to it; `StaticTokenVerifier` goes in `verifiers=`.
 
 #### Bearer Token Authentication
 
