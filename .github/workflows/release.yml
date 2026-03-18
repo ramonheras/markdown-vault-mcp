@@ -61,7 +61,7 @@ jobs:
             .version = $v |
             .packages |= map(
               if .registryType == "pypi" then .version = $v
-              elif .registryType == "oci" then .identifier = ("ghcr.io/pvliesdonk/markdown-vault-mcp:" + $v)
+              elif .registryType == "oci" then .identifier = ("ghcr.io/pvliesdonk/markdown-vault-mcp:v" + $v)
               else . end
             )
           ' server.json > server.json.tmp
@@ -194,6 +194,7 @@ jobs:
             org.opencontainers.image.title=markdown-vault-mcp
             org.opencontainers.image.description=Generic markdown vault MCP server with FTS5 + semantic search
             org.opencontainers.image.vendor=pvliesdonk
+            io.modelcontextprotocol.server.name=io.github.pvliesdonk/markdown-vault-mcp
 
       - name: Build and push Docker image
         id: build-push
