@@ -2182,7 +2182,8 @@ class TestAuthModeSelection:
         # so that MultiAuth.get_routes() delegates OAuth endpoints to it.
         assert server.auth.server is mock_oidc
         verifiers = server.auth.verifiers
-        assert any(isinstance(v, StaticTokenVerifier) for v in verifiers)
+        assert len(verifiers) == 1
+        assert isinstance(verifiers[0], StaticTokenVerifier)
 
     def test_falls_through_to_oidc_when_no_bearer(
         self,
