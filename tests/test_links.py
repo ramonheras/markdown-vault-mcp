@@ -1522,13 +1522,51 @@ class TestResolveVaultWikilinks:
         ]
         idx.build_from_notes(notes)
 
-        # build_from_notes already called resolve_vault_wikilinks internally.
-        # Running it again should return 0 (nothing left to resolve).
-        assert idx.resolve_vault_wikilinks() == 0
+        # First call: resolves the wikilink to notes/Target.md.
+        assert idx.resolve_vault_wikilinks() == 1
 
-        # Confirm the link was resolved during build_from_notes.
+        # Confirm the path was updated.
         outlinks = idx.get_outlinks("sub/page.md")
         assert outlinks[0]["target_path"] == "notes/Target.md"
+
+        # Second call is idempotent: already at correct path, nothing to update.
+        assert idx.resolve_vault_wikilinks() == 0
+
+    def test_reindex_resolves_moved_target(self, tmp_path: Path) -> None:
+        """resolve_vault_wikilinks() re-resolves after a target document is moved.
+
+        After the first build_index(), [[Target]] is resolved to notes/Target.md.
+        When notes/Target.md is deleted and other/Target.md is added, the next
+        reindex() must update the stored target_path to other/Target.md rather
+        than leaving it pointing to the now-missing notes/Target.md.
+        """
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        (vault / "source.md").write_text(
+            "# Source\n\nSee [[Target]].\n", encoding="utf-8"
+        )
+        (vault / "notes").mkdir()
+        (vault / "notes" / "Target.md").write_text("# Target\n", encoding="utf-8")
+
+        col = Collection(source_dir=vault)
+        col.build_index()
+
+        # Initial state: link resolves to notes/Target.md.
+        outlinks = col.get_outlinks("source.md")
+        assert outlinks[0].target_path == "notes/Target.md"
+        assert col.stats().broken_link_count == 0
+
+        # Simulate move: delete notes/Target.md, create other/Target.md.
+        (vault / "notes" / "Target.md").unlink()
+        (vault / "other").mkdir()
+        (vault / "other" / "Target.md").write_text("# Target moved\n", encoding="utf-8")
+        col.reindex()
+
+        # Link must re-resolve to the new location.
+        outlinks = col.get_outlinks("source.md")
+        assert outlinks[0].target_path == "other/Target.md"
+        assert outlinks[0].exists is True
+        assert col.stats().broken_link_count == 0
 
     def test_root_level_exact_match_preferred_over_subdir(
         self, tmp_path: Path

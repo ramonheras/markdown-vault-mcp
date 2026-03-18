@@ -438,7 +438,6 @@ class FTSIndex:
                     note.path,
                 )
         logger.info("build_from_notes: indexed %d chunks total", total_chunks)
-        self.resolve_vault_wikilinks()
         return total_chunks
 
     def upsert_note(self, note: ParsedNote) -> int:
@@ -788,9 +787,21 @@ class FTSIndex:
         document whose path ends with ``folder/Note.md``, again preferring the
         shortest match.
 
-        This method performs a bulk SQL UPDATE on all ``wikilink`` rows whose
-        ``target_path`` does not yet match an indexed document.  It must be
-        called after the full document set has been indexed.
+        Resolution anchors on ``raw_target`` (the original wikilink text as
+        written) rather than the current ``target_path``.  This ensures
+        re-resolution works correctly after a target document is moved or
+        renamed — the original stem is always available regardless of how many
+        times the index has been rebuilt.
+
+        Wikilinks with an explicit relative prefix (``./`` or ``../``) are
+        skipped; they are resolved relative to the source document at scan time
+        and do not participate in vault-wide resolution.
+
+        Call this method after all documents have been indexed
+        (``Collection.build_index()`` and ``Collection.reindex()`` do this
+        automatically).  Callers that add documents via :meth:`upsert_note`
+        directly are responsible for calling this method once all upserts are
+        complete.
 
         Uses ``substr``/``length`` comparisons instead of ``LIKE`` to avoid
         wildcard-escaping issues with filenames that contain ``%`` or ``_``.
@@ -798,40 +809,62 @@ class FTSIndex:
         Returns:
             Number of link rows whose ``target_path`` was updated.
         """
+        # Fetch all wikilinks eligible for vault-wide resolution.
+        # Explicit relative prefixes (./  ../) are excluded — those were
+        # resolved at scan time and must not be overwritten.
+        rows = self._conn.execute(
+            """
+            SELECT id, raw_target, target_path
+            FROM links
+            WHERE link_type = 'wikilink'
+              AND raw_target NOT LIKE './%'
+              AND raw_target NOT LIKE '../%'
+            """
+        ).fetchall()
+
+        updated = 0
         with self._conn:
-            cur = self._conn.execute(
-                """
-                UPDATE links
-                SET target_path = (
-                    SELECT d.path
-                    FROM documents d
-                    WHERE d.path = links.target_path
+            for row in rows:
+                # Derive the search filename from raw_target:
+                # 1. Strip any trailing fragment (#heading).
+                stem = row["raw_target"]
+                if "#" in stem:
+                    stem = stem[: stem.index("#")]
+                if not stem:
+                    continue
+                # 2. Append .md if not already present.
+                search_target = stem if stem.lower().endswith(".md") else stem + ".md"
+
+                # Find the best match: exact path or any path whose last
+                # component(s) equal search_target, shortest wins.
+                match = self._conn.execute(
+                    """
+                    SELECT path
+                    FROM documents
+                    WHERE path = ?
                        OR (
-                           length(d.path) > length(links.target_path)
-                           AND substr(d.path,
-                                      length(d.path) - length(links.target_path))
-                               = '/' || links.target_path
+                           length(path) > length(?)
+                           AND substr(path, length(path) - length(?))
+                               = '/' || ?
                        )
-                    ORDER BY length(d.path) ASC
+                    ORDER BY length(path) ASC
                     LIMIT 1
+                    """,
+                    (search_target, search_target, search_target, search_target),
+                ).fetchone()
+
+                if match is None:
+                    continue  # Genuinely broken — no document matches.
+                new_path = match["path"]
+                if new_path == row["target_path"]:
+                    continue  # Already correct — no update needed.
+
+                self._conn.execute(
+                    "UPDATE links SET target_path = ? WHERE id = ?",
+                    (new_path, row["id"]),
                 )
-                WHERE link_type = 'wikilink'
-                  AND NOT EXISTS (
-                      SELECT 1 FROM documents d WHERE d.path = links.target_path
-                  )
-                  AND EXISTS (
-                      SELECT 1 FROM documents d
-                      WHERE d.path = links.target_path
-                         OR (
-                             length(d.path) > length(links.target_path)
-                             AND substr(d.path,
-                                        length(d.path) - length(links.target_path))
-                                 = '/' || links.target_path
-                         )
-                  )
-                """
-            )
-        updated = cur.rowcount
+                updated += 1
+
         if updated:
             logger.debug("resolve_vault_wikilinks: resolved %d wikilink(s)", updated)
         return updated
