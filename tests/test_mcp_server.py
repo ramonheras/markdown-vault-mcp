@@ -2129,16 +2129,16 @@ class TestBearerAuthPrecedence:
         for var in (*_BEARER_VARS, *_OIDC_VARS):
             monkeypatch.delenv(var, raising=False)
 
-    def test_bearer_wins_over_oidc(
+    def test_multi_auth_when_both_configured(
         self,
         vault_path: Path,
         monkeypatch: pytest.MonkeyPatch,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
-        """When both bearer and OIDC are configured, bearer wins."""
+        """When both bearer and OIDC are configured, MultiAuth is used."""
         from unittest.mock import MagicMock, patch
 
-        from fastmcp.server.auth import StaticTokenVerifier
+        from fastmcp.server.auth import MultiAuth
 
         monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", str(vault_path))
         monkeypatch.setenv("MARKDOWN_VAULT_MCP_BEARER_TOKEN", "my-token")
@@ -2148,13 +2148,38 @@ class TestBearerAuthPrecedence:
         mock_cls = MagicMock()
         with (
             patch("fastmcp.server.auth.oidc_proxy.OIDCProxy", mock_cls),
-            caplog.at_level(logging.WARNING),
+            caplog.at_level(logging.INFO),
         ):
             server = create_server()
 
-        # Server must use bearer auth, not OIDC
-        assert isinstance(server.auth, StaticTokenVerifier)
-        assert "using bearer token auth" in caplog.text
+        assert isinstance(server.auth, MultiAuth)
+        assert "using bearer token auth" not in caplog.text
+        assert "Multi-auth enabled" in caplog.text
+
+    def test_multi_auth_contains_both_verifiers(
+        self,
+        vault_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """MultiAuth instance includes one StaticTokenVerifier and one OIDCProxy."""
+        from unittest.mock import MagicMock, patch
+
+        from fastmcp.server.auth import MultiAuth, StaticTokenVerifier
+
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", str(vault_path))
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_BEARER_TOKEN", "my-token")
+        for var, val in _OIDC_REQUIRED.items():
+            monkeypatch.setenv(var, val)
+
+        mock_oidc = MagicMock()
+        mock_cls = MagicMock(return_value=mock_oidc)
+        with patch("fastmcp.server.auth.oidc_proxy.OIDCProxy", mock_cls):
+            server = create_server()
+
+        assert isinstance(server.auth, MultiAuth)
+        verifiers = server.auth.verifiers
+        assert any(isinstance(v, StaticTokenVerifier) for v in verifiers)
+        assert mock_oidc in verifiers
 
     def test_falls_through_to_oidc_when_no_bearer(
         self,

@@ -1169,13 +1169,14 @@ MARKDOWN_VAULT_MCP_OIDC_JWT_SIGNING_KEY=your-random-secret   # required on Linux
 
 #### Authentication
 
-The server supports three auth modes, resolved in order of precedence:
+The server supports four auth modes:
 
-1. **Bearer token** — simple static token via `MARKDOWN_VAULT_MCP_BEARER_TOKEN`
-2. **OIDC** — full OAuth 2.1 flow via `OIDCProxy` (requires `BASE_URL`, `OIDC_CONFIG_URL`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`)
-3. **No auth** — server accepts all connections (default)
+1. **Bearer token** — simple static token via `MARKDOWN_VAULT_MCP_BEARER_TOKEN` (only OIDC vars absent)
+2. **OIDC** — full OAuth 2.1 flow via `OIDCProxy` (only bearer token absent; requires `BASE_URL`, `OIDC_CONFIG_URL`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`)
+3. **Multi-auth** — both bearer token and OIDC configured simultaneously; either credential is accepted (`FastMCP.MultiAuth`)
+4. **No auth** — server accepts all connections (default)
 
-The first configured mode wins. If both bearer token and OIDC are configured, bearer token takes precedence and a warning is logged.
+When both `BEARER_TOKEN` and the OIDC variables are set, the server uses `MultiAuth(verifiers=[bearer, oidc])` so that bearer-token clients and OIDC clients can connect to the same instance.
 
 #### Bearer Token Authentication
 
