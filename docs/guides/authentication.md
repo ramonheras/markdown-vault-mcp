@@ -11,9 +11,9 @@ The server supports four authentication modes:
 
 | Mode | When to use | Configuration |
 |------|-------------|---------------|
+| **Multi-auth** | Mixed clients — e.g. Claude web (OIDC) + Claude Code (bearer token) on the same server | Set both `MARKDOWN_VAULT_MCP_BEARER_TOKEN` and all four OIDC variables |
 | **Bearer token** | Simple deployments behind a VPN, Docker compose stacks, development | Set `MARKDOWN_VAULT_MCP_BEARER_TOKEN` only |
 | **OIDC** | Production with user identity, SSO, multi-user access | Set all four OIDC variables only |
-| **Multi-auth** | Mixed clients — e.g. Claude web (OIDC) + Claude Code (bearer token) on the same server | Set both `MARKDOWN_VAULT_MCP_BEARER_TOKEN` and all four OIDC variables |
 | **No auth** | Local stdio usage, trusted networks | Default (nothing to configure) |
 
 When both bearer token and OIDC are configured, the server accepts **either** credential — a valid bearer token or a valid OIDC session. This is useful when different clients require different authentication flows against the same vault instance.

@@ -2117,11 +2117,12 @@ class TestBuildBearerAuth:
         assert access is None
 
 
-class TestBearerAuthPrecedence:
-    """Tests for bearer vs OIDC auth precedence in create_server().
+class TestAuthModeSelection:
+    """Tests for auth mode selection in create_server().
 
     These tests call ``create_server()`` directly so the real assembly
     logic is exercised — not just the individual builder functions.
+    Covers all four modes: multi (both), bearer-only, OIDC-only, none.
     """
 
     @pytest.fixture(autouse=True)
