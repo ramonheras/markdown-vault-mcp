@@ -809,6 +809,13 @@ class FTSIndex:
         Returns:
             Number of link rows whose ``target_path`` was updated.
         """
+        # Load all document paths once into a Python set/list for in-memory
+        # matching — avoids O(N) SQL round-trips (one SELECT per wikilink row).
+        doc_paths: list[str] = [
+            r["path"]
+            for r in self._conn.execute("SELECT path FROM documents").fetchall()
+        ]
+
         # Fetch all wikilinks eligible for vault-wide resolution.
         # Explicit relative prefixes (./  ../) are excluded — those were
         # resolved at scan time and must not be overwritten.
@@ -822,48 +829,36 @@ class FTSIndex:
             """
         ).fetchall()
 
-        updated = 0
+        # Resolve each wikilink in Python, then batch-UPDATE.
+        updates: list[tuple[str, int]] = []
+        for row in rows:
+            # Derive the search filename from raw_target:
+            # 1. Strip any trailing fragment (#heading).
+            stem = row["raw_target"]
+            if "#" in stem:
+                stem = stem[: stem.index("#")]
+            if not stem:
+                continue
+            # 2. Append .md if not already present.
+            search_target = stem if stem.lower().endswith(".md") else stem + ".md"
+
+            # Find the best match: exact path or suffix match, shortest wins.
+            candidates = [
+                p
+                for p in doc_paths
+                if p == search_target or p.endswith("/" + search_target)
+            ]
+            if not candidates:
+                continue  # Genuinely broken — no document matches.
+            new_path = min(candidates, key=len)
+            if new_path != row["target_path"]:
+                updates.append((new_path, row["id"]))
+
         with self._conn:
-            for row in rows:
-                # Derive the search filename from raw_target:
-                # 1. Strip any trailing fragment (#heading).
-                stem = row["raw_target"]
-                if "#" in stem:
-                    stem = stem[: stem.index("#")]
-                if not stem:
-                    continue
-                # 2. Append .md if not already present.
-                search_target = stem if stem.lower().endswith(".md") else stem + ".md"
-
-                # Find the best match: exact path or any path whose last
-                # component(s) equal search_target, shortest wins.
-                match = self._conn.execute(
-                    """
-                    SELECT path
-                    FROM documents
-                    WHERE path = ?
-                       OR (
-                           length(path) > length(?)
-                           AND substr(path, length(path) - length(?))
-                               = '/' || ?
-                       )
-                    ORDER BY length(path) ASC
-                    LIMIT 1
-                    """,
-                    (search_target, search_target, search_target, search_target),
-                ).fetchone()
-
-                if match is None:
-                    continue  # Genuinely broken — no document matches.
-                new_path = match["path"]
-                if new_path == row["target_path"]:
-                    continue  # Already correct — no update needed.
-
-                self._conn.execute(
-                    "UPDATE links SET target_path = ? WHERE id = ?",
-                    (new_path, row["id"]),
-                )
-                updated += 1
+            self._conn.executemany(
+                "UPDATE links SET target_path = ? WHERE id = ?", updates
+            )
+        updated = len(updates)
 
         if updated:
             logger.debug("resolve_vault_wikilinks: resolved %d wikilink(s)", updated)
