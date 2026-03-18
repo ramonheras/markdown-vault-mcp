@@ -2178,9 +2178,11 @@ class TestAuthModeSelection:
             server = create_server()
 
         assert isinstance(server.auth, MultiAuth)
+        # OIDCProxy is an OAuthProvider — must be server=, not in verifiers=,
+        # so that MultiAuth.get_routes() delegates OAuth endpoints to it.
+        assert server.auth.server is mock_oidc
         verifiers = server.auth.verifiers
         assert any(isinstance(v, StaticTokenVerifier) for v in verifiers)
-        assert mock_oidc in verifiers
 
     def test_falls_through_to_oidc_when_no_bearer(
         self,

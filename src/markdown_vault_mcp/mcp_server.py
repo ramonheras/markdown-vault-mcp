@@ -238,7 +238,7 @@ def create_server() -> FastMCP:
     if bearer_auth and oidc_auth:
         from fastmcp.server.auth import MultiAuth
 
-        auth = MultiAuth(verifiers=[bearer_auth, oidc_auth])
+        auth = MultiAuth(server=oidc_auth, verifiers=[bearer_auth])
         auth_mode = "multi"
         logger.info("Multi-auth enabled: bearer token + OIDC (either accepted)")
     elif bearer_auth:
