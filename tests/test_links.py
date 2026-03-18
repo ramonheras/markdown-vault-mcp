@@ -1425,7 +1425,9 @@ class TestResolveVaultWikilinks:
         """When multiple vault documents match, shortest path is selected."""
         vault = tmp_path / "vault"
         vault.mkdir()
-        (vault / "source.md").write_text("# Source\n\nSee [[Note]].\n", encoding="utf-8")
+        (vault / "source.md").write_text(
+            "# Source\n\nSee [[Note]].\n", encoding="utf-8"
+        )
         (vault / "a").mkdir()
         (vault / "a" / "Note.md").write_text("# Note A\n", encoding="utf-8")
         (vault / "a" / "b").mkdir()
@@ -1568,9 +1570,7 @@ class TestResolveVaultWikilinks:
         assert outlinks[0].exists is True
         assert col.stats().broken_link_count == 0
 
-    def test_root_level_exact_match_preferred_over_subdir(
-        self, tmp_path: Path
-    ) -> None:
+    def test_root_level_exact_match_preferred_over_subdir(self, tmp_path: Path) -> None:
         """[[Note]] where Note.md exists at vault root resolves to root."""
         vault = tmp_path / "vault"
         vault.mkdir()
