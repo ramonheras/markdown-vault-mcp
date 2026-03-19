@@ -57,6 +57,10 @@ docker pull ghcr.io/pvliesdonk/markdown-vault-mcp:latest
 
 The Docker image uses `[all]` (MCP + FastEmbed + API embeddings). By default, semantic search works locally with FastEmbed and can switch to Ollama/OpenAI when configured.
 
+### Linux packages (.deb / .rpm)
+
+Download `.deb` or `.rpm` packages from the [GitHub Releases](https://github.com/pvliesdonk/markdown-vault-mcp/releases) page. These install a systemd service with security hardening. See the [systemd deployment guide](https://pvliesdonk.github.io/markdown-vault-mcp/deployment/systemd/) for details.
+
 ## Quick Start
 
 ### As a library
