@@ -27,10 +27,6 @@ else
     "${VENV_DIR}/bin/pip" install --quiet "markdown-vault-mcp[all]"
 fi
 
-# Ensure state directory exists with correct ownership
-mkdir -p /var/lib/markdown-vault-mcp
-chown "$SERVICE_USER:$SERVICE_USER" /var/lib/markdown-vault-mcp
-
 # Ensure config directory exists
 mkdir -p /etc/markdown-vault-mcp
 
@@ -41,5 +37,17 @@ if [ ! -f /etc/markdown-vault-mcp/env ]; then
     fi
 fi
 
-# Reload systemd to pick up the unit file
-systemctl daemon-reload
+# Restrict env file permissions — it may contain secrets (tokens, API keys).
+if [ -f /etc/markdown-vault-mcp/env ]; then
+    chmod 600 /etc/markdown-vault-mcp/env
+fi
+
+# Reload systemd to pick up the unit file.
+# Note: the service is intentionally NOT enabled here — start-on-boot requires
+# explicit opt-in by the administrator via: systemctl enable markdown-vault-mcp
+systemctl daemon-reload 2>/dev/null || true
+
+# On upgrade, restart the service if it's already running so the new version is loaded.
+if systemctl is-active --quiet markdown-vault-mcp 2>/dev/null; then
+    systemctl restart markdown-vault-mcp
+fi

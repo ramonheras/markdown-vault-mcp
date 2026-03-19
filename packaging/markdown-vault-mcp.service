@@ -72,7 +72,9 @@ RestrictNamespaces=yes
 MemoryDenyWriteExecute=no
 
 # Process
-UMask=0077
+# 0027 allows group-read so admins in the markdown-vault-mcp group can
+# inspect vault/index files directly. Owner retains full access.
+UMask=0027
 
 [Install]
 WantedBy=multi-user.target
