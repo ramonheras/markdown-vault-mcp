@@ -69,6 +69,7 @@ plugins:
         Deployment:
           - deployment/index.md: Deployment overview
           - deployment/docker.md: Docker Compose, Traefik, volumes, UID/GID
+          - deployment/systemd.md: systemd service — package install, manual install, security hardening
           - deployment/claude-desktop.md: Claude Desktop configuration reference
           - deployment/oidc.md: OIDC authentication setup with Authelia
         Python API:
@@ -129,6 +130,7 @@ nav:
   - Deployment:
       - Overview: deployment/index.md
       - Docker: deployment/docker.md
+      - systemd: deployment/systemd.md
       - Claude Desktop: deployment/claude-desktop.md
       - OIDC Authentication: deployment/oidc.md
   - Python API:

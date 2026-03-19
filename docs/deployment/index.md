@@ -7,12 +7,14 @@ This section covers deploying markdown-vault-mcp in various environments.
 | Method | Best For | Guide |
 |--------|----------|-------|
 | [Docker Compose](docker.md) | Self-hosted, homelab, production | Full compose setup with volumes, Traefik, and troubleshooting |
+| [systemd](systemd.md) | Native Linux service, bare-metal | .deb/.rpm package or manual install with security hardening |
 | [Claude Desktop](claude-desktop.md) | Local development, personal use | Direct stdio integration with Claude Desktop |
 | [OIDC Authentication](oidc.md) | Multi-user, HTTP deployments | Token-based auth with Authelia, Keycloak, etc. |
 
 ## Prerequisites
 
 - **Docker deployments:** Docker Engine 24+ and Docker Compose v2
+- **systemd deployments:** Python 3.11+ on a Linux system with systemd
 - **Claude Desktop:** Python 3.10+ with `markdown-vault-mcp[mcp]` installed
 - **All deployments:** A directory of Markdown files to serve
 
