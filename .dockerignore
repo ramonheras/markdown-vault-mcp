@@ -8,5 +8,6 @@ __pycache__
 .venv
 tests/
 docs/
+packaging/
 *.md
 !README.md
