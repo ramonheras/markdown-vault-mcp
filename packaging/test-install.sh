@@ -59,13 +59,16 @@ else
     fail "System group 'markdown-vault-mcp' not found"
 fi
 
-# 3. State directory exists with correct ownership
+# 3. State directory exists with correct ownership and permissions
 if [ -d /var/lib/markdown-vault-mcp ]; then
     OWNER=$(stat -c '%U:%G' /var/lib/markdown-vault-mcp)
-    if [ "$OWNER" = "markdown-vault-mcp:markdown-vault-mcp" ]; then
-        pass "State directory owned by markdown-vault-mcp"
-    else
+    MODE=$(stat -c '%a' /var/lib/markdown-vault-mcp)
+    if [ "$OWNER" = "markdown-vault-mcp:markdown-vault-mcp" ] && [ "$MODE" = "750" ]; then
+        pass "State directory owned by markdown-vault-mcp with mode 0750"
+    elif [ "$OWNER" != "markdown-vault-mcp:markdown-vault-mcp" ]; then
         fail "State directory owned by $OWNER (expected markdown-vault-mcp:markdown-vault-mcp)"
+    else
+        fail "State directory mode $MODE (expected 750)"
     fi
 else
     fail "/var/lib/markdown-vault-mcp does not exist"
@@ -78,6 +81,13 @@ else
     fail "Install directory /opt/markdown-vault-mcp does not exist"
 fi
 
+# 4b. Venv installed by postinstall
+if [ -x /opt/markdown-vault-mcp/venv/bin/python3 ]; then
+    pass "venv installed at /opt/markdown-vault-mcp/venv"
+else
+    fail "venv not found at /opt/markdown-vault-mcp/venv (postinstall may have failed)"
+fi
+
 # 5. Unit file exists
 if [ -f /usr/lib/systemd/system/markdown-vault-mcp.service ]; then
     pass "systemd unit file installed"
@@ -87,10 +97,12 @@ fi
 
 # 6. Unit file is parseable (systemd-analyze may not be available in containers)
 if command -v systemd-analyze >/dev/null 2>&1; then
-    if systemd-analyze verify /usr/lib/systemd/system/markdown-vault-mcp.service 2>/dev/null; then
+    if output=$(systemd-analyze verify /usr/lib/systemd/system/markdown-vault-mcp.service 2>&1); then
         pass "systemd unit file passes systemd-analyze verify"
     else
         fail "systemd unit file failed systemd-analyze verify"
+        echo "Error from systemd-analyze:" >&2
+        echo "$output" >&2
     fi
 else
     echo "  SKIP: systemd-analyze not available (expected in minimal containers)"
@@ -127,6 +139,25 @@ if getent passwd markdown-vault-mcp >/dev/null 2>&1; then
     pass "System user preserved after remove (only purged on dpkg --purge)"
 else
     fail "System user removed on regular uninstall (should only be removed on purge)"
+fi
+
+# --- Verify purge ---
+echo ""
+echo "--- Purging package ---"
+dpkg --purge markdown-vault-mcp
+
+# 11. User removed on purge
+if ! getent passwd markdown-vault-mcp >/dev/null 2>&1; then
+    pass "System user removed on purge"
+else
+    fail "System user still exists after purge"
+fi
+
+# 12. Group removed on purge
+if ! getent group markdown-vault-mcp >/dev/null 2>&1; then
+    pass "System group removed on purge"
+else
+    fail "System group still exists after purge"
 fi
 
 # --- Summary ---

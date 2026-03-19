@@ -7,7 +7,7 @@
 name: markdown-vault-mcp
 arch: "${ARCH:-amd64}"
 platform: linux
-version: "${VERSION}"
+version: "${VERSION:?VERSION env var is required (e.g. VERSION=1.0.0 nfpm package ...)}"
 version_schema: semver
 section: utils
 priority: optional
@@ -15,7 +15,6 @@ maintainer: "Peter van Liesdonk <pvliesdonk@users.noreply.github.com>"
 description: |
   Generic markdown collection MCP server with FTS5 + semantic search,
   frontmatter-aware indexing, and incremental reindexing.
-vendor: ""
 homepage: "https://pvliesdonk.github.io/markdown-vault-mcp/"
 license: "MIT"
 
@@ -55,12 +54,8 @@ scripts:
   preremove: packaging/scripts/preremove.sh
   postremove: packaging/scripts/postremove.sh
 
-# --- Dependencies ---
-# Base dependencies (shared across packagers)
-depends:
-  - python3
-
 # --- Packager-specific overrides ---
+# Dependencies are defined per-packager (nfpm overrides replace, not extend).
 
 overrides:
   deb:
