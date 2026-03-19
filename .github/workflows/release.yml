@@ -247,6 +247,9 @@ jobs:
           ref: ${{ needs.release.outputs.tag }}
           fetch-depth: 1
 
+      - name: Create output directory
+        run: mkdir -p dist
+
       - name: Build .deb package
         uses: burningalchemist/action-gh-nfpm@eeac96f42da23d091eec0d0088bf05cac0ceb9f3  # v1
         id: deb
