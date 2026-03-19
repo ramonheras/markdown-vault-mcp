@@ -248,7 +248,7 @@ jobs:
           fetch-depth: 1
 
       - name: Build .deb package
-        uses: burningalchemist/action-gh-nfpm@v1
+        uses: burningalchemist/action-gh-nfpm@eeac96f42da23d091eec0d0088bf05cac0ceb9f3  # v1
         id: deb
         with:
           nfpm_version: "2.41.1"
@@ -260,7 +260,7 @@ jobs:
           ARCH: amd64
 
       - name: Build .rpm package
-        uses: burningalchemist/action-gh-nfpm@v1
+        uses: burningalchemist/action-gh-nfpm@eeac96f42da23d091eec0d0088bf05cac0ceb9f3  # v1
         id: rpm
         with:
           nfpm_version: "2.41.1"
@@ -272,7 +272,7 @@ jobs:
           ARCH: x86_64
 
       - name: Upload packages to GitHub Release
-        run: gh release upload ${{ needs.release.outputs.tag }} dist/*.deb dist/*.rpm
+        run: gh release upload ${{ needs.release.outputs.tag }} dist/*.deb dist/*.rpm --clobber
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
