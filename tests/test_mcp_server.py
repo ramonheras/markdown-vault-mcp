@@ -2320,3 +2320,21 @@ class TestAuthDebugLogging:
         assert "version=" in caplog.text
         assert "auth=none" in caplog.text
         assert "read-only" in caplog.text
+
+    def test_startup_version_fallback(
+        self,
+        vault_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Version falls back to 'unknown' when package is not installed."""
+        from importlib.metadata import PackageNotFoundError
+
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", str(vault_path))
+        monkeypatch.setattr(
+            "markdown_vault_mcp.mcp_server._pkg_version",
+            lambda _name: (_ for _ in ()).throw(PackageNotFoundError("test")),
+        )
+        with caplog.at_level(logging.INFO):
+            create_server()
+        assert "version=unknown" in caplog.text
