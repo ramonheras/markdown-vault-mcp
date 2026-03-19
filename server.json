@@ -3,7 +3,7 @@
   "name": "io.github.pvliesdonk/markdown-vault-mcp",
   "title": "Markdown Vault MCP",
   "description": "Markdown vault MCP server with FTS5 + semantic search and frontmatter indexing",
-  "version": "1.13.2",
+  "version": "1.13.3",
   "websiteUrl": "https://pvliesdonk.github.io/markdown-vault-mcp/",
   "repository": {
     "url": "https://github.com/pvliesdonk/markdown-vault-mcp",
@@ -13,7 +13,7 @@
     {
       "registryType": "pypi",
       "identifier": "markdown-vault-mcp",
-      "version": "1.13.2",
+      "version": "1.13.3",
       "runtimeHint": "uvx",
       "transport": {
         "type": "stdio"
@@ -35,7 +35,12 @@
           "name": "MARKDOWN_VAULT_MCP_LOG_LEVEL",
           "description": "Logging verbosity",
           "default": "INFO",
-          "choices": ["DEBUG", "INFO", "WARNING", "ERROR"]
+          "choices": [
+            "DEBUG",
+            "INFO",
+            "WARNING",
+            "ERROR"
+          ]
         },
         {
           "name": "MARKDOWN_VAULT_MCP_SERVER_NAME",
@@ -72,7 +77,12 @@
         {
           "name": "EMBEDDING_PROVIDER",
           "description": "Embedding provider to use",
-          "choices": ["openai", "ollama", "fastembed", "fastembed-gpu"]
+          "choices": [
+            "openai",
+            "ollama",
+            "fastembed",
+            "fastembed-gpu"
+          ]
         },
         {
           "name": "OPENAI_API_KEY",
@@ -203,7 +213,7 @@
     },
     {
       "registryType": "oci",
-      "identifier": "ghcr.io/pvliesdonk/markdown-vault-mcp:v1.13.2",
+      "identifier": "ghcr.io/pvliesdonk/markdown-vault-mcp:v1.13.3",
       "transport": {
         "type": "streamable-http",
         "url": "http://localhost:{--port}/mcp"
@@ -233,7 +243,12 @@
           "name": "MARKDOWN_VAULT_MCP_LOG_LEVEL",
           "description": "Logging verbosity",
           "default": "INFO",
-          "choices": ["DEBUG", "INFO", "WARNING", "ERROR"]
+          "choices": [
+            "DEBUG",
+            "INFO",
+            "WARNING",
+            "ERROR"
+          ]
         },
         {
           "name": "MARKDOWN_VAULT_MCP_SERVER_NAME",
@@ -271,7 +286,12 @@
         {
           "name": "EMBEDDING_PROVIDER",
           "description": "Embedding provider to use",
-          "choices": ["openai", "ollama", "fastembed", "fastembed-gpu"]
+          "choices": [
+            "openai",
+            "ollama",
+            "fastembed",
+            "fastembed-gpu"
+          ]
         },
         {
           "name": "OPENAI_API_KEY",
