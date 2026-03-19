@@ -241,6 +241,22 @@
           "default": "markdown-vault-mcp"
         },
         {
+          "name": "MARKDOWN_VAULT_MCP_STATE_PATH",
+          "description": "Directory for index and embeddings state files",
+          "format": "filepath",
+          "default": "/data/state"
+        },
+        {
+          "name": "MARKDOWN_VAULT_MCP_INDEX_PATH",
+          "description": "Path to the FTS5 SQLite index file",
+          "format": "filepath"
+        },
+        {
+          "name": "MARKDOWN_VAULT_MCP_EMBEDDINGS_PATH",
+          "description": "Path to the numpy embeddings file",
+          "format": "filepath"
+        },
+        {
           "name": "MARKDOWN_VAULT_MCP_INDEXED_FIELDS",
           "description": "Comma-separated frontmatter fields to index for search"
         },
