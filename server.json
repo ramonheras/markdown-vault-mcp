@@ -3,7 +3,7 @@
   "name": "io.github.pvliesdonk/markdown-vault-mcp",
   "title": "Markdown Vault MCP",
   "description": "Markdown vault MCP server with FTS5 + semantic search and frontmatter indexing",
-  "version": "1.13.3",
+  "version": "1.13.4",
   "websiteUrl": "https://pvliesdonk.github.io/markdown-vault-mcp/",
   "repository": {
     "url": "https://github.com/pvliesdonk/markdown-vault-mcp",
@@ -13,7 +13,7 @@
     {
       "registryType": "pypi",
       "identifier": "markdown-vault-mcp",
-      "version": "1.13.3",
+      "version": "1.13.4",
       "runtimeHint": "uvx",
       "transport": {
         "type": "stdio"
@@ -213,7 +213,7 @@
     },
     {
       "registryType": "oci",
-      "identifier": "ghcr.io/pvliesdonk/markdown-vault-mcp:v1.13.3",
+      "identifier": "ghcr.io/pvliesdonk/markdown-vault-mcp:v1.13.4",
       "transport": {
         "type": "streamable-http",
         "url": "http://localhost:{--port}/mcp"
