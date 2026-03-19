@@ -14,6 +14,8 @@ from __future__ import annotations
 import logging
 import os
 import sys
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as _pkg_version
 from typing import Any
 
 from fastmcp import FastMCP
@@ -238,7 +240,11 @@ def create_server() -> FastMCP:
     if bearer_auth and oidc_auth:
         from fastmcp.server.auth import MultiAuth
 
-        auth = MultiAuth(server=oidc_auth, verifiers=[bearer_auth])
+        # Override required_scopes to empty — OIDC's required_scopes
+        # (e.g. ["openid"]) would otherwise propagate to the HTTP
+        # middleware and reject bearer tokens that lack "openid".
+        # Each verifier already enforces its own scope requirements.
+        auth = MultiAuth(server=oidc_auth, verifiers=[bearer_auth], required_scopes=[])
         auth_mode = "multi"
         logger.info("Multi-auth enabled: bearer token + OIDC (either accepted)")
     elif bearer_auth:
@@ -254,8 +260,14 @@ def create_server() -> FastMCP:
         auth_mode = "none"
         logger.info("No auth configured — server accepts unauthenticated connections")
 
+    try:
+        pkg_ver = _pkg_version("markdown-vault-mcp")
+    except PackageNotFoundError:
+        pkg_ver = "unknown"
+
     logger.info(
-        "Server config: name=%s auth=%s mode=%s vault=%s embeddings=%s",
+        "Server config: version=%s name=%s auth=%s mode=%s vault=%s embeddings=%s",
+        pkg_ver,
         server_name,
         auth_mode,
         "read-only" if is_read_only else "read-write",

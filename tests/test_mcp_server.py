@@ -2185,6 +2185,37 @@ class TestAuthModeSelection:
         assert len(verifiers) == 1
         assert isinstance(verifiers[0], StaticTokenVerifier)
 
+    def test_multi_auth_required_scopes_empty(
+        self,
+        vault_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """MultiAuth must have empty required_scopes.
+
+        OIDC sets required_scopes=["openid"] on itself.  If MultiAuth
+        inherits that, the HTTP middleware rejects bearer tokens that
+        lack "openid" — effectively requiring OIDC for *every* request
+        and breaking the "either" contract.  Overriding to [] lets each
+        verifier enforce its own scope requirements independently.
+        """
+        from unittest.mock import MagicMock, patch
+
+        from fastmcp.server.auth import MultiAuth
+
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", str(vault_path))
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_BEARER_TOKEN", "my-token")
+        for var, val in _OIDC_REQUIRED.items():
+            monkeypatch.setenv(var, val)
+
+        mock_oidc = MagicMock()
+        mock_oidc.required_scopes = ["openid"]
+        mock_cls = MagicMock(return_value=mock_oidc)
+        with patch("fastmcp.server.auth.oidc_proxy.OIDCProxy", mock_cls):
+            server = create_server()
+
+        assert isinstance(server.auth, MultiAuth)
+        assert server.auth.required_scopes == []
+
     def test_falls_through_to_oidc_when_no_bearer(
         self,
         vault_path: Path,
@@ -2286,5 +2317,24 @@ class TestAuthDebugLogging:
         with caplog.at_level(logging.INFO):
             create_server()
         assert "Server config:" in caplog.text
+        assert "version=" in caplog.text
         assert "auth=none" in caplog.text
         assert "read-only" in caplog.text
+
+    def test_startup_version_fallback(
+        self,
+        vault_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Version falls back to 'unknown' when package is not installed."""
+        from importlib.metadata import PackageNotFoundError
+
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", str(vault_path))
+        monkeypatch.setattr(
+            "markdown_vault_mcp.mcp_server._pkg_version",
+            lambda _name: (_ for _ in ()).throw(PackageNotFoundError("test")),
+        )
+        with caplog.at_level(logging.INFO):
+            create_server()
+        assert "version=unknown" in caplog.text
