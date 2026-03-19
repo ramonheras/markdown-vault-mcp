@@ -35,7 +35,7 @@ The package automatically:
 - Places the systemd unit file at `/usr/lib/systemd/system/markdown-vault-mcp.service`
 - Creates the state directory at `/var/lib/markdown-vault-mcp/`
 
-### Option B: Manual install (pip / uvx)
+### Option B: Manual install (pip / uv)
 
 ```bash
 # 1. Create system user
@@ -52,14 +52,18 @@ sudo mkdir -p /opt/markdown-vault-mcp /var/lib/markdown-vault-mcp /etc/markdown-
 sudo python3 -m venv /opt/markdown-vault-mcp/venv
 sudo /opt/markdown-vault-mcp/venv/bin/pip install "markdown-vault-mcp[all]"
 
-# 4. Copy systemd unit file
-sudo cp packaging/markdown-vault-mcp.service /usr/lib/systemd/system/
+# 4. Download and install systemd unit file and env template
+#    (These files are in the GitHub repo under packaging/)
+sudo curl -fsSL https://raw.githubusercontent.com/pvliesdonk/markdown-vault-mcp/main/packaging/markdown-vault-mcp.service \
+    -o /usr/lib/systemd/system/markdown-vault-mcp.service
+sudo curl -fsSL https://raw.githubusercontent.com/pvliesdonk/markdown-vault-mcp/main/packaging/env.example \
+    -o /etc/markdown-vault-mcp/env.example
 
-# 5. Copy example config
-sudo cp packaging/env.example /etc/markdown-vault-mcp/env.example
+# 5. Create config from template
 sudo cp /etc/markdown-vault-mcp/env.example /etc/markdown-vault-mcp/env
+sudo chmod 600 /etc/markdown-vault-mcp/env
 
-# 6. Set ownership
+# 6. Set ownership and reload systemd
 sudo chown -R markdown-vault-mcp:markdown-vault-mcp /var/lib/markdown-vault-mcp
 sudo systemctl daemon-reload
 ```
@@ -143,6 +147,10 @@ MARKDOWN_VAULT_MCP_GIT_REPO_URL=https://github.com/user/vault.git
 MARKDOWN_VAULT_MCP_GIT_TOKEN=ghp_...
 MARKDOWN_VAULT_MCP_READ_ONLY=false
 ```
+
+!!! warning "Protect your env file"
+    The env file contains plaintext tokens and API keys. Ensure it is not
+    world-readable: `sudo chmod 600 /etc/markdown-vault-mcp/env`
 
 The service will clone the repo into `SOURCE_DIR` on first start.
 
@@ -259,10 +267,10 @@ sudo -u markdown-vault-mcp /opt/markdown-vault-mcp/venv/bin/markdown-vault-mcp s
 
     ```bash
     # Debian/Ubuntu
-    sudo dpkg -i markdown-vault-mcp_NEW-VERSION_amd64.deb
+    sudo dpkg -i markdown-vault-mcp_*.deb
 
     # Fedora/RHEL
-    sudo rpm -U markdown-vault-mcp-NEW-VERSION-1.x86_64.rpm
+    sudo rpm -U markdown-vault-mcp-*.rpm
     ```
 
     The postinstall script upgrades the venv automatically.
