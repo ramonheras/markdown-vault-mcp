@@ -1,0 +1,78 @@
+[Unit]
+Description=Markdown Vault MCP Server
+Documentation=https://pvliesdonk.github.io/markdown-vault-mcp/
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=markdown-vault-mcp
+Group=markdown-vault-mcp
+
+# Configuration via environment file
+EnvironmentFile=-/etc/markdown-vault-mcp/env
+
+# Start the server in HTTP mode
+ExecStart=/opt/markdown-vault-mcp/venv/bin/markdown-vault-mcp serve --transport http
+
+# State directory (auto-creates /var/lib/markdown-vault-mcp/)
+StateDirectory=markdown-vault-mcp
+
+# Restart policy
+Restart=on-failure
+RestartSec=5
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=markdown-vault-mcp
+
+# --- Security hardening ---
+
+# Filesystem
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/markdown-vault-mcp
+# Add extra ReadWritePaths if your vault is outside /var/lib/markdown-vault-mcp:
+#ReadWritePaths=/home/user/vault
+
+# Capabilities
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+# Kernel
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+
+# Devices
+PrivateDevices=yes
+DevicePolicy=closed
+
+# Network — only IPv4/IPv6 + Unix sockets (no Netlink, etc.)
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+# System calls
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+
+# Misc
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictNamespaces=yes
+
+# Python/numpy requires writable+executable memory for JIT
+MemoryDenyWriteExecute=no
+
+# Process
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
