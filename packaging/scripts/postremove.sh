@@ -12,7 +12,7 @@ if [ -d "$INSTALL_DIR" ]; then
 fi
 
 # Reload systemd after unit file removal
-systemctl daemon-reload
+systemctl daemon-reload 2>/dev/null || true
 
 # Remove system user only on purge (.deb) or full remove (.rpm).
 # $1 is "purge" on dpkg, or "0" (final remove) on rpm.
