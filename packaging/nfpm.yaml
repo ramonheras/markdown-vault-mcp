@@ -1,0 +1,67 @@
+# yaml-language-server: $schema=https://nfpm.goreleaser.com/schema.json
+#
+# nfpm configuration for markdown-vault-mcp .deb and .rpm packages.
+# Build: VERSION=1.13.3 nfpm package --packager deb --target dist/
+#        VERSION=1.13.3 nfpm package --packager rpm --target dist/
+
+name: markdown-vault-mcp
+arch: "${ARCH:-amd64}"
+platform: linux
+version: "${VERSION:?VERSION env var is required (e.g. VERSION=1.0.0 nfpm package ...)}"
+version_schema: semver
+section: utils
+priority: optional
+maintainer: "Peter van Liesdonk <pvliesdonk@users.noreply.github.com>"
+description: |
+  Generic markdown collection MCP server with FTS5 + semantic search,
+  frontmatter-aware indexing, and incremental reindexing.
+homepage: "https://pvliesdonk.github.io/markdown-vault-mcp/"
+license: "MIT"
+
+# --- Package contents ---
+
+contents:
+  # systemd unit file
+  - src: packaging/markdown-vault-mcp.service
+    dst: /usr/lib/systemd/system/markdown-vault-mcp.service
+
+  # Example environment file (preserved on upgrade, never overwritten)
+  - src: packaging/env.example
+    dst: /etc/markdown-vault-mcp/env.example
+    type: config|noreplace
+
+  # State directory (auto-created with correct ownership)
+  - dst: /var/lib/markdown-vault-mcp
+    type: dir
+    file_info:
+      mode: 0750
+      owner: markdown-vault-mcp
+      group: markdown-vault-mcp
+
+  # Install directory for venv
+  - dst: /opt/markdown-vault-mcp
+    type: dir
+    file_info:
+      mode: 0755
+      owner: root
+      group: root
+
+# --- Lifecycle scripts ---
+
+scripts:
+  preinstall: packaging/scripts/preinstall.sh
+  postinstall: packaging/scripts/postinstall.sh
+  preremove: packaging/scripts/preremove.sh
+  postremove: packaging/scripts/postremove.sh
+
+# --- Packager-specific overrides ---
+# Dependencies are defined per-packager (nfpm overrides replace, not extend).
+
+overrides:
+  deb:
+    depends:
+      - python3 (>= 3.11)
+      - python3-venv
+  rpm:
+    depends:
+      - python3 >= 3.11
