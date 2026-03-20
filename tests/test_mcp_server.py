@@ -1394,6 +1394,18 @@ class TestFetchTool:
                     },
                 )
 
+    async def test_fetch_rejects_unspecified_ip(
+        self, _mcp_env_writable_with_attachments: Path
+    ) -> None:
+        """0.0.0.0 is rejected (routes to localhost on most systems)."""
+        server = create_server()
+        async with Client(server) as client:
+            with pytest.raises(ToolError, match="private"):
+                await client.call_tool(
+                    "fetch",
+                    {"url": "http://0.0.0.0/admin", "path": "stolen.md"},
+                )
+
     async def test_fetch_unicode_decode_error(
         self, _mcp_env_writable_with_attachments: Path
     ) -> None:

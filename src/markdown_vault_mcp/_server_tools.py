@@ -8,10 +8,11 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import ipaddress
 import logging
 from dataclasses import asdict
 from typing import Any, Literal
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 
 from fastmcp import FastMCP
 from fastmcp.dependencies import Depends
@@ -38,8 +39,6 @@ def _is_private_url(url: str) -> bool:
     well-known internal names. This is a best-effort SSRF guard — it does
     **not** prevent DNS rebinding attacks.
     """
-    import ipaddress
-
     parsed = urlparse(url)
     hostname = parsed.hostname or ""
 
@@ -48,7 +47,12 @@ def _is_private_url(url: str) -> bool:
 
     try:
         addr = ipaddress.ip_address(hostname)
-        return addr.is_private or addr.is_loopback or addr.is_link_local
+        return (
+            addr.is_private
+            or addr.is_loopback
+            or addr.is_link_local
+            or addr.is_unspecified  # 0.0.0.0 — is_private misses this on Python 3.10
+        )
     except ValueError:
         # Not an IP literal — allow (could be a public hostname).
         return False
@@ -997,6 +1001,7 @@ def register_tools(mcp: FastMCP) -> None:
         Args:
             url: Source URL to download from. Only http:// and https://
                 schemes are allowed. Private/loopback IPs are blocked.
+                Redirects are NOT followed (SSRF protection).
             path: Destination path in the vault (e.g. "notes/report.md"
                 or "assets/diagram.png"). Extension determines handling:
                 .md for notes, anything else for attachments.
@@ -1047,7 +1052,8 @@ def register_tools(mcp: FastMCP) -> None:
         # entire payload. write_attachment() has a redundant check that
         # covers the non-fetch code path.
         is_markdown = path.endswith(".md")
-        # pylint: disable=protected-access
+        # pylint: disable=protected-access  # No public API for size limit;
+        # MCP layer is a trusted consumer of Collection internals.
         max_bytes = (
             0
             if is_markdown or collection._max_attachment_size_mb <= 0
@@ -1058,7 +1064,7 @@ def register_tools(mcp: FastMCP) -> None:
         chunks: list[bytes] = []
         downloaded = 0
         async with (
-            httpx.AsyncClient(timeout=timeout_s, follow_redirects=True) as client,
+            httpx.AsyncClient(timeout=timeout_s, follow_redirects=False) as client,
             client.stream("GET", url) as response,
         ):
             response.raise_for_status()
@@ -1078,10 +1084,18 @@ def register_tools(mcp: FastMCP) -> None:
         raw_bytes = b"".join(chunks)
         content_length = downloaded
 
+        # Redact userinfo and query string to avoid logging credentials
+        # (pre-signed URLs, API tokens, embedded passwords).
+        _parsed_log = urlparse(url)
+        _safe_url = urlunparse(
+            _parsed_log._replace(
+                netloc=_parsed_log.hostname or "", query="", fragment=""
+            )
+        )
         logger.info(
             "fetch: downloaded %d bytes from %s → %s",
             content_length,
-            url,
+            _safe_url,
             path,
         )
 
