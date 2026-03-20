@@ -256,7 +256,9 @@ class TestBuildIndex:
             index_path=index_path,
             exclude_patterns=[".claude/**"],
         )
-        # Force _initialized so reindex() doesn't fall back to build_index().
+        # Bypass the _ensure_initialized() guard: col2 shares the same
+        # persistent DB as col1, so the index already exists — we want to
+        # test reindex() directly, not build_index().
         col2._initialized = True
         col2.reindex()
 

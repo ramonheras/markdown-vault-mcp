@@ -1018,6 +1018,16 @@ class Collection:
         # before exclude_patterns were configured (upgrade scenario, #255).
         indexed_paths = {note.path for note in notes}
         if self._exclude_patterns:
+            # Load persisted vectors so stale entries are purged from the
+            # .npy sidecar too (build_embeddings skips if count > 0).
+            if (
+                self._vectors is None
+                and self._embedding_provider is not None
+                and self._embeddings_path is not None
+            ):
+                self._load_vectors()
+
+            purged = 0
             for row in self._fts.list_notes():
                 if row["path"] not in indexed_paths and self._is_path_excluded(
                     row["path"]
@@ -1025,6 +1035,14 @@ class Collection:
                     self._fts.delete_by_path(row["path"])
                     if self._vectors is not None:
                         self._vectors.delete_by_path(row["path"])
+                    purged += 1
+
+            if (
+                purged
+                and self._vectors is not None
+                and self._embeddings_path is not None
+            ):
+                self._vectors.save(self._embeddings_path)
 
         # Count how many files were skipped due to required_frontmatter.
         # scan_directory logs skipped counts itself; we compute it by comparing
@@ -1143,6 +1161,15 @@ class Collection:
             # exclude_patterns were enforced in reindex() (issue #255).
             stale_excluded = 0
             if self._exclude_patterns:
+                # Load persisted vectors so stale entries are purged from
+                # the .npy sidecar too (not just FTS).
+                if (
+                    self._vectors is None
+                    and self._embedding_provider is not None
+                    and self._embeddings_path is not None
+                ):
+                    self._load_vectors()
+
                 for row in self._fts.list_notes():
                     if self._is_path_excluded(row["path"]):
                         self._fts.delete_by_path(row["path"])
