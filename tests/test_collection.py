@@ -266,6 +266,54 @@ class TestBuildIndex:
         paths2 = [row["path"] for row in col2._fts.list_notes()]
         assert ".claude/test.md" not in paths2
 
+    def test_reindex_purges_stale_excluded_docs_with_embeddings(
+        self,
+        tmp_path: Path,
+        vault_path: Path,
+        mock_provider: MockEmbeddingProvider,
+    ) -> None:
+        """reindex() purges stale excluded docs from both FTS and vector index."""
+        state_path = tmp_path / "state.json"
+        index_path = tmp_path / "index.db"
+        embeddings_path = tmp_path / "embeddings"
+
+        # Phase 1: build + embed WITHOUT exclude_patterns.
+        excluded_dir = vault_path / ".claude"
+        excluded_dir.mkdir(parents=True, exist_ok=True)
+        (excluded_dir / "test.md").write_text("# Excluded\nSome content.\n")
+
+        col1 = _make_collection(
+            vault_path,
+            state_path=state_path,
+            index_path=index_path,
+            embeddings_path=embeddings_path,
+            embedding_provider=mock_provider,
+        )
+        col1.build_index()
+        col1.build_embeddings()
+        assert col1._vectors is not None
+        vec_paths1 = [m["path"] for m in col1._vectors._metadata]
+        assert ".claude/test.md" in vec_paths1
+
+        # Phase 2: reindex WITH exclude_patterns — stale doc purged from both.
+        col2 = _make_collection(
+            vault_path,
+            state_path=state_path,
+            index_path=index_path,
+            embeddings_path=embeddings_path,
+            embedding_provider=mock_provider,
+            exclude_patterns=[".claude/**"],
+        )
+        col2._initialized = True
+        col2.reindex()
+
+        paths2 = [row["path"] for row in col2._fts.list_notes()]
+        assert ".claude/test.md" not in paths2
+        # Vectors should also be purged (loaded via _load_vectors before purge).
+        assert col2._vectors is not None
+        vec_paths2 = [m["path"] for m in col2._vectors._metadata]
+        assert ".claude/test.md" not in vec_paths2
+
     def test_build_index_purges_stale_excluded_docs(
         self, tmp_path: Path, vault_path: Path
     ) -> None:
@@ -292,6 +340,50 @@ class TestBuildIndex:
         col2.build_index()
         paths2 = [row["path"] for row in col2._fts.list_notes()]
         assert ".claude/test.md" not in paths2
+
+    def test_build_index_purges_stale_excluded_docs_with_embeddings(
+        self,
+        tmp_path: Path,
+        vault_path: Path,
+        mock_provider: MockEmbeddingProvider,
+    ) -> None:
+        """build_index() purges stale excluded docs from vector sidecar too."""
+        index_path = tmp_path / "index.db"
+        embeddings_path = tmp_path / "embeddings"
+
+        # Phase 1: build + embed WITHOUT exclude_patterns.
+        excluded_dir = vault_path / ".claude"
+        excluded_dir.mkdir(parents=True, exist_ok=True)
+        (excluded_dir / "test.md").write_text("# Excluded\nSome content.\n")
+
+        col1 = _make_collection(
+            vault_path,
+            index_path=index_path,
+            embeddings_path=embeddings_path,
+            embedding_provider=mock_provider,
+        )
+        col1.build_index()
+        col1.build_embeddings()
+        assert col1._vectors is not None
+        vec_paths1 = [m["path"] for m in col1._vectors._metadata]
+        assert ".claude/test.md" in vec_paths1
+
+        # Phase 2: build_index() WITH exclude_patterns — purges from both.
+        col2 = _make_collection(
+            vault_path,
+            index_path=index_path,
+            embeddings_path=embeddings_path,
+            embedding_provider=mock_provider,
+            exclude_patterns=[".claude/**"],
+        )
+        col2.build_index()
+
+        paths2 = [row["path"] for row in col2._fts.list_notes()]
+        assert ".claude/test.md" not in paths2
+        # Vectors loaded and purged, then saved back to disk.
+        assert col2._vectors is not None
+        vec_paths2 = [m["path"] for m in col2._vectors._metadata]
+        assert ".claude/test.md" not in vec_paths2
 
 
 # ---------------------------------------------------------------------------
