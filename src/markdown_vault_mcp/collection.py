@@ -1053,7 +1053,9 @@ class Collection:
 
         Uses :class:`~markdown_vault_mcp.tracker.ChangeTracker` to detect which
         files have been added, modified, or deleted since the last scan.
-        Only changed files are re-parsed and re-indexed.
+        Only changed files are re-parsed and re-indexed.  Files matching
+        ``exclude_patterns`` are skipped, and any previously indexed documents
+        that now match the patterns are purged from the FTS and vector indexes.
 
         Thread-safety: the filesystem scan runs without holding ``_write_lock``
         (read-only), then the mutation phase acquires the lock to prevent races
