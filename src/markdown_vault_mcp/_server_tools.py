@@ -25,6 +25,34 @@ logger = logging.getLogger(__name__)
 
 _ALLOWED_FETCH_SCHEMES = frozenset({"http", "https"})
 
+# SSRF protection: block private/reserved IP ranges.
+_FETCH_BLOCKED_HOSTNAMES = frozenset(
+    {"localhost", "localhost.localdomain", "metadata.google.internal"}
+)
+
+
+def _is_private_url(url: str) -> bool:
+    """Return True if *url* targets a private, loopback, or link-local address.
+
+    Uses :mod:`ipaddress` for IP-based hosts and a hostname blocklist for
+    well-known internal names. This is a best-effort SSRF guard — it does
+    **not** prevent DNS rebinding attacks.
+    """
+    import ipaddress
+
+    parsed = urlparse(url)
+    hostname = parsed.hostname or ""
+
+    if hostname in _FETCH_BLOCKED_HOSTNAMES:
+        return True
+
+    try:
+        addr = ipaddress.ip_address(hostname)
+        return addr.is_private or addr.is_loopback or addr.is_link_local
+    except ValueError:
+        # Not an IP literal — allow (could be a public hostname).
+        return False
+
 
 def register_tools(mcp: FastMCP) -> None:
     """Register all 23 MCP tools on *mcp*.
@@ -939,6 +967,9 @@ def register_tools(mcp: FastMCP) -> None:
         annotations={
             "readOnlyHint": False,
             "destructiveHint": False,
+            # Treat like write — calling twice with the same inputs is safe
+            # (overwrites with same content). Remote content may change between
+            # calls, but repeated invocations do not cause harm.
             "idempotentHint": True,
         },
     )
@@ -965,7 +996,7 @@ def register_tools(mcp: FastMCP) -> None:
 
         Args:
             url: Source URL to download from. Only http:// and https://
-                schemes are allowed.
+                schemes are allowed. Private/loopback IPs are blocked.
             path: Destination path in the vault (e.g. "notes/report.md"
                 or "assets/diagram.png"). Extension determines handling:
                 .md for notes, anything else for attachments.
@@ -995,6 +1026,11 @@ def register_tools(mcp: FastMCP) -> None:
             raise ValueError(
                 f"Only http and https URLs are allowed, got {parsed.scheme!r}"
             )
+        if _is_private_url(url):
+            raise ValueError(
+                "URLs targeting private, loopback, or link-local addresses "
+                "are not allowed."
+            )
 
         # Conditional import — httpx is an optional dependency.
         try:
@@ -1006,7 +1042,10 @@ def register_tools(mcp: FastMCP) -> None:
                 "  # or: pip install httpx"
             ) from None
 
-        # Determine size limit for post-download guard (attachments only).
+        # Determine size limit (attachments only). This pre-check enforces
+        # the limit during streaming so we abort early without buffering the
+        # entire payload. write_attachment() has a redundant check that
+        # covers the non-fetch code path.
         is_markdown = path.endswith(".md")
         # pylint: disable=protected-access
         max_bytes = (
@@ -1015,27 +1054,28 @@ def register_tools(mcp: FastMCP) -> None:
             else int(collection._max_attachment_size_mb * 1024 * 1024)
         )
 
-        # Download content.
+        # Stream download — enforce size limit as chunks arrive.
+        chunks: list[bytes] = []
+        downloaded = 0
         async with httpx.AsyncClient(
             timeout=timeout_s, follow_redirects=True
-        ) as client:
-            response = await client.get(url)
+        ) as client, client.stream("GET", url) as response:
             response.raise_for_status()
+            content_type = response.headers.get("content-type")
+            async for chunk in response.aiter_bytes(chunk_size=65536):
+                downloaded += len(chunk)
+                if max_bytes > 0 and downloaded > max_bytes:
+                    raise ValueError(
+                        f"Download exceeded the attachment size limit "
+                        f"of {collection._max_attachment_size_mb} MB "
+                        f"({max_bytes} bytes). Raise "
+                        "MARKDOWN_VAULT_MCP_MAX_ATTACHMENT_SIZE_MB or "
+                        "set it to 0 to disable the limit."
+                    )
+                chunks.append(chunk)
 
-            raw_bytes = response.content
-            content_length = len(raw_bytes)
-
-            if max_bytes > 0 and content_length > max_bytes:
-                raise ValueError(
-                    f"Downloaded content ({content_length} bytes) exceeds "
-                    f"the attachment size limit of "
-                    f"{collection._max_attachment_size_mb} MB "
-                    f"({max_bytes} bytes). Raise "
-                    "MARKDOWN_VAULT_MCP_MAX_ATTACHMENT_SIZE_MB or set it "
-                    "to 0 to disable the limit."
-                )
-
-        content_type = response.headers.get("content-type")
+        raw_bytes = b"".join(chunks)
+        content_length = downloaded
 
         logger.info(
             "fetch: downloaded %d bytes from %s → %s",
@@ -1046,7 +1086,14 @@ def register_tools(mcp: FastMCP) -> None:
 
         # Dispatch to the appropriate write method.
         if is_markdown:
-            text = raw_bytes.decode("utf-8")
+            try:
+                text = raw_bytes.decode("utf-8")
+            except UnicodeDecodeError as exc:
+                ct = content_type or "unknown"
+                raise ValueError(
+                    f"Response body is not valid UTF-8 (content-type: {ct}). "
+                    "Only UTF-8 encoded responses can be saved as .md notes."
+                ) from exc
             result = await asyncio.to_thread(
                 collection.write,
                 path,
