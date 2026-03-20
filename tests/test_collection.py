@@ -258,7 +258,7 @@ class TestBuildIndex:
         )
         # Force _initialized so reindex() doesn't fall back to build_index().
         col2._initialized = True
-        result = col2.reindex()
+        col2.reindex()
 
         # The stale excluded doc should be purged.
         paths2 = [row["path"] for row in col2._fts.list_notes()]
