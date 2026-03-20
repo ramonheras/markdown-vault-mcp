@@ -1057,9 +1057,10 @@ def register_tools(mcp: FastMCP) -> None:
         # Stream download — enforce size limit as chunks arrive.
         chunks: list[bytes] = []
         downloaded = 0
-        async with httpx.AsyncClient(
-            timeout=timeout_s, follow_redirects=True
-        ) as client, client.stream("GET", url) as response:
+        async with (
+            httpx.AsyncClient(timeout=timeout_s, follow_redirects=True) as client,
+            client.stream("GET", url) as response,
+        ):
             response.raise_for_status()
             content_type = response.headers.get("content-type")
             async for chunk in response.aiter_bytes(chunk_size=65536):
