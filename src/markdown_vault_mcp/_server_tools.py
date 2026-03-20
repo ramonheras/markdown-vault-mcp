@@ -1089,7 +1089,13 @@ def register_tools(mcp: FastMCP) -> None:
         _parsed_log = urlparse(url)
         _safe_url = urlunparse(
             _parsed_log._replace(
-                netloc=_parsed_log.hostname or "", query="", fragment=""
+                netloc=(
+                    f"{_parsed_log.hostname}:{_parsed_log.port}"
+                    if _parsed_log.port
+                    else (_parsed_log.hostname or "")
+                ),
+                query="",
+                fragment="",
             )
         )
         logger.info(
