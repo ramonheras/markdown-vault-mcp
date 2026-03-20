@@ -990,12 +990,13 @@ pattern). Each tool is annotated with MCP `ToolAnnotations`:
 | `get_orphan_notes` | Find notes with no inbound or outbound links | `True` | `False` | `True` |
 | `get_most_linked` | Find notes ranked by number of inbound links | `True` | `False` | `True` |
 | `get_connection_path` | Shortest undirected path between two notes (BFS, max 10 hops) | `True` | `False` | `True` |
+| `fetch` | Download from URL and save to vault (MCP-to-MCP transfer) | `False` | `False` | `True` |
 
 **Tool name note**: the MCP tool is registered as `list_documents` (not `list`)
 to avoid shadowing Python's built-in `list`. The underlying `Collection.list()`
 method is unchanged.
 
-**Tag-based visibility**: `write`, `edit`, `delete`, `rename` are always
+**Tag-based visibility**: `write`, `edit`, `delete`, `rename`, `fetch` are always
 registered but tagged with ``tags={"write"}``. When ``read_only=True``, the
 server calls ``mcp.disable(tags={"write"})`` to hide them from clients.
 This also hides any prompts sharing the ``write`` tag (e.g. ``research``,
@@ -1013,6 +1014,10 @@ This signals capability status to clients and reduces irrelevant prompting.
 - `edit(path, old_text, new_text)` reads file, verifies `old_text` exists
   exactly once, replaces, writes back. Fails on not-found or ambiguous match.
 - `delete(path)` removes file, updates index, triggers `on_write`
+- `fetch(url, path, frontmatter?, if_match?, timeout_s?)` downloads content
+  from an HTTP/HTTPS URL and dispatches to `write()` (for `.md` paths) or
+  `write_attachment()` (for other extensions). Requires `httpx` (included in
+  `[all]` extra). Only `http` and `https` schemes are allowed (SSRF guard).
 
 These semantics are intentionally close to Claude Code's file tools for
 familiarity. LLMs that know how to read/write/edit files can use these tools
@@ -1271,7 +1276,7 @@ dependencies = [
 
 [project.optional-dependencies]
 mcp = ["fastmcp>=3.0,<4"]
-embeddings-api = ["httpx>=0.25", "numpy>=1.20"]
+embeddings-api = ["httpx>=0.25", "numpy>=1.20"]  # httpx also used by fetch tool
 embeddings = ["fastembed>=0.3", "numpy>=1.20"]
 all = ["fastmcp>=3.0,<4", "httpx>=0.25", "fastembed>=0.3", "numpy>=1.20"]
 dev = ["pytest>=7.0", "pytest-cov>=4.0", "ruff>=0.1", "mypy>=1.0"]

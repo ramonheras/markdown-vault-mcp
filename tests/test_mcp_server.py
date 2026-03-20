@@ -1131,6 +1131,351 @@ class TestMCPWriteAttachment:
                 )
 
 
+class TestFetchTool:
+    """Test the fetch MCP tool — downloads from URL and writes to vault."""
+
+    @staticmethod
+    def _mock_httpx_stream(raw: bytes, headers: dict[str, str]) -> Any:
+        """Build a mock httpx.AsyncClient that streams *raw* bytes."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        async def mock_aiter_bytes(chunk_size: int = 65536):  # noqa: ARG001
+            yield raw
+
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+        mock_response.headers = headers
+        mock_response.aiter_bytes = mock_aiter_bytes
+
+        mock_stream_ctx = AsyncMock()
+        mock_stream_ctx.__aenter__ = AsyncMock(return_value=mock_response)
+        mock_stream_ctx.__aexit__ = AsyncMock(return_value=False)
+
+        mock_client = AsyncMock()
+        mock_client.stream = MagicMock(return_value=mock_stream_ctx)
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        return mock_client
+
+    async def test_fetch_markdown_note(
+        self, _mcp_env_writable_with_attachments: Path
+    ) -> None:
+        """fetch with .md path decodes UTF-8 and writes a note."""
+        from unittest.mock import patch
+
+        import httpx
+
+        body = b"# Fetched\n\nContent from remote.\n"
+        mock_client = self._mock_httpx_stream(
+            body, {"content-type": "text/markdown; charset=utf-8"}
+        )
+
+        with patch.object(httpx, "AsyncClient", return_value=mock_client):
+            server = create_server()
+            async with Client(server) as client:
+                result = await client.call_tool(
+                    "fetch",
+                    {"url": "https://example.com/note.md", "path": "fetched.md"},
+                )
+        data = result.data
+        assert data["path"] == "fetched.md"
+        assert data["created"] is True
+        assert data["content_length"] == len(body)
+        assert "text/markdown" in data["content_type"]
+        # Verify file written to disk.
+        written = (_mcp_env_writable_with_attachments / "fetched.md").read_text(
+            encoding="utf-8"
+        )
+        assert "# Fetched" in written
+
+    async def test_fetch_attachment(
+        self, _mcp_env_writable_with_attachments: Path
+    ) -> None:
+        """fetch with non-.md path writes binary attachment."""
+        from unittest.mock import patch
+
+        import httpx
+
+        raw = b"\x89PNG\r\n\x1a\nfake-image-data"
+        mock_client = self._mock_httpx_stream(raw, {"content-type": "image/png"})
+
+        with patch.object(httpx, "AsyncClient", return_value=mock_client):
+            server = create_server()
+            async with Client(server) as client:
+                result = await client.call_tool(
+                    "fetch",
+                    {
+                        "url": "https://example.com/image.png",
+                        "path": "assets/fetched.png",
+                    },
+                )
+        data = result.data
+        assert data["path"] == "assets/fetched.png"
+        assert data["created"] is True
+        assert data["content_length"] == len(raw)
+        assert data["content_type"] == "image/png"
+        # Verify binary written to disk.
+        written = (
+            _mcp_env_writable_with_attachments / "assets" / "fetched.png"
+        ).read_bytes()
+        assert written == raw
+
+    async def test_fetch_rejects_file_scheme(
+        self, _mcp_env_writable_with_attachments: Path
+    ) -> None:
+        """file:// URLs are rejected (SSRF protection)."""
+        server = create_server()
+        async with Client(server) as client:
+            with pytest.raises(ToolError, match="http and https"):
+                await client.call_tool(
+                    "fetch",
+                    {"url": "file:///etc/passwd", "path": "stolen.md"},
+                )
+
+    async def test_fetch_rejects_ftp_scheme(
+        self, _mcp_env_writable_with_attachments: Path
+    ) -> None:
+        """ftp:// URLs are rejected."""
+        server = create_server()
+        async with Client(server) as client:
+            with pytest.raises(ToolError, match="http and https"):
+                await client.call_tool(
+                    "fetch",
+                    {"url": "ftp://example.com/file.txt", "path": "file.md"},
+                )
+
+    async def test_fetch_size_limit(
+        self, _mcp_env_writable_with_attachments: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Downloads exceeding MAX_ATTACHMENT_SIZE_MB are rejected during streaming."""
+        from unittest.mock import patch
+
+        import httpx
+
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_MAX_ATTACHMENT_SIZE_MB", "0.001")
+
+        # ~2 KB payload > 0.001 MB (~1 KB)
+        mock_client = self._mock_httpx_stream(
+            b"x" * 2048, {"content-type": "application/octet-stream"}
+        )
+
+        with patch.object(httpx, "AsyncClient", return_value=mock_client):
+            server = create_server()
+            async with Client(server) as client:
+                with pytest.raises(ToolError, match="exceeded"):
+                    await client.call_tool(
+                        "fetch",
+                        {
+                            "url": "https://example.com/big.pdf",
+                            "path": "assets/big.pdf",
+                        },
+                    )
+
+    async def test_fetch_httpx_not_installed(
+        self, _mcp_env_writable_with_attachments: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Graceful error when httpx is not available."""
+        import builtins
+
+        real_import = builtins.__import__
+
+        def mock_import(name: str, *args: Any, **kwargs: Any) -> Any:
+            if name == "httpx":
+                raise ImportError("No module named 'httpx'")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", mock_import)
+
+        server = create_server()
+        async with Client(server) as client:
+            with pytest.raises(ToolError, match="httpx"):
+                await client.call_tool(
+                    "fetch",
+                    {"url": "https://example.com/note.md", "path": "note.md"},
+                )
+
+    async def test_fetch_frontmatter_applied(
+        self, _mcp_env_writable_with_attachments: Path
+    ) -> None:
+        """frontmatter dict is applied when writing .md files."""
+        from unittest.mock import patch
+
+        import httpx
+
+        body = b"# Report\n\nGenerated content.\n"
+        mock_client = self._mock_httpx_stream(body, {"content-type": "text/markdown"})
+
+        with patch.object(httpx, "AsyncClient", return_value=mock_client):
+            server = create_server()
+            async with Client(server) as client:
+                result = await client.call_tool(
+                    "fetch",
+                    {
+                        "url": "https://example.com/report.md",
+                        "path": "report.md",
+                        "frontmatter": {
+                            "title": "Report",
+                            "source": "https://example.com/report.md",
+                        },
+                    },
+                )
+        data = result.data
+        assert data["created"] is True
+        # Verify frontmatter was written.
+        written = (_mcp_env_writable_with_attachments / "report.md").read_text(
+            encoding="utf-8"
+        )
+        assert "title: Report" in written
+        assert "source: https://example.com/report.md" in written
+
+    async def test_fetch_http_error_status(
+        self, _mcp_env_writable_with_attachments: Path
+    ) -> None:
+        """Non-2xx HTTP response surfaces as ToolError."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        import httpx
+
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock(
+            side_effect=httpx.HTTPStatusError(
+                "Not Found",
+                request=httpx.Request("GET", "https://example.com/missing.md"),
+                response=httpx.Response(404),
+            )
+        )
+        mock_response.headers = {"content-type": "text/html"}
+
+        mock_stream_ctx = AsyncMock()
+        mock_stream_ctx.__aenter__ = AsyncMock(return_value=mock_response)
+        mock_stream_ctx.__aexit__ = AsyncMock(return_value=False)
+
+        mock_client_instance = AsyncMock()
+        mock_client_instance.stream = MagicMock(return_value=mock_stream_ctx)
+        mock_client_instance.__aenter__ = AsyncMock(return_value=mock_client_instance)
+        mock_client_instance.__aexit__ = AsyncMock(return_value=False)
+
+        with patch.object(httpx, "AsyncClient", return_value=mock_client_instance):
+            server = create_server()
+            async with Client(server) as client:
+                with pytest.raises(ToolError, match="Not Found"):
+                    await client.call_tool(
+                        "fetch",
+                        {
+                            "url": "https://example.com/missing.md",
+                            "path": "missing.md",
+                        },
+                    )
+
+    async def test_fetch_rejects_private_ip(
+        self, _mcp_env_writable_with_attachments: Path
+    ) -> None:
+        """Private/loopback IPs are rejected (SSRF protection)."""
+        server = create_server()
+        async with Client(server) as client:
+            with pytest.raises(ToolError, match="private"):
+                await client.call_tool(
+                    "fetch",
+                    {"url": "http://127.0.0.1/secret", "path": "stolen.md"},
+                )
+
+    async def test_fetch_rejects_metadata_endpoint(
+        self, _mcp_env_writable_with_attachments: Path
+    ) -> None:
+        """Cloud metadata endpoint IPs are rejected."""
+        server = create_server()
+        async with Client(server) as client:
+            with pytest.raises(ToolError, match="private"):
+                await client.call_tool(
+                    "fetch",
+                    {
+                        "url": "http://169.254.169.254/latest/meta-data/",
+                        "path": "meta.md",
+                    },
+                )
+
+    async def test_fetch_rejects_unspecified_ip(
+        self, _mcp_env_writable_with_attachments: Path
+    ) -> None:
+        """0.0.0.0 is rejected (routes to localhost on most systems)."""
+        server = create_server()
+        async with Client(server) as client:
+            with pytest.raises(ToolError, match="private"):
+                await client.call_tool(
+                    "fetch",
+                    {"url": "http://0.0.0.0/admin", "path": "stolen.md"},
+                )
+
+    async def test_fetch_unicode_decode_error(
+        self, _mcp_env_writable_with_attachments: Path
+    ) -> None:
+        """Binary content with .md path gives clear UTF-8 error."""
+        from unittest.mock import patch
+
+        import httpx
+
+        raw = b"\x89PNG\r\n\x1a\n\xff\xfe"
+        mock_client = self._mock_httpx_stream(raw, {"content-type": "image/png"})
+
+        with patch.object(httpx, "AsyncClient", return_value=mock_client):
+            server = create_server()
+            async with Client(server) as client:
+                with pytest.raises(ToolError, match="not valid UTF-8"):
+                    await client.call_tool(
+                        "fetch",
+                        {
+                            "url": "https://example.com/binary.md",
+                            "path": "binary.md",
+                        },
+                    )
+
+    @pytest.mark.usefixtures("_mcp_env")
+    async def test_fetch_hidden_in_read_only_mode(self) -> None:
+        """fetch tool should not appear when server is read-only."""
+        server = create_server()
+        async with Client(server) as client:
+            tools = await client.list_tools()
+        tool_names = [t.name for t in tools]
+        assert "fetch" not in tool_names
+
+    async def test_fetch_timeout(
+        self, _mcp_env_writable_with_attachments: Path
+    ) -> None:
+        """httpx timeout surfaces as a ToolError."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        import httpx
+
+        mock_client = AsyncMock()
+        mock_client.stream = MagicMock(side_effect=httpx.TimeoutException("timed out"))
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+
+        with patch.object(httpx, "AsyncClient", return_value=mock_client):
+            server = create_server()
+            async with Client(server) as client:
+                with pytest.raises(ToolError, match="timed out"):
+                    await client.call_tool(
+                        "fetch",
+                        {
+                            "url": "https://example.com/slow.md",
+                            "path": "slow.md",
+                        },
+                    )
+
+    async def test_fetch_rejects_localhost_hostname(
+        self, _mcp_env_writable_with_attachments: Path
+    ) -> None:
+        """Hostname blocklist rejects 'localhost'."""
+        server = create_server()
+        async with Client(server) as client:
+            with pytest.raises(ToolError, match="private"):
+                await client.call_tool(
+                    "fetch",
+                    {"url": "http://localhost/secret", "path": "stolen.md"},
+                )
+
+
 class TestMCPListDocumentsAttachments:
     """MCP list_documents() with include_attachments flag."""
 
