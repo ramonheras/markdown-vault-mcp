@@ -1822,9 +1822,7 @@ class Collection:
         """
         if not self._exclude_patterns:
             return False
-        return any(
-            fnmatch.fnmatch(path, pat) for pat in self._exclude_patterns
-        )
+        return any(fnmatch.fnmatch(path, pat) for pat in self._exclude_patterns)
 
     def _validate_path(self, path: str) -> Path:
         """Resolve a relative path and validate it is inside source_dir.
