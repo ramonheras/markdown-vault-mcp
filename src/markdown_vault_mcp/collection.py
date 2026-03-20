@@ -921,10 +921,7 @@ class Collection:
             if any(part.startswith(".") for part in rel.parts):
                 continue
             # Apply exclude_patterns — mirrors scan_directory behaviour.
-            rel_posix = rel.as_posix()
-            if self._exclude_patterns and any(
-                fnmatch.fnmatch(rel_posix, pat) for pat in self._exclude_patterns
-            ):
+            if self._is_path_excluded(rel.as_posix()):
                 continue
             if pattern and not fnmatch.fnmatch(rel_path, pattern):
                 continue
@@ -1088,9 +1085,7 @@ class Collection:
         parsed: list[tuple[str, ParsedNote]] = []
         for path in changes.added + changes.modified:
             # Apply exclude_patterns — mirrors scan_directory behaviour.
-            if self._exclude_patterns and any(
-                fnmatch.fnmatch(path, pat) for pat in self._exclude_patterns
-            ):
+            if self._is_path_excluded(path):
                 logger.debug("reindex: excluding %s (matched exclude pattern)", path)
                 continue
 
@@ -1129,6 +1124,22 @@ class Collection:
                 self._fts.delete_by_path(path)
                 if self._vectors is not None:
                     self._vectors.delete_by_path(path)
+
+            # Purge stale excluded docs that were indexed before
+            # exclude_patterns were enforced in reindex() (issue #255).
+            stale_excluded = 0
+            if self._exclude_patterns:
+                for row in self._fts.list_notes():
+                    if self._is_path_excluded(row["path"]):
+                        self._fts.delete_by_path(row["path"])
+                        if self._vectors is not None:
+                            self._vectors.delete_by_path(row["path"])
+                        stale_excluded += 1
+                if stale_excluded:
+                    logger.info(
+                        "reindex: purged %d stale excluded document(s)",
+                        stale_excluded,
+                    )
 
             # Upsert parsed notes.
             indexed_added = 0
@@ -1798,6 +1809,22 @@ class Collection:
         suffix = Path(path).suffix.lstrip(".").lower()
         exts = self._effective_attachment_extensions()
         return "*" in exts or suffix in exts
+
+    def _is_path_excluded(self, path: str) -> bool:
+        """Check whether *path* matches any configured exclude pattern.
+
+        Args:
+            path: Relative POSIX path string.
+
+        Returns:
+            ``True`` if the path matches any pattern in
+            ``self._exclude_patterns``.
+        """
+        if not self._exclude_patterns:
+            return False
+        return any(
+            fnmatch.fnmatch(path, pat) for pat in self._exclude_patterns
+        )
 
     def _validate_path(self, path: str) -> Path:
         """Resolve a relative path and validate it is inside source_dir.

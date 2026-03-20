@@ -221,6 +221,49 @@ class TestBuildIndex:
         # The file should not count as added.
         assert result.added == 0
 
+        # Second reindex: excluded file is still absent (tracker reports it as
+        # "added" again since it's never saved to state, but the filter skips it).
+        result2 = col.reindex()
+        paths2 = [row["path"] for row in col._fts.list_notes()]
+        assert ".claude/agents/knowledge-gaps.md" not in paths2
+        assert result2.added == 0
+
+    def test_reindex_purges_stale_excluded_docs(
+        self, tmp_path: Path, vault_path: Path
+    ) -> None:
+        """reindex() removes pre-existing excluded docs from a persistent index."""
+        state_path = tmp_path / "state.json"
+        index_path = tmp_path / "index.db"
+
+        # Phase 1: build index WITHOUT exclude_patterns (simulates old behaviour).
+        excluded_dir = vault_path / ".claude"
+        excluded_dir.mkdir(parents=True, exist_ok=True)
+        (excluded_dir / "test.md").write_text("# Excluded\nSome content.\n")
+
+        col1 = _make_collection(
+            vault_path, state_path=state_path, index_path=index_path
+        )
+        col1.build_index()
+
+        # The file is in the index because no exclude_patterns were set.
+        paths1 = [row["path"] for row in col1._fts.list_notes()]
+        assert ".claude/test.md" in paths1
+
+        # Phase 2: create a new Collection WITH exclude_patterns and reindex.
+        col2 = _make_collection(
+            vault_path,
+            state_path=state_path,
+            index_path=index_path,
+            exclude_patterns=[".claude/**"],
+        )
+        # Force _initialized so reindex() doesn't fall back to build_index().
+        col2._initialized = True
+        result = col2.reindex()
+
+        # The stale excluded doc should be purged.
+        paths2 = [row["path"] for row in col2._fts.list_notes()]
+        assert ".claude/test.md" not in paths2
+
 
 # ---------------------------------------------------------------------------
 # Lazy initialisation
