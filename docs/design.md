@@ -1014,6 +1014,10 @@ This signals capability status to clients and reduces irrelevant prompting.
 - `edit(path, old_text, new_text)` reads file, verifies `old_text` exists
   exactly once, replaces, writes back. Fails on not-found or ambiguous match.
 - `delete(path)` removes file, updates index, triggers `on_write`
+- `fetch(url, path, frontmatter?, if_match?, timeout_s?)` downloads content
+  from an HTTP/HTTPS URL and dispatches to `write()` (for `.md` paths) or
+  `write_attachment()` (for other extensions). Requires `httpx` (included in
+  `[all]` extra). Only `http` and `https` schemes are allowed (SSRF guard).
 
 These semantics are intentionally close to Claude Code's file tools for
 familiarity. LLMs that know how to read/write/edit files can use these tools
@@ -1272,7 +1276,7 @@ dependencies = [
 
 [project.optional-dependencies]
 mcp = ["fastmcp>=3.0,<4"]
-embeddings-api = ["httpx>=0.25", "numpy>=1.20"]
+embeddings-api = ["httpx>=0.25", "numpy>=1.20"]  # httpx also used by fetch tool
 embeddings = ["fastembed>=0.3", "numpy>=1.20"]
 all = ["fastmcp>=3.0,<4", "httpx>=0.25", "fastembed>=0.3", "numpy>=1.20"]
 dev = ["pytest>=7.0", "pytest-cov>=4.0", "ruff>=0.1", "mypy>=1.0"]

@@ -27,7 +27,7 @@ _ALLOWED_FETCH_SCHEMES = frozenset({"http", "https"})
 
 
 def register_tools(mcp: FastMCP) -> None:
-    """Register all 22 MCP tools on *mcp*.
+    """Register all 23 MCP tools on *mcp*.
 
     Args:
         mcp: The :class:`~fastmcp.FastMCP` instance to register tools on.
@@ -1006,7 +1006,7 @@ def register_tools(mcp: FastMCP) -> None:
                 "  # or: pip install httpx"
             ) from None
 
-        # Determine size limit for streaming guard (attachments only).
+        # Determine size limit for post-download guard (attachments only).
         is_markdown = path.endswith(".md")
         # pylint: disable=protected-access
         max_bytes = (
@@ -1015,7 +1015,7 @@ def register_tools(mcp: FastMCP) -> None:
             else int(collection._max_attachment_size_mb * 1024 * 1024)
         )
 
-        # Download with streaming + bounded read.
+        # Download content.
         async with httpx.AsyncClient(
             timeout=timeout_s, follow_redirects=True
         ) as client:

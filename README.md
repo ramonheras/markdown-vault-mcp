@@ -312,8 +312,9 @@ markdown-vault-mcp reindex [--source-dir PATH] [--index-path PATH]
 | `get_orphan_notes` | Find all notes with no inbound or outbound links |
 | `get_most_linked` | Find the most-linked-to notes ranked by backlink count |
 | `get_connection_path` | Find the shortest path between two notes via BFS on the undirected link graph (max 10 hops) |
+| `fetch` | Download a file from a URL and save it to the vault as a note or attachment (MCP-to-MCP transfer) |
 
-Write tools (`write`, `edit`, `delete`, `rename`) are only available when `MARKDOWN_VAULT_MCP_READ_ONLY=false`.
+Write tools (`write`, `edit`, `delete`, `rename`, `fetch`) are only available when `MARKDOWN_VAULT_MCP_READ_ONLY=false`.
 
 ### Resources
 
