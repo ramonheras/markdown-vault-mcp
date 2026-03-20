@@ -1087,6 +1087,13 @@ class Collection:
         # reconcile the difference.
         parsed: list[tuple[str, ParsedNote]] = []
         for path in changes.added + changes.modified:
+            # Apply exclude_patterns — mirrors scan_directory behaviour.
+            if self._exclude_patterns and any(
+                fnmatch.fnmatch(path, pat) for pat in self._exclude_patterns
+            ):
+                logger.debug("reindex: excluding %s (matched exclude pattern)", path)
+                continue
+
             abs_path = self._source_dir / path
             try:
                 note = parse_note(abs_path, self._source_dir, self._chunk_strategy)

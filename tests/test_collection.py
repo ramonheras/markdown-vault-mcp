@@ -52,6 +52,7 @@ def _make_collection(
     state_path: Path | None = None,
     read_only: bool = True,
     on_write: object = None,
+    exclude_patterns: list[str] | None = None,
 ) -> Collection:
     """Create a Collection for testing with sensible defaults.
 
@@ -66,6 +67,7 @@ def _make_collection(
         state_path: Path for the change-tracker state file.
         read_only: When True, write operations raise ReadOnlyError.
         on_write: Optional callback for write operations.
+        exclude_patterns: Glob patterns to exclude from indexing.
 
     Returns:
         A configured :class:`Collection` instance.
@@ -79,6 +81,7 @@ def _make_collection(
         state_path=state_path,
         read_only=read_only,
         on_write=on_write,
+        exclude_patterns=exclude_patterns,
     )
 
 
@@ -190,6 +193,33 @@ class TestBuildIndex:
 
         # One of the two added files failed, the other succeeded.
         assert result.added == 1
+
+    def test_reindex_respects_exclude_patterns(
+        self, tmp_path: Path, vault_path: Path
+    ) -> None:
+        """reindex() must not index files matching exclude_patterns."""
+        state_path = tmp_path / "state.json"
+        col = _make_collection(
+            vault_path,
+            state_path=state_path,
+            exclude_patterns=[".claude/**"],
+        )
+        col.build_index()
+
+        # Add a file inside an excluded directory after the initial index.
+        excluded_dir = vault_path / ".claude" / "agents"
+        excluded_dir.mkdir(parents=True, exist_ok=True)
+        (excluded_dir / "knowledge-gaps.md").write_text(
+            "---\ntitle: knowledge-gaps\n---\n\n# Knowledge Gaps\n"
+        )
+
+        result = col.reindex()
+
+        # The excluded file should NOT be indexed.
+        paths = [row["path"] for row in col._fts.list_notes()]
+        assert ".claude/agents/knowledge-gaps.md" not in paths
+        # The file should not count as added.
+        assert result.added == 0
 
 
 # ---------------------------------------------------------------------------
