@@ -921,10 +921,7 @@ class Collection:
             if any(part.startswith(".") for part in rel.parts):
                 continue
             # Apply exclude_patterns — mirrors scan_directory behaviour.
-            rel_posix = rel.as_posix()
-            if self._exclude_patterns and any(
-                fnmatch.fnmatch(rel_posix, pat) for pat in self._exclude_patterns
-            ):
+            if self._is_path_excluded(rel.as_posix()):
                 continue
             if pattern and not fnmatch.fnmatch(rel_path, pattern):
                 continue
@@ -1017,6 +1014,36 @@ class Collection:
                     "build_index: failed to index %s", note.path, exc_info=True
                 )
 
+        # Purge stale excluded docs from a persistent index that was built
+        # before exclude_patterns were configured (upgrade scenario, #255).
+        indexed_paths = {note.path for note in notes}
+        if self._exclude_patterns:
+            # Load persisted vectors so stale entries are purged from the
+            # .npy sidecar too (build_embeddings skips if count > 0).
+            if (
+                self._vectors is None
+                and self._embedding_provider is not None
+                and self._embeddings_path is not None
+            ):
+                self._load_vectors()
+
+            purged = 0
+            for row in self._fts.list_notes():
+                if row["path"] not in indexed_paths and self._is_path_excluded(
+                    row["path"]
+                ):
+                    self._fts.delete_by_path(row["path"])
+                    if self._vectors is not None:
+                        self._vectors.delete_by_path(row["path"])
+                    purged += 1
+
+            if (
+                purged
+                and self._vectors is not None
+                and self._embeddings_path is not None
+            ):
+                self._vectors.save(self._embeddings_path)
+
         # Count how many files were skipped due to required_frontmatter.
         # scan_directory logs skipped counts itself; we compute it by comparing
         # indexed count to total files on disk.
@@ -1056,7 +1083,9 @@ class Collection:
 
         Uses :class:`~markdown_vault_mcp.tracker.ChangeTracker` to detect which
         files have been added, modified, or deleted since the last scan.
-        Only changed files are re-parsed and re-indexed.
+        Only changed files are re-parsed and re-indexed.  Files matching
+        ``exclude_patterns`` are skipped, and any previously indexed documents
+        that now match the patterns are purged from the FTS and vector indexes.
 
         Thread-safety: the filesystem scan runs without holding ``_write_lock``
         (read-only), then the mutation phase acquires the lock to prevent races
@@ -1087,6 +1116,11 @@ class Collection:
         # reconcile the difference.
         parsed: list[tuple[str, ParsedNote]] = []
         for path in changes.added + changes.modified:
+            # Apply exclude_patterns — mirrors scan_directory behaviour.
+            if self._is_path_excluded(path):
+                logger.debug("reindex: excluding %s (matched exclude pattern)", path)
+                continue
+
             abs_path = self._source_dir / path
             try:
                 note = parse_note(abs_path, self._source_dir, self._chunk_strategy)
@@ -1122,6 +1156,31 @@ class Collection:
                 self._fts.delete_by_path(path)
                 if self._vectors is not None:
                     self._vectors.delete_by_path(path)
+
+            # Purge stale excluded docs that were indexed before
+            # exclude_patterns were enforced in reindex() (issue #255).
+            stale_excluded = 0
+            if self._exclude_patterns:
+                # Load persisted vectors so stale entries are purged from
+                # the .npy sidecar too (not just FTS).
+                if (
+                    self._vectors is None
+                    and self._embedding_provider is not None
+                    and self._embeddings_path is not None
+                ):
+                    self._load_vectors()
+
+                for row in self._fts.list_notes():
+                    if self._is_path_excluded(row["path"]):
+                        self._fts.delete_by_path(row["path"])
+                        if self._vectors is not None:
+                            self._vectors.delete_by_path(row["path"])
+                        stale_excluded += 1
+                if stale_excluded:
+                    logger.info(
+                        "reindex: purged %d stale excluded document(s)",
+                        stale_excluded,
+                    )
 
             # Upsert parsed notes.
             indexed_added = 0
@@ -1791,6 +1850,20 @@ class Collection:
         suffix = Path(path).suffix.lstrip(".").lower()
         exts = self._effective_attachment_extensions()
         return "*" in exts or suffix in exts
+
+    def _is_path_excluded(self, path: str) -> bool:
+        """Check whether *path* matches any configured exclude pattern.
+
+        Args:
+            path: Relative POSIX path string.
+
+        Returns:
+            ``True`` if the path matches any pattern in
+            ``self._exclude_patterns``.
+        """
+        if not self._exclude_patterns:
+            return False
+        return any(fnmatch.fnmatch(path, pat) for pat in self._exclude_patterns)
 
     def _validate_path(self, path: str) -> Path:
         """Resolve a relative path and validate it is inside source_dir.

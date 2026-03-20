@@ -52,6 +52,7 @@ def _make_collection(
     state_path: Path | None = None,
     read_only: bool = True,
     on_write: object = None,
+    exclude_patterns: list[str] | None = None,
 ) -> Collection:
     """Create a Collection for testing with sensible defaults.
 
@@ -66,6 +67,7 @@ def _make_collection(
         state_path: Path for the change-tracker state file.
         read_only: When True, write operations raise ReadOnlyError.
         on_write: Optional callback for write operations.
+        exclude_patterns: Glob patterns to exclude from indexing.
 
     Returns:
         A configured :class:`Collection` instance.
@@ -79,6 +81,7 @@ def _make_collection(
         state_path=state_path,
         read_only=read_only,
         on_write=on_write,
+        exclude_patterns=exclude_patterns,
     )
 
 
@@ -190,6 +193,197 @@ class TestBuildIndex:
 
         # One of the two added files failed, the other succeeded.
         assert result.added == 1
+
+    def test_reindex_respects_exclude_patterns(
+        self, tmp_path: Path, vault_path: Path
+    ) -> None:
+        """reindex() must not index files matching exclude_patterns."""
+        state_path = tmp_path / "state.json"
+        col = _make_collection(
+            vault_path,
+            state_path=state_path,
+            exclude_patterns=[".claude/**"],
+        )
+        col.build_index()
+
+        # Add a file inside an excluded directory after the initial index.
+        excluded_dir = vault_path / ".claude" / "agents"
+        excluded_dir.mkdir(parents=True, exist_ok=True)
+        (excluded_dir / "knowledge-gaps.md").write_text(
+            "---\ntitle: knowledge-gaps\n---\n\n# Knowledge Gaps\n"
+        )
+
+        result = col.reindex()
+
+        # The excluded file should NOT be indexed.
+        paths = [row["path"] for row in col._fts.list_notes()]
+        assert ".claude/agents/knowledge-gaps.md" not in paths
+        # The file should not count as added.
+        assert result.added == 0
+
+        # Second reindex: excluded file is still absent (tracker reports it as
+        # "added" again since it's never saved to state, but the filter skips it).
+        result2 = col.reindex()
+        paths2 = [row["path"] for row in col._fts.list_notes()]
+        assert ".claude/agents/knowledge-gaps.md" not in paths2
+        assert result2.added == 0
+
+    def test_reindex_purges_stale_excluded_docs(
+        self, tmp_path: Path, vault_path: Path
+    ) -> None:
+        """reindex() removes pre-existing excluded docs from a persistent index."""
+        state_path = tmp_path / "state.json"
+        index_path = tmp_path / "index.db"
+
+        # Phase 1: build index WITHOUT exclude_patterns (simulates old behaviour).
+        excluded_dir = vault_path / ".claude"
+        excluded_dir.mkdir(parents=True, exist_ok=True)
+        (excluded_dir / "test.md").write_text("# Excluded\nSome content.\n")
+
+        col1 = _make_collection(
+            vault_path, state_path=state_path, index_path=index_path
+        )
+        col1.build_index()
+
+        # The file is in the index because no exclude_patterns were set.
+        paths1 = [row["path"] for row in col1._fts.list_notes()]
+        assert ".claude/test.md" in paths1
+
+        # Phase 2: create a new Collection WITH exclude_patterns and reindex.
+        col2 = _make_collection(
+            vault_path,
+            state_path=state_path,
+            index_path=index_path,
+            exclude_patterns=[".claude/**"],
+        )
+        # Bypass the _ensure_initialized() guard: col2 shares the same
+        # persistent DB as col1, so the index already exists — we want to
+        # test reindex() directly, not build_index().
+        col2._initialized = True
+        col2.reindex()
+
+        # The stale excluded doc should be purged.
+        paths2 = [row["path"] for row in col2._fts.list_notes()]
+        assert ".claude/test.md" not in paths2
+
+    def test_reindex_purges_stale_excluded_docs_with_embeddings(
+        self,
+        tmp_path: Path,
+        vault_path: Path,
+        mock_provider: MockEmbeddingProvider,
+    ) -> None:
+        """reindex() purges stale excluded docs from both FTS and vector index."""
+        state_path = tmp_path / "state.json"
+        index_path = tmp_path / "index.db"
+        embeddings_path = tmp_path / "embeddings"
+
+        # Phase 1: build + embed WITHOUT exclude_patterns.
+        excluded_dir = vault_path / ".claude"
+        excluded_dir.mkdir(parents=True, exist_ok=True)
+        (excluded_dir / "test.md").write_text("# Excluded\nSome content.\n")
+
+        col1 = _make_collection(
+            vault_path,
+            state_path=state_path,
+            index_path=index_path,
+            embeddings_path=embeddings_path,
+            embedding_provider=mock_provider,
+        )
+        col1.build_index()
+        col1.build_embeddings()
+        assert col1._vectors is not None
+        vec_paths1 = [m["path"] for m in col1._vectors._metadata]
+        assert ".claude/test.md" in vec_paths1
+
+        # Phase 2: reindex WITH exclude_patterns — stale doc purged from both.
+        col2 = _make_collection(
+            vault_path,
+            state_path=state_path,
+            index_path=index_path,
+            embeddings_path=embeddings_path,
+            embedding_provider=mock_provider,
+            exclude_patterns=[".claude/**"],
+        )
+        col2._initialized = True
+        col2.reindex()
+
+        paths2 = [row["path"] for row in col2._fts.list_notes()]
+        assert ".claude/test.md" not in paths2
+        # Vectors should also be purged (loaded via _load_vectors before purge).
+        assert col2._vectors is not None
+        vec_paths2 = [m["path"] for m in col2._vectors._metadata]
+        assert ".claude/test.md" not in vec_paths2
+
+    def test_build_index_purges_stale_excluded_docs(
+        self, tmp_path: Path, vault_path: Path
+    ) -> None:
+        """build_index() removes pre-existing excluded docs from a persistent index."""
+        index_path = tmp_path / "index.db"
+
+        # Phase 1: build index WITHOUT exclude_patterns.
+        excluded_dir = vault_path / ".claude"
+        excluded_dir.mkdir(parents=True, exist_ok=True)
+        (excluded_dir / "test.md").write_text("# Excluded\nSome content.\n")
+
+        col1 = _make_collection(vault_path, index_path=index_path)
+        col1.build_index()
+        paths1 = [row["path"] for row in col1._fts.list_notes()]
+        assert ".claude/test.md" in paths1
+
+        # Phase 2: new Collection WITH exclude_patterns, build_index() on
+        # the same persistent DB.  The stale doc should be purged.
+        col2 = _make_collection(
+            vault_path,
+            index_path=index_path,
+            exclude_patterns=[".claude/**"],
+        )
+        col2.build_index()
+        paths2 = [row["path"] for row in col2._fts.list_notes()]
+        assert ".claude/test.md" not in paths2
+
+    def test_build_index_purges_stale_excluded_docs_with_embeddings(
+        self,
+        tmp_path: Path,
+        vault_path: Path,
+        mock_provider: MockEmbeddingProvider,
+    ) -> None:
+        """build_index() purges stale excluded docs from vector sidecar too."""
+        index_path = tmp_path / "index.db"
+        embeddings_path = tmp_path / "embeddings"
+
+        # Phase 1: build + embed WITHOUT exclude_patterns.
+        excluded_dir = vault_path / ".claude"
+        excluded_dir.mkdir(parents=True, exist_ok=True)
+        (excluded_dir / "test.md").write_text("# Excluded\nSome content.\n")
+
+        col1 = _make_collection(
+            vault_path,
+            index_path=index_path,
+            embeddings_path=embeddings_path,
+            embedding_provider=mock_provider,
+        )
+        col1.build_index()
+        col1.build_embeddings()
+        assert col1._vectors is not None
+        vec_paths1 = [m["path"] for m in col1._vectors._metadata]
+        assert ".claude/test.md" in vec_paths1
+
+        # Phase 2: build_index() WITH exclude_patterns — purges from both.
+        col2 = _make_collection(
+            vault_path,
+            index_path=index_path,
+            embeddings_path=embeddings_path,
+            embedding_provider=mock_provider,
+            exclude_patterns=[".claude/**"],
+        )
+        col2.build_index()
+
+        paths2 = [row["path"] for row in col2._fts.list_notes()]
+        assert ".claude/test.md" not in paths2
+        # Vectors loaded and purged, then saved back to disk.
+        assert col2._vectors is not None
+        vec_paths2 = [m["path"] for m in col2._vectors._metadata]
+        assert ".claude/test.md" not in vec_paths2
 
 
 # ---------------------------------------------------------------------------

@@ -216,7 +216,10 @@ for built-in names, or pass a custom instance.
 - **Default path**: `{source_dir}/.markdown_vault_mcp/state.json` (when
   `state_path=None`).
 - On `reindex()`: scan all files, compare hashes to stored state, re-parse and
-  re-embed only changed/added files, remove deleted entries.
+  re-embed only changed/added files, remove deleted entries. Files matching
+  `exclude_patterns` are skipped during re-parsing (mirroring `scan_directory`
+  behaviour). Any previously indexed documents that now match `exclude_patterns`
+  are purged from the FTS and vector indexes.
 
 **Trigger model**: startup scan + explicit `reindex` tool call. No background
 polling in Phase 1. Architecture supports adding `watch_interval` or watchdog
@@ -237,9 +240,12 @@ Two methods manage the index:
 
 - **`build_index(force=False)`**: initial population. Scans `source_dir` and
   builds the FTS index. If the index already has data and `force=False`, this
-  is a no-op. `force=True` drops and rebuilds from scratch.
+  is a no-op. `force=True` drops and rebuilds from scratch. When a persistent
+  `index_path` contains documents that now match `exclude_patterns`, they are
+  purged from the FTS and vector indexes after the scan.
 - **`reindex()`**: incremental update. Uses `ChangeTracker` to detect
   adds/modifies/deletes since the last scan and applies only the delta.
+  Applies `exclude_patterns` filtering and purges stale excluded documents.
 
 **Lazy initialization**: on first call to `search()`, `list()`, or `read()`,
 `Collection` lazily builds the FTS index from `source_dir` if no pre-built
