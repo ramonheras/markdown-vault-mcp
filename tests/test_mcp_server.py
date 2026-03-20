@@ -1447,9 +1447,7 @@ class TestFetchTool:
         import httpx
 
         mock_client = AsyncMock()
-        mock_client.stream = MagicMock(
-            side_effect=httpx.TimeoutException("timed out")
-        )
+        mock_client.stream = MagicMock(side_effect=httpx.TimeoutException("timed out"))
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=False)
 
