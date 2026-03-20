@@ -1438,6 +1438,45 @@ class TestFetchTool:
         tool_names = [t.name for t in tools]
         assert "fetch" not in tool_names
 
+    async def test_fetch_timeout(
+        self, _mcp_env_writable_with_attachments: Path
+    ) -> None:
+        """httpx timeout surfaces as a ToolError."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        import httpx
+
+        mock_client = AsyncMock()
+        mock_client.stream = MagicMock(
+            side_effect=httpx.TimeoutException("timed out")
+        )
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+
+        with patch.object(httpx, "AsyncClient", return_value=mock_client):
+            server = create_server()
+            async with Client(server) as client:
+                with pytest.raises(ToolError, match="timed out"):
+                    await client.call_tool(
+                        "fetch",
+                        {
+                            "url": "https://example.com/slow.md",
+                            "path": "slow.md",
+                        },
+                    )
+
+    async def test_fetch_rejects_localhost_hostname(
+        self, _mcp_env_writable_with_attachments: Path
+    ) -> None:
+        """Hostname blocklist rejects 'localhost'."""
+        server = create_server()
+        async with Client(server) as client:
+            with pytest.raises(ToolError, match="private"):
+                await client.call_tool(
+                    "fetch",
+                    {"url": "http://localhost/secret", "path": "stolen.md"},
+                )
+
 
 class TestMCPListDocumentsAttachments:
     """MCP list_documents() with include_attachments flag."""
