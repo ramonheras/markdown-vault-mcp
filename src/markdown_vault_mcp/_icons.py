@@ -135,4 +135,10 @@ _TOOL_ICONS: dict[str, list[Icon]] = {
             mimeType="image/svg+xml",
         )
     ],
+    "fetch": [
+        Icon(
+            src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0Ij48cGF0aCBmaWxsPSJub25lIiBzdHJva2U9ImN1cnJlbnRDb2xvciIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIiBzdHJva2Utd2lkdGg9IjIiIGQ9Ik0yMSAxNXY0YTIgMiAwIDAgMS0yIDJINWEyIDIgMCAwIDEtMi0ydi00bTQtNWw1IDVsNS01bS01IDVWMyIvPjwvc3ZnPg==",
+            mimeType="image/svg+xml",
+        )
+    ],
 }

@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import logging
 from dataclasses import asdict
 from typing import Any, Literal
+from urllib.parse import urlparse
 
 from fastmcp import FastMCP
 from fastmcp.dependencies import Depends
@@ -19,9 +21,13 @@ from markdown_vault_mcp.collection import Collection
 from ._icons import _TOOL_ICONS
 from ._server_deps import get_collection
 
+logger = logging.getLogger(__name__)
+
+_ALLOWED_FETCH_SCHEMES = frozenset({"http", "https"})
+
 
 def register_tools(mcp: FastMCP) -> None:
-    """Register all 21 MCP tools on *mcp*.
+    """Register all 22 MCP tools on *mcp*.
 
     Args:
         mcp: The :class:`~fastmcp.FastMCP` instance to register tools on.
@@ -926,3 +932,138 @@ def register_tools(mcp: FastMCP) -> None:
             update_links=update_links,
         )
         return asdict(result)
+
+    @mcp.tool(
+        tags={"write"},
+        icons=_TOOL_ICONS["fetch"],
+        annotations={
+            "readOnlyHint": False,
+            "destructiveHint": False,
+            "idempotentHint": True,
+        },
+    )
+    async def fetch(
+        url: str,
+        path: str,
+        frontmatter: dict[str, Any] | None = None,
+        if_match: str | None = None,
+        timeout_s: float = 30.0,
+        collection: Collection = Depends(get_collection),
+    ) -> dict[str, Any]:
+        """Download a file from a URL and save it to the vault.
+
+        Fetches content from an HTTP/HTTPS URL and writes it as a note or
+        attachment. Designed for MCP-to-MCP file transfer when content is
+        too large to pass through the LLM context window.
+
+        For .md paths: the response is decoded as UTF-8 text and saved as
+        a markdown note with optional frontmatter. The search index is
+        updated immediately.
+
+        For other paths: the response is saved as a binary attachment.
+        The existing attachment size limit applies.
+
+        Args:
+            url: Source URL to download from. Only http:// and https://
+                schemes are allowed.
+            path: Destination path in the vault (e.g. "notes/report.md"
+                or "assets/diagram.png"). Extension determines handling:
+                .md for notes, anything else for attachments.
+            frontmatter: Optional YAML frontmatter dict for .md files,
+                e.g. {"title": "Report", "source": "http://..."}. Ignored
+                for attachments.
+            if_match: Optional etag from a previous 'read' call for
+                optimistic concurrency. Omit to write unconditionally.
+            timeout_s: Download timeout in seconds (default 30). Increase
+                for large files on slow connections.
+
+        Returns:
+            Dict with:
+            - path (str): vault path of the written file
+            - created (bool): true if new file, false if overwrite
+            - content_length (int): bytes downloaded
+            - content_type (str or null): Content-Type from the response
+
+        Raises:
+            ValueError: If the URL scheme is not http/https, the download
+                exceeds the size limit, or the response cannot be decoded.
+            ImportError: If httpx is not installed.
+        """
+        # Validate URL scheme (SSRF protection).
+        parsed = urlparse(url)
+        if parsed.scheme not in _ALLOWED_FETCH_SCHEMES:
+            raise ValueError(
+                f"Only http and https URLs are allowed, got {parsed.scheme!r}"
+            )
+
+        # Conditional import — httpx is an optional dependency.
+        try:
+            import httpx
+        except ImportError:
+            raise ImportError(
+                "The 'fetch' tool requires 'httpx'. Install it with:\n"
+                "  pip install 'markdown-vault-mcp[all]'\n"
+                "  # or: pip install httpx"
+            ) from None
+
+        # Determine size limit for streaming guard (attachments only).
+        is_markdown = path.endswith(".md")
+        # pylint: disable=protected-access
+        max_bytes = (
+            0
+            if is_markdown or collection._max_attachment_size_mb <= 0
+            else int(collection._max_attachment_size_mb * 1024 * 1024)
+        )
+
+        # Download with streaming + bounded read.
+        async with httpx.AsyncClient(
+            timeout=timeout_s, follow_redirects=True
+        ) as client:
+            response = await client.get(url)
+            response.raise_for_status()
+
+            raw_bytes = response.content
+            content_length = len(raw_bytes)
+
+            if max_bytes > 0 and content_length > max_bytes:
+                raise ValueError(
+                    f"Downloaded content ({content_length} bytes) exceeds "
+                    f"the attachment size limit of "
+                    f"{collection._max_attachment_size_mb} MB "
+                    f"({max_bytes} bytes). Raise "
+                    "MARKDOWN_VAULT_MCP_MAX_ATTACHMENT_SIZE_MB or set it "
+                    "to 0 to disable the limit."
+                )
+
+        content_type = response.headers.get("content-type")
+
+        logger.info(
+            "fetch: downloaded %d bytes from %s → %s",
+            content_length,
+            url,
+            path,
+        )
+
+        # Dispatch to the appropriate write method.
+        if is_markdown:
+            text = raw_bytes.decode("utf-8")
+            result = await asyncio.to_thread(
+                collection.write,
+                path,
+                text,
+                frontmatter=frontmatter,
+                if_match=if_match,
+            )
+        else:
+            result = await asyncio.to_thread(
+                collection.write_attachment,
+                path,
+                raw_bytes,
+                if_match=if_match,
+            )
+
+        return {
+            **asdict(result),
+            "content_length": content_length,
+            "content_type": content_type,
+        }

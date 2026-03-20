@@ -1131,6 +1131,219 @@ class TestMCPWriteAttachment:
                 )
 
 
+class TestFetchTool:
+    """Test the fetch MCP tool — downloads from URL and writes to vault."""
+
+    async def test_fetch_markdown_note(
+        self, _mcp_env_writable_with_attachments: Path
+    ) -> None:
+        """fetch with .md path decodes UTF-8 and writes a note."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        import httpx
+
+        body = b"# Fetched\n\nContent from remote.\n"
+        mock_response = MagicMock()
+        mock_response.content = body
+        mock_response.raise_for_status = MagicMock()
+        mock_response.headers = {"content-type": "text/markdown; charset=utf-8"}
+
+        mock_client_instance = AsyncMock()
+        mock_client_instance.get = AsyncMock(return_value=mock_response)
+        mock_client_instance.__aenter__ = AsyncMock(return_value=mock_client_instance)
+        mock_client_instance.__aexit__ = AsyncMock(return_value=False)
+
+        with patch.object(httpx, "AsyncClient", return_value=mock_client_instance):
+            server = create_server()
+            async with Client(server) as client:
+                result = await client.call_tool(
+                    "fetch",
+                    {"url": "https://example.com/note.md", "path": "fetched.md"},
+                )
+        data = result.data
+        assert data["path"] == "fetched.md"
+        assert data["created"] is True
+        assert data["content_length"] == len(body)
+        assert "text/markdown" in data["content_type"]
+        # Verify file written to disk.
+        written = (_mcp_env_writable_with_attachments / "fetched.md").read_text(
+            encoding="utf-8"
+        )
+        assert "# Fetched" in written
+
+    async def test_fetch_attachment(
+        self, _mcp_env_writable_with_attachments: Path
+    ) -> None:
+        """fetch with non-.md path writes binary attachment."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        import httpx
+
+        raw = b"\x89PNG\r\n\x1a\nfake-image-data"
+        mock_response = MagicMock()
+        mock_response.content = raw
+        mock_response.raise_for_status = MagicMock()
+        mock_response.headers = {"content-type": "image/png"}
+
+        mock_client_instance = AsyncMock()
+        mock_client_instance.get = AsyncMock(return_value=mock_response)
+        mock_client_instance.__aenter__ = AsyncMock(return_value=mock_client_instance)
+        mock_client_instance.__aexit__ = AsyncMock(return_value=False)
+
+        with patch.object(httpx, "AsyncClient", return_value=mock_client_instance):
+            server = create_server()
+            async with Client(server) as client:
+                result = await client.call_tool(
+                    "fetch",
+                    {
+                        "url": "https://example.com/image.png",
+                        "path": "assets/fetched.png",
+                    },
+                )
+        data = result.data
+        assert data["path"] == "assets/fetched.png"
+        assert data["created"] is True
+        assert data["content_length"] == len(raw)
+        assert data["content_type"] == "image/png"
+        # Verify binary written to disk.
+        written = (
+            _mcp_env_writable_with_attachments / "assets" / "fetched.png"
+        ).read_bytes()
+        assert written == raw
+
+    async def test_fetch_rejects_file_scheme(
+        self, _mcp_env_writable_with_attachments: Path
+    ) -> None:
+        """file:// URLs are rejected (SSRF protection)."""
+        server = create_server()
+        async with Client(server) as client:
+            with pytest.raises(ToolError, match="http and https"):
+                await client.call_tool(
+                    "fetch",
+                    {"url": "file:///etc/passwd", "path": "stolen.md"},
+                )
+
+    async def test_fetch_rejects_ftp_scheme(
+        self, _mcp_env_writable_with_attachments: Path
+    ) -> None:
+        """ftp:// URLs are rejected."""
+        server = create_server()
+        async with Client(server) as client:
+            with pytest.raises(ToolError, match="http and https"):
+                await client.call_tool(
+                    "fetch",
+                    {"url": "ftp://example.com/file.txt", "path": "file.md"},
+                )
+
+    async def test_fetch_size_limit(
+        self, _mcp_env_writable_with_attachments: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Downloads exceeding MAX_ATTACHMENT_SIZE_MB are rejected."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        import httpx
+
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_MAX_ATTACHMENT_SIZE_MB", "0.001")
+
+        # ~2 KB payload > 0.001 MB (~1 KB)
+        raw = b"x" * 2048
+        mock_response = MagicMock()
+        mock_response.content = raw
+        mock_response.raise_for_status = MagicMock()
+        mock_response.headers = {"content-type": "application/octet-stream"}
+
+        mock_client_instance = AsyncMock()
+        mock_client_instance.get = AsyncMock(return_value=mock_response)
+        mock_client_instance.__aenter__ = AsyncMock(return_value=mock_client_instance)
+        mock_client_instance.__aexit__ = AsyncMock(return_value=False)
+
+        with patch.object(httpx, "AsyncClient", return_value=mock_client_instance):
+            server = create_server()
+            async with Client(server) as client:
+                with pytest.raises(ToolError, match="exceeds"):
+                    await client.call_tool(
+                        "fetch",
+                        {
+                            "url": "https://example.com/big.pdf",
+                            "path": "assets/big.pdf",
+                        },
+                    )
+
+    async def test_fetch_httpx_not_installed(
+        self, _mcp_env_writable_with_attachments: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Graceful error when httpx is not available."""
+        import builtins
+
+        real_import = builtins.__import__
+
+        def mock_import(name: str, *args: Any, **kwargs: Any) -> Any:
+            if name == "httpx":
+                raise ImportError("No module named 'httpx'")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", mock_import)
+
+        server = create_server()
+        async with Client(server) as client:
+            with pytest.raises(ToolError, match="httpx"):
+                await client.call_tool(
+                    "fetch",
+                    {"url": "https://example.com/note.md", "path": "note.md"},
+                )
+
+    async def test_fetch_frontmatter_applied(
+        self, _mcp_env_writable_with_attachments: Path
+    ) -> None:
+        """frontmatter dict is applied when writing .md files."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        import httpx
+
+        body = b"# Report\n\nGenerated content.\n"
+        mock_response = MagicMock()
+        mock_response.content = body
+        mock_response.raise_for_status = MagicMock()
+        mock_response.headers = {"content-type": "text/markdown"}
+
+        mock_client_instance = AsyncMock()
+        mock_client_instance.get = AsyncMock(return_value=mock_response)
+        mock_client_instance.__aenter__ = AsyncMock(return_value=mock_client_instance)
+        mock_client_instance.__aexit__ = AsyncMock(return_value=False)
+
+        with patch.object(httpx, "AsyncClient", return_value=mock_client_instance):
+            server = create_server()
+            async with Client(server) as client:
+                result = await client.call_tool(
+                    "fetch",
+                    {
+                        "url": "https://example.com/report.md",
+                        "path": "report.md",
+                        "frontmatter": {
+                            "title": "Report",
+                            "source": "https://example.com/report.md",
+                        },
+                    },
+                )
+        data = result.data
+        assert data["created"] is True
+        # Verify frontmatter was written.
+        written = (_mcp_env_writable_with_attachments / "report.md").read_text(
+            encoding="utf-8"
+        )
+        assert "title: Report" in written
+        assert "source: https://example.com/report.md" in written
+
+    @pytest.mark.usefixtures("_mcp_env")
+    async def test_fetch_hidden_in_read_only_mode(self) -> None:
+        """fetch tool should not appear when server is read-only."""
+        server = create_server()
+        async with Client(server) as client:
+            tools = await client.list_tools()
+        tool_names = [t.name for t in tools]
+        assert "fetch" not in tool_names
+
+
 class TestMCPListDocumentsAttachments:
     """MCP list_documents() with include_attachments flag."""
 

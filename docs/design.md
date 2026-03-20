@@ -990,12 +990,13 @@ pattern). Each tool is annotated with MCP `ToolAnnotations`:
 | `get_orphan_notes` | Find notes with no inbound or outbound links | `True` | `False` | `True` |
 | `get_most_linked` | Find notes ranked by number of inbound links | `True` | `False` | `True` |
 | `get_connection_path` | Shortest undirected path between two notes (BFS, max 10 hops) | `True` | `False` | `True` |
+| `fetch` | Download from URL and save to vault (MCP-to-MCP transfer) | `False` | `False` | `True` |
 
 **Tool name note**: the MCP tool is registered as `list_documents` (not `list`)
 to avoid shadowing Python's built-in `list`. The underlying `Collection.list()`
 method is unchanged.
 
-**Tag-based visibility**: `write`, `edit`, `delete`, `rename` are always
+**Tag-based visibility**: `write`, `edit`, `delete`, `rename`, `fetch` are always
 registered but tagged with ``tags={"write"}``. When ``read_only=True``, the
 server calls ``mcp.disable(tags={"write"})`` to hide them from clients.
 This also hides any prompts sharing the ``write`` tag (e.g. ``research``,
