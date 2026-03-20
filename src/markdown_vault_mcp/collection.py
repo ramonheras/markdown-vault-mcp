@@ -1014,6 +1014,18 @@ class Collection:
                     "build_index: failed to index %s", note.path, exc_info=True
                 )
 
+        # Purge stale excluded docs from a persistent index that was built
+        # before exclude_patterns were configured (upgrade scenario, #255).
+        indexed_paths = {note.path for note in notes}
+        if self._exclude_patterns:
+            for row in self._fts.list_notes():
+                if row["path"] not in indexed_paths and self._is_path_excluded(
+                    row["path"]
+                ):
+                    self._fts.delete_by_path(row["path"])
+                    if self._vectors is not None:
+                        self._vectors.delete_by_path(row["path"])
+
         # Count how many files were skipped due to required_frontmatter.
         # scan_directory logs skipped counts itself; we compute it by comparing
         # indexed count to total files on disk.

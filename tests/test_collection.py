@@ -264,6 +264,33 @@ class TestBuildIndex:
         paths2 = [row["path"] for row in col2._fts.list_notes()]
         assert ".claude/test.md" not in paths2
 
+    def test_build_index_purges_stale_excluded_docs(
+        self, tmp_path: Path, vault_path: Path
+    ) -> None:
+        """build_index() removes pre-existing excluded docs from a persistent index."""
+        index_path = tmp_path / "index.db"
+
+        # Phase 1: build index WITHOUT exclude_patterns.
+        excluded_dir = vault_path / ".claude"
+        excluded_dir.mkdir(parents=True, exist_ok=True)
+        (excluded_dir / "test.md").write_text("# Excluded\nSome content.\n")
+
+        col1 = _make_collection(vault_path, index_path=index_path)
+        col1.build_index()
+        paths1 = [row["path"] for row in col1._fts.list_notes()]
+        assert ".claude/test.md" in paths1
+
+        # Phase 2: new Collection WITH exclude_patterns, build_index() on
+        # the same persistent DB.  The stale doc should be purged.
+        col2 = _make_collection(
+            vault_path,
+            index_path=index_path,
+            exclude_patterns=[".claude/**"],
+        )
+        col2.build_index()
+        paths2 = [row["path"] for row in col2._fts.list_notes()]
+        assert ".claude/test.md" not in paths2
+
 
 # ---------------------------------------------------------------------------
 # Lazy initialisation
