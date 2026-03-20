@@ -240,7 +240,9 @@ Two methods manage the index:
 
 - **`build_index(force=False)`**: initial population. Scans `source_dir` and
   builds the FTS index. If the index already has data and `force=False`, this
-  is a no-op. `force=True` drops and rebuilds from scratch.
+  is a no-op. `force=True` drops and rebuilds from scratch. When a persistent
+  `index_path` contains documents that now match `exclude_patterns`, they are
+  purged from the FTS and vector indexes after the scan.
 - **`reindex()`**: incremental update. Uses `ChangeTracker` to detect
   adds/modifies/deletes since the last scan and applies only the delta.
   Applies `exclude_patterns` filtering and purges stale excluded documents.
