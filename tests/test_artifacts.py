@@ -355,7 +355,9 @@ class TestArtifactHandler:
 
         assert response.status_code == 200
         assert "text/markdown" in response.headers["content-type"]
-        assert response.headers["content-disposition"] == 'attachment; filename="hello.md"'
+        assert (
+            response.headers["content-disposition"] == 'attachment; filename="hello.md"'
+        )
         assert response.text == note_text
 
     def test_serves_attachment_bytes(self, tmp_path: Path) -> None:
