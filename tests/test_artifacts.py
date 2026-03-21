@@ -267,6 +267,22 @@ class TestCreateDownloadLinkTool:
             with pytest.raises(ToolError, match="MARKDOWN_VAULT_MCP_BASE_URL"):
                 await client.call_tool("create_download_link", {"path": "note.md"})
 
+    async def test_raises_on_zero_ttl(self, _artifact_vault: Path) -> None:
+        server = create_server(transport="http")
+        async with Client(server) as client:
+            with pytest.raises(ToolError, match="positive integer"):
+                await client.call_tool(
+                    "create_download_link", {"path": "note.md", "ttl_seconds": 0}
+                )
+
+    async def test_raises_on_negative_ttl(self, _artifact_vault: Path) -> None:
+        server = create_server(transport="http")
+        async with Client(server) as client:
+            with pytest.raises(ToolError, match="positive integer"):
+                await client.call_tool(
+                    "create_download_link", {"path": "note.md", "ttl_seconds": -60}
+                )
+
     async def test_raises_on_nonexistent_path(self, _artifact_vault: Path) -> None:
         server = create_server(transport="http")
         async with Client(server) as client:
@@ -339,6 +355,7 @@ class TestArtifactHandler:
 
         assert response.status_code == 200
         assert "text/markdown" in response.headers["content-type"]
+        assert response.headers["content-disposition"] == 'attachment; filename="hello.md"'
         assert response.text == note_text
 
     def test_serves_attachment_bytes(self, tmp_path: Path) -> None:
@@ -356,6 +373,10 @@ class TestArtifactHandler:
 
         assert response.status_code == 200
         assert "image/png" in response.headers["content-type"]
+        assert (
+            response.headers["content-disposition"]
+            == 'attachment; filename="image.png"'
+        )
         assert response.content == raw
 
     def test_one_time_use(self, tmp_path: Path) -> None:

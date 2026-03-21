@@ -1243,9 +1243,8 @@ def _register_download_link_tool(mcp: FastMCP) -> None:
             "content_type": content_type,
         }
         logger.info(
-            "Created download link for path=%r ttl=%ds url=%s",
+            "Created download link for path=%r ttl=%ds",
             path,
             ttl_seconds,
-            download_url,
         )
         return json.dumps(result, indent=2)
