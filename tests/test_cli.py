@@ -170,6 +170,41 @@ class TestMainDispatch:
         mock_commands.__getitem__.assert_called_once_with("serve")
         mock_handler.assert_called_once()
 
+    @patch("markdown_vault_mcp.cli._COMMANDS")
+    @patch("markdown_vault_mcp.cli.configure_logging")
+    def test_verbose_enables_debug_for_both_logger_trees(
+        self, mock_configure: MagicMock, mock_commands: MagicMock
+    ) -> None:
+        """``-v`` sets root to DEBUG and calls ``configure_logging("DEBUG")``."""
+        mock_handler = MagicMock()
+        mock_commands.__getitem__ = MagicMock(return_value=mock_handler)
+        with patch("sys.argv", ["markdown-vault-mcp", "-v", "index"]):
+            main()
+        mock_configure.assert_called_once_with("DEBUG")
+        import logging
+
+        assert logging.getLogger("httpx").level == logging.WARNING
+        assert logging.getLogger("httpcore").level == logging.WARNING
+
+    @patch("markdown_vault_mcp.cli._COMMANDS")
+    def test_root_handler_added_when_none_exist(
+        self, mock_commands: MagicMock
+    ) -> None:
+        """A StreamHandler is added to root when it has no handlers."""
+        import logging
+
+        mock_handler = MagicMock()
+        mock_commands.__getitem__ = MagicMock(return_value=mock_handler)
+        root = logging.getLogger()
+        original_handlers = root.handlers[:]
+        root.handlers.clear()
+        try:
+            with patch("sys.argv", ["markdown-vault-mcp", "index"]):
+                main()
+            assert len(root.handlers) >= 1
+        finally:
+            root.handlers[:] = original_handlers
+
 
 class TestCmdServe:
     """Test the serve subcommand dispatch."""
