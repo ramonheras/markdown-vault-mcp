@@ -187,9 +187,7 @@ class TestMainDispatch:
         assert logging.getLogger("httpcore").level == logging.WARNING
 
     @patch("markdown_vault_mcp.cli._COMMANDS")
-    def test_root_handler_added_when_none_exist(
-        self, mock_commands: MagicMock
-    ) -> None:
+    def test_root_handler_added_when_none_exist(self, mock_commands: MagicMock) -> None:
         """A StreamHandler is added to root when it has no handlers."""
         import logging
 
