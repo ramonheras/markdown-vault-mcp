@@ -33,7 +33,7 @@
         },
         {
           "name": "FASTMCP_LOG_LEVEL",
-          "description": "Logging verbosity (FastMCP internals; use -v for app loggers)",
+          "description": "Log level for FastMCP internals; app loggers default to INFO, -v overrides both to DEBUG",
           "default": "INFO",
           "choices": [
             "DEBUG",
@@ -241,7 +241,7 @@
         },
         {
           "name": "FASTMCP_LOG_LEVEL",
-          "description": "Logging verbosity (FastMCP internals; use -v for app loggers)",
+          "description": "Log level for FastMCP internals; app loggers default to INFO, -v overrides both to DEBUG",
           "default": "INFO",
           "choices": [
             "DEBUG",

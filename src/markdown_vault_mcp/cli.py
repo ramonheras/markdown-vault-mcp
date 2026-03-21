@@ -302,9 +302,10 @@ def main() -> None:
     level = logging.DEBUG if args.verbose else logging.INFO
     root = logging.getLogger()
     root.setLevel(level)
-    handler = logging.StreamHandler()
-    handler.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
-    root.addHandler(handler)
+    if not root.handlers:
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
+        root.addHandler(handler)
 
     if args.verbose:
         configure_logging("DEBUG")

@@ -139,7 +139,7 @@ All configuration is via environment variables with the `MARKDOWN_VAULT_MCP_` pr
 | `MARKDOWN_VAULT_MCP_SERVER_NAME` | `markdown-vault-mcp` | MCP server name shown to clients; useful for multi-instance setups |
 | `MARKDOWN_VAULT_MCP_INSTRUCTIONS` | (auto) | System-level instructions injected into LLM context; defaults to a description that reflects read-only vs read-write state |
 | `MARKDOWN_VAULT_MCP_HTTP_PATH` | `/mcp` | HTTP endpoint path for streamable HTTP transport (used by `serve --transport http`) |
-| `FASTMCP_LOG_LEVEL` | `INFO` | Log level: `DEBUG`, `INFO`, `WARNING`, `ERROR` (controls FastMCP internals; use `-v` to set app loggers to DEBUG) |
+| `FASTMCP_LOG_LEVEL` | `INFO` | Log level for FastMCP internals (`DEBUG`, `INFO`, `WARNING`, `ERROR`). App loggers default to `INFO`. `-v` overrides both to `DEBUG`. |
 
 ### Search and embeddings
 
