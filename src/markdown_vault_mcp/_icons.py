@@ -141,4 +141,10 @@ _TOOL_ICONS: dict[str, list[Icon]] = {
             mimeType="image/svg+xml",
         )
     ],
+    "create_download_link": [
+        Icon(
+            src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0Ij48ZyBmaWxsPSJub25lIiBzdHJva2U9ImN1cnJlbnRDb2xvciIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIiBzdHJva2Utd2lkdGg9IjIiPjxjaXJjbGUgY3g9IjE4IiBjeT0iNSIgcj0iMyIvPjxjaXJjbGUgY3g9IjYiIGN5PSIxMiIgcj0iMyIvPjxjaXJjbGUgY3g9IjE4IiBjeT0iMTkiIHI9IjMiLz48cGF0aCBkPSJtOC41OSAxMy41MWw2LjgzIDMuOThtLS4wMS0xMC45OGwtNi44MiAzLjk4Ii8+PC9nPjwvc3ZnPg==",
+            mimeType="image/svg+xml",
+        )
+    ],
 }

@@ -58,11 +58,14 @@ def _is_private_url(url: str) -> bool:
         return False
 
 
-def register_tools(mcp: FastMCP) -> None:
-    """Register all 23 MCP tools on *mcp*.
+def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
+    """Register all MCP tools on *mcp*.
 
     Args:
         mcp: The :class:`~fastmcp.FastMCP` instance to register tools on.
+        transport: The MCP transport in use.  ``create_download_link`` is
+            only registered for non-stdio transports (``"sse"`` or
+            ``"http"``), because stdio has no HTTP server.
     """
 
     # --- Read-only tools (always visible) ---
@@ -1135,3 +1138,113 @@ def register_tools(mcp: FastMCP) -> None:
             "content_length": content_length,
             "content_type": content_type,
         }
+
+    # create_download_link is only available on HTTP transports —
+    # stdio has no HTTP server to host the artifact endpoint.
+    if transport != "stdio":
+        _register_download_link_tool(mcp)
+
+
+def _register_download_link_tool(mcp: FastMCP) -> None:
+    """Register the ``create_download_link`` tool on *mcp*.
+
+    Separated from :func:`register_tools` so it can be conditionally
+    called only when an HTTP transport is active.
+
+    Args:
+        mcp: The :class:`~fastmcp.FastMCP` instance to register the tool on.
+    """
+    import json
+    import mimetypes
+    import os
+
+    from markdown_vault_mcp.config import _ENV_PREFIX
+
+    @mcp.tool(
+        icons=_TOOL_ICONS["create_download_link"],
+        annotations={
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": False,
+        },
+    )
+    async def create_download_link(
+        path: str,
+        ttl_seconds: int = 300,
+        collection: Collection = Depends(get_collection),
+    ) -> str:
+        """Create a one-time download URL for a vault file.
+
+        Creates a temporary HTTP endpoint that serves the file once,
+        then invalidates the link. Use this to pass files to other
+        MCP servers (e.g., save an image to another vault, attach to
+        email) without routing binary data through the LLM context
+        window.
+
+        Works for both notes (.md) and attachments (any allowed
+        extension).
+
+        Requires ``MARKDOWN_VAULT_MCP_BASE_URL`` to be configured.
+        Only available on HTTP transport (not stdio).
+
+        Args:
+            path: Vault-relative path to the file (e.g.
+                ``"notes/report.md"`` or ``"assets/diagram.png"``).
+            ttl_seconds: Link lifetime in seconds (default 300 / 5
+                minutes).
+
+        Returns:
+            JSON with ``download_url``, ``expires_in_seconds``,
+            ``path``, and ``content_type``.
+
+        Raises:
+            ValueError: If ``MARKDOWN_VAULT_MCP_BASE_URL`` is not
+                configured, the path does not exist, or the path
+                fails validation.
+        """
+        if ttl_seconds <= 0:
+            msg = "ttl_seconds must be a positive integer"
+            raise ValueError(msg)
+
+        # Validate BASE_URL is configured
+        base_url = os.environ.get(f"{_ENV_PREFIX}_BASE_URL", "").strip().rstrip("/")
+        if not base_url:
+            msg = (
+                "MARKDOWN_VAULT_MCP_BASE_URL is required for download links. "
+                "Set it to the public base URL of this server "
+                "(e.g. https://mcp.example.com)."
+            )
+            raise ValueError(msg)
+
+        # Validate the path exists in the vault (also checks traversal).
+        if path.endswith(".md"):
+            abs_path = await asyncio.to_thread(collection._validate_path, path)
+            content_type = "text/markdown; charset=utf-8"
+        else:
+            abs_path = await asyncio.to_thread(
+                collection._validate_attachment_path, path
+            )
+            mime, _ = mimetypes.guess_type(path)
+            content_type = mime or "application/octet-stream"
+
+        if not abs_path.is_file():
+            raise ValueError(f"File not found: {path}")
+
+        from markdown_vault_mcp.artifacts import get_artifact_store
+
+        store = get_artifact_store()
+        token = store.create_token(path, ttl_seconds=ttl_seconds)
+
+        download_url = f"{base_url}/artifacts/{token}"
+        result = {
+            "download_url": download_url,
+            "expires_in_seconds": ttl_seconds,
+            "path": path,
+            "content_type": content_type,
+        }
+        logger.info(
+            "Created download link for path=%r ttl=%ds",
+            path,
+            ttl_seconds,
+        )
+        return json.dumps(result, indent=2)

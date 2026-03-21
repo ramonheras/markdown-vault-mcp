@@ -205,7 +205,7 @@ Full OAuth 2.1 authentication for HTTP deployments. OIDC activates when all four
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `MARKDOWN_VAULT_MCP_BASE_URL` | Yes | Public base URL of the server (e.g. `https://mcp.example.com`; include prefix if mounted under subpath, e.g. `https://mcp.example.com/vault`) |
+| `MARKDOWN_VAULT_MCP_BASE_URL` | Yes | Public base URL of the server (e.g. `https://mcp.example.com`; include prefix if mounted under subpath, e.g. `https://mcp.example.com/vault`). Also required for `create_download_link`. |
 | `MARKDOWN_VAULT_MCP_OIDC_CONFIG_URL` | Yes | OIDC discovery endpoint (e.g. `https://auth.example.com/.well-known/openid-configuration`) |
 | `MARKDOWN_VAULT_MCP_OIDC_CLIENT_ID` | Yes | OIDC client ID registered with your provider |
 | `MARKDOWN_VAULT_MCP_OIDC_CLIENT_SECRET` | Yes | OIDC client secret |
@@ -313,6 +313,7 @@ markdown-vault-mcp reindex [--source-dir PATH] [--index-path PATH]
 | `get_most_linked` | Find the most-linked-to notes ranked by backlink count |
 | `get_connection_path` | Find the shortest path between two notes via BFS on the undirected link graph (max 10 hops) |
 | `fetch` | Download a file from a URL and save it to the vault as a note or attachment (MCP-to-MCP transfer) |
+| `create_download_link` | Generate a one-time download URL for a vault file — enables MCP-to-MCP file transfer (HTTP/SSE transport only; requires `BASE_URL`) |
 
 Write tools (`write`, `edit`, `delete`, `rename`, `fetch`) are only available when `MARKDOWN_VAULT_MCP_READ_ONLY=false`.
 

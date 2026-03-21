@@ -207,7 +207,7 @@ def _build_oidc_auth() -> Any:
     )
 
 
-def create_server() -> FastMCP:
+def create_server(transport: str = "stdio") -> FastMCP:
     """Create and configure the FastMCP server.
 
     Reads configuration from environment variables via :func:`load_config`.
@@ -282,13 +282,20 @@ def create_server() -> FastMCP:
         auth=auth,
     )
 
-    register_tools(mcp)
+    register_tools(mcp, transport=transport)
     register_resources(mcp)
     register_prompts(
         mcp,
         templates_folder=config.templates_folder,
         prompts_folder=config.prompts_folder,
     )
+
+    # --- Artifact download endpoint (HTTP transports only) ---
+
+    if transport != "stdio":
+        from markdown_vault_mcp.artifacts import make_artifact_handler
+
+        mcp.custom_route("/artifacts/{token}", methods=["GET"])(make_artifact_handler())
 
     # --- Visibility: hide write-tagged components in read-only mode ---
 
