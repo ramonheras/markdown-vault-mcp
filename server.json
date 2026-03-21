@@ -32,8 +32,8 @@
           "default": "true"
         },
         {
-          "name": "MARKDOWN_VAULT_MCP_LOG_LEVEL",
-          "description": "Logging verbosity",
+          "name": "FASTMCP_LOG_LEVEL",
+          "description": "Logging verbosity (FastMCP internals; use -v for app loggers)",
           "default": "INFO",
           "choices": [
             "DEBUG",
@@ -240,8 +240,8 @@
           "default": "true"
         },
         {
-          "name": "MARKDOWN_VAULT_MCP_LOG_LEVEL",
-          "description": "Logging verbosity",
+          "name": "FASTMCP_LOG_LEVEL",
+          "description": "Logging verbosity (FastMCP internals; use -v for app loggers)",
           "default": "INFO",
           "choices": [
             "DEBUG",
