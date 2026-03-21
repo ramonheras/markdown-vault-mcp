@@ -295,14 +295,7 @@ def create_server(transport: str = "stdio") -> FastMCP:
     if transport != "stdio":
         from markdown_vault_mcp.artifacts import make_artifact_handler
 
-        _artifact_handler = make_artifact_handler()
-
-        from starlette.requests import Request
-        from starlette.responses import Response
-
-        @mcp.custom_route("/artifacts/{token}", methods=["GET"])
-        async def _artifact_route(request: Request) -> Response:
-            return await _artifact_handler(request)
+        mcp.custom_route("/artifacts/{token}", methods=["GET"])(make_artifact_handler())
 
     # --- Visibility: hide write-tagged components in read-only mode ---
 

@@ -92,7 +92,6 @@ class ArtifactStore:
         Returns:
             The :class:`TokenRecord`, or ``None`` if unknown or expired.
         """
-        self._cleanup_expired()
         record = self._tokens.pop(token, None)
         if record is None:
             return None
@@ -120,11 +119,11 @@ class ArtifactStore:
 _artifact_store: ArtifactStore | None = None
 
 
-def set_artifact_store(store: ArtifactStore) -> None:
+def set_artifact_store(store: ArtifactStore | None) -> None:
     """Set the module-level artifact store (called from lifespan).
 
     Args:
-        store: The :class:`ArtifactStore` instance to use.
+        store: The :class:`ArtifactStore` instance, or ``None`` on shutdown.
     """
     global _artifact_store
     _artifact_store = store
@@ -152,7 +151,7 @@ def get_artifact_store() -> ArtifactStore:
 _collection_store: Collection | None = None
 
 
-def set_collection_store(collection: Collection) -> None:
+def set_collection_store(collection: Collection | None) -> None:
     """Set the module-level collection reference (called from lifespan).
 
     The artifact HTTP handler runs outside FastMCP's request-context
@@ -160,7 +159,7 @@ def set_collection_store(collection: Collection) -> None:
 
     Args:
         collection: The :class:`~markdown_vault_mcp.collection.Collection`
-            instance.
+            instance, or ``None`` on shutdown.
     """
     global _collection_store
     _collection_store = collection
@@ -254,6 +253,11 @@ def make_artifact_handler() -> Callable[[Request], Awaitable[Response]]:
             content_type,
             len(data),
         )
-        return Response(content=data, media_type=content_type)
+        filename = vault_path.rsplit("/", 1)[-1]
+        return Response(
+            content=data,
+            media_type=content_type,
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
 
     return artifact_handler

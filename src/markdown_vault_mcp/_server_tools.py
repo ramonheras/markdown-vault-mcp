@@ -1202,6 +1202,10 @@ def _register_download_link_tool(mcp: FastMCP) -> None:
                 configured, the path does not exist, or the path
                 fails validation.
         """
+        if ttl_seconds <= 0:
+            msg = "ttl_seconds must be a positive integer"
+            raise ValueError(msg)
+
         # Validate BASE_URL is configured
         base_url = os.environ.get(f"{_ENV_PREFIX}_BASE_URL", "").strip().rstrip("/")
         if not base_url:

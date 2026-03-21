@@ -101,6 +101,7 @@ def make_collection_lifespan(config: CollectionConfig) -> Any:
         try:
             yield {"collection": collection, "config": config}
         finally:
+            set_artifact_store(None)
             set_collection_store(None)
             collection.close()
             logger.info("Collection shut down")
