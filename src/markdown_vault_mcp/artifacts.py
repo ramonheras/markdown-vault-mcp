@@ -92,6 +92,10 @@ class ArtifactStore:
         Returns:
             The :class:`TokenRecord`, or ``None`` if unknown or expired.
         """
+        # Sweep other expired tokens to bound memory (design spec: lazy
+        # cleanup on each operation).  The explicit check below handles
+        # the consumed token's own expiry.
+        self._cleanup_expired()
         record = self._tokens.pop(token, None)
         if record is None:
             return None
