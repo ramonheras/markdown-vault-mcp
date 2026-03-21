@@ -395,9 +395,10 @@ operations.
 Follow FastMCP conventions and standard Python logging:
 `logging.getLogger(__name__)` throughout. No `print()` for operational output.
 
-**Log level control:** `MARKDOWN_VAULT_MCP_LOG_LEVEL` env var accepts standard
-Python level names (`DEBUG`, `INFO`, `WARNING`, `ERROR`). Default `INFO`.
-CLI `-v` flag overrides to `DEBUG`. When `DEBUG` is active, `httpx` and
+**Log level control:** `FASTMCP_LOG_LEVEL` env var controls FastMCP internals
+(`DEBUG`, `INFO`, `WARNING`, `ERROR`). Default `INFO`. App loggers use `INFO`
+unless overridden by `-v` (sets both app and FastMCP to `DEBUG`). When
+`DEBUG` is active, `httpx` and
 `httpcore` loggers are pinned to `WARNING` to reduce noise.
 
 **Auth logging:** At `DEBUG`, the OIDC and bearer auth builders log full

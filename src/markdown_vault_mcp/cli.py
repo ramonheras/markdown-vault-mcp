@@ -15,8 +15,10 @@ import sys
 from dataclasses import asdict
 from pathlib import Path
 
+from fastmcp.utilities.logging import configure_logging
+
 from markdown_vault_mcp.collection import Collection
-from markdown_vault_mcp.config import _ENV_PREFIX, get_log_level, load_config
+from markdown_vault_mcp.config import _ENV_PREFIX, load_config
 
 logger = logging.getLogger(__name__)
 
@@ -294,20 +296,26 @@ def main() -> None:
     parser = _build_parser()
     args = parser.parse_args()
 
-    # -v flag overrides LOG_LEVEL env var; env var overrides default INFO.
-    level = logging.DEBUG if args.verbose else get_log_level()
-    logging.basicConfig(
-        level=level,
-        format="%(levelname)s %(name)s: %(message)s",
-    )
-    # httpx is noisy at DEBUG — keep it at WARNING unless explicitly targeted.
-    if level == logging.DEBUG:
+    # App loggers (markdown_vault_mcp.*) propagate to root; FastMCP
+    # loggers (fastmcp.*) have propagate=False and are configured via
+    # FASTMCP_LOG_LEVEL at import time.  -v overrides both to DEBUG.
+    level = logging.DEBUG if args.verbose else logging.INFO
+    root = logging.getLogger()
+    root.setLevel(level)
+    if not root.handlers:
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
+        root.addHandler(handler)
+
+    if args.verbose:
+        configure_logging("DEBUG")
+        # httpx is noisy at DEBUG — keep it at WARNING.
         logging.getLogger("httpx").setLevel(logging.WARNING)
         logging.getLogger("httpcore").setLevel(logging.WARNING)
 
-    handler = _COMMANDS[args.command]
+    cmd = _COMMANDS[args.command]
     try:
-        handler(args)
+        cmd(args)
     except ValueError as exc:
         logger.error("%s", exc)
         sys.exit(1)
