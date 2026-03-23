@@ -57,6 +57,7 @@ jobs:
     continue-on-error: ${{ matrix.experimental || false }}
     permissions:
       contents: read
+      pull-requests: read
       statuses: write
     strategy:
       fail-fast: false
@@ -97,35 +98,54 @@ jobs:
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
-      - name: Post codecov/patch status for non-Python PRs
+      - name: Fetch base branch for diff-cover
         if: matrix.python-version == '3.13' && github.event_name == 'pull_request'
+        run: git fetch origin ${{ github.base_ref }} --depth=50
+
+      - name: Check patch coverage
+        id: diffcover
+        if: matrix.python-version == '3.13' && github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          # Check if PR has Python source changes
+          HAS_PY=$(git diff --name-only "origin/${BASE_REF}...HEAD" | grep -c '\.py$' || true)
+          if [ "$HAS_PY" -eq 0 ]; then
+            echo "state=success" >> "$GITHUB_OUTPUT"
+            echo "description=Coverage not affected" >> "$GITHUB_OUTPUT"
+            echo "No Python source changes — skipping diff-cover"
+          else
+            OUTPUT=$(uv run diff-cover coverage.xml --compare-branch="origin/${BASE_REF}" --fail-under=80 2>&1) && RC=0 || RC=$?
+            echo "$OUTPUT"
+            TOTAL=$(echo "$OUTPUT" | grep -oP 'Total:\s+\K[\d.]+' || echo "0")
+            if [ "$RC" -eq 0 ]; then
+              echo "state=success" >> "$GITHUB_OUTPUT"
+              echo "description=Patch coverage: ${TOTAL}%" >> "$GITHUB_OUTPUT"
+            else
+              echo "state=failure" >> "$GITHUB_OUTPUT"
+              echo "description=Patch coverage: ${TOTAL}% (minimum 80%)" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+
+      - name: Post codecov/patch status
+        if: matrix.python-version == '3.13' && github.event_name == 'pull_request' && always()
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            const { data: files } = await github.rest.pulls.listFiles({
+            const state = '${{ steps.diffcover.outputs.state }}' || 'success';
+            const description = '${{ steps.diffcover.outputs.description }}' || 'Coverage not affected';
+            const headSha = context.payload.pull_request.head.sha;
+            core.info(`Posting codecov/patch: ${state} — ${description} to ${headSha}`);
+            await github.rest.repos.createCommitStatus({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              pull_number: context.payload.pull_request.number,
+              sha: headSha,
+              state: state,
+              context: 'codecov/patch',
+              description: description,
+              target_url: 'https://app.codecov.io/gh/pvliesdonk/markdown-vault-mcp',
             });
-            const hasPythonSourceChanges = files.some(
-              f => f.filename.endsWith('.py')
-            );
-            if (!hasPythonSourceChanges) {
-              const headSha = context.payload.pull_request.head.sha;
-              core.info(`No Python source changes — posting codecov/patch: success to ${headSha}`);
-              await github.rest.repos.createCommitStatus({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                sha: headSha,
-                state: 'success',
-                context: 'codecov/patch',
-                description: 'Coverage not affected',
-                target_url: 'https://app.codecov.io/gh/pvliesdonk/markdown-vault-mcp',
-              });
-            } else {
-              core.info('Python source changes detected — Codecov will post patch status');
-            }
 
   audit:
     name: Dependency Audit
