@@ -117,11 +117,13 @@ jobs:
             OUTPUT=$(uv run diff-cover coverage.xml --compare-branch="origin/${BASE_REF}" --fail-under=80 2>&1) && RC=0 || RC=$?
             echo "$OUTPUT"
             TOTAL=$(echo "$OUTPUT" | grep -oP 'Total:\s+\K[\d.]+' || true)
-            if [ -z "$TOTAL" ]; then
-              echo "WARNING: could not parse total from diff-cover output"
-              TOTAL="unknown"
-            fi
-            if [ "$RC" -eq 0 ]; then
+            if [ -z "$TOTAL" ] && [ "$RC" -ne 0 ]; then
+              echo "state=error" >> "$GITHUB_OUTPUT"
+              echo "description=diff-cover failed to compute patch coverage" >> "$GITHUB_OUTPUT"
+            elif [ -z "$TOTAL" ]; then
+              echo "state=success" >> "$GITHUB_OUTPUT"
+              echo "description=No coverable lines in diff" >> "$GITHUB_OUTPUT"
+            elif [ "$RC" -eq 0 ]; then
               echo "state=success" >> "$GITHUB_OUTPUT"
               echo "description=Patch coverage: ${TOTAL}%" >> "$GITHUB_OUTPUT"
             else
@@ -133,20 +135,23 @@ jobs:
       - name: Post codecov/patch status
         if: matrix.python-version == '3.13' && github.event_name == 'pull_request' && always()
         uses: actions/github-script@v7
+        env:
+          PATCH_STATE: ${{ steps.diffcover.outputs.state }}
+          PATCH_DESC: ${{ steps.diffcover.outputs.description }}
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            const state = '${{ steps.diffcover.outputs.state }}' || 'error';
-            const description = '${{ steps.diffcover.outputs.description }}' || 'diff-cover step did not run';
+            const state = process.env.PATCH_STATE || 'error';
+            const description = process.env.PATCH_DESC || 'diff-cover step did not run';
             const headSha = context.payload.pull_request.head.sha;
             core.info(`Posting codecov/patch: ${state} — ${description} to ${headSha}`);
             await github.rest.repos.createCommitStatus({
               owner: context.repo.owner,
               repo: context.repo.repo,
               sha: headSha,
-              state: state,
+              state,
               context: 'codecov/patch',
-              description: description,
+              description,
               target_url: 'https://app.codecov.io/gh/pvliesdonk/markdown-vault-mcp',
             });
 
