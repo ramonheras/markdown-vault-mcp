@@ -1,11 +1,31 @@
 # OIDC Authentication
 
-Optional token-based authentication for HTTP deployments. OIDC activates automatically when all four required environment variables are set. For an overview of all authentication modes (bearer token, OIDC, no auth), see the [Authentication guide](../guides/authentication.md).
+Optional token-based authentication for HTTP deployments. OIDC activates automatically based on which environment variables are set. For an overview of all authentication modes (bearer token, OIDC, no auth), see the [Authentication guide](../guides/authentication.md).
 
 !!! warning "Transport requirement"
     OIDC requires `--transport http` (or `sse`). It has no effect with `--transport stdio`.
 
-## Required Variables
+## Auth Modes
+
+| Mode | Required Variables | Description |
+|------|-------------------|-------------|
+| **remote** (recommended) | `BASE_URL`, `OIDC_CONFIG_URL` | Local JWKS validation. No client credentials needed. |
+| **oidc-proxy** | `BASE_URL`, `OIDC_CONFIG_URL`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` | Full OAuth proxy with session management. |
+
+Set `MARKDOWN_VAULT_MCP_AUTH_MODE` to force a mode, or let the server auto-detect based on which variables are set.
+
+## Remote Mode Variables
+
+| Variable | Description |
+|----------|-------------|
+| `MARKDOWN_VAULT_MCP_BASE_URL` | Public base URL of the server |
+| `MARKDOWN_VAULT_MCP_OIDC_CONFIG_URL` | OIDC discovery endpoint |
+
+Optional: `OIDC_AUDIENCE`, `OIDC_REQUIRED_SCOPES` (same as OIDCProxy mode).
+
+No `CLIENT_ID` or `CLIENT_SECRET` needed — tokens are validated locally via JWKS.
+
+## OIDCProxy Required Variables
 
 | Variable | Description |
 |----------|-------------|
@@ -39,6 +59,46 @@ openssl rand -hex 32
 
 !!! note
     Authelia does not support Dynamic Client Registration (RFC 7591). Clients must be registered manually in `configuration.yml`.
+
+!!! warning "Opaque vs JWT access tokens"
+    Authelia issues opaque (non-JWT) access tokens by default. **Remote mode requires JWT access tokens** — add `access_token_signed_response_alg: 'RS256'` to the Authelia client config. OIDCProxy mode works with opaque tokens (it verifies the `id_token` instead).
+
+### Remote mode (recommended)
+
+#### 1. Register the client in Authelia
+
+```yaml
+identity_providers:
+  oidc:
+    clients:
+      - client_id: markdown-vault-mcp
+        client_secret: '$pbkdf2-sha512$...'   # authelia crypto hash generate
+        redirect_uris:
+          - https://mcp.example.com/callback
+        grant_types: [authorization_code]
+        response_types: [code]
+        pkce_challenge_method: S256
+        scopes: [openid, profile, email]
+        access_token_signed_response_alg: 'RS256'
+        token_endpoint_auth_method: 'client_secret_post'
+```
+
+#### 2. Set environment variables
+
+```bash
+MARKDOWN_VAULT_MCP_BASE_URL=https://mcp.example.com
+MARKDOWN_VAULT_MCP_OIDC_CONFIG_URL=https://auth.example.com/.well-known/openid-configuration
+```
+
+Note: `CLIENT_ID` and `CLIENT_SECRET` are configured in Authelia only — they are not needed as MCP server env vars in remote mode.
+
+#### 3. Start with HTTP transport
+
+```bash
+markdown-vault-mcp serve --transport http --port 8000
+```
+
+### OIDCProxy mode (fallback)
 
 !!! note "Opaque access tokens"
     Authelia issues opaque (non-JWT) access tokens. This is handled automatically — the server verifies the `id_token` (always a standard JWT) instead. No extra configuration is needed.
@@ -80,6 +140,22 @@ markdown-vault-mcp serve --transport http --port 8000
 ```
 
 ## Architecture
+
+### Remote mode
+
+The server validates tokens locally using JWKS — no upstream token calls after startup:
+
+```
+Client → IdP (authenticate + get JWT)
+Client → markdown-vault-mcp (present JWT → validate via JWKS)
+```
+
+1. Client authenticates directly with the OIDC provider
+2. Client presents the JWT access token to the MCP server
+3. Server validates the token locally using the provider's JWKS keys
+4. No upstream calls — token refresh is between client and IdP
+
+### OIDCProxy mode
 
 The server uses FastMCP's built-in `OIDCProxy` auth provider (not the external `mcp-auth-proxy` sidecar). The authentication flow:
 

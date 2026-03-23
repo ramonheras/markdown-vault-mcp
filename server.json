@@ -173,6 +173,10 @@
           "isSecret": true
         },
         {
+          "name": "MARKDOWN_VAULT_MCP_AUTH_MODE",
+          "description": "OIDC auth mode: 'remote' (JWKS validation) or 'oidc-proxy' (OAuth proxy). Auto-detected if not set."
+        },
+        {
           "name": "MARKDOWN_VAULT_MCP_BASE_URL",
           "description": "Public base URL of this server (required for OIDC)"
         },
@@ -392,6 +396,10 @@
           "name": "MARKDOWN_VAULT_MCP_BEARER_TOKEN",
           "description": "Bearer token for authentication",
           "isSecret": true
+        },
+        {
+          "name": "MARKDOWN_VAULT_MCP_AUTH_MODE",
+          "description": "OIDC auth mode: 'remote' (JWKS validation) or 'oidc-proxy' (OAuth proxy). Auto-detected if not set."
         },
         {
           "name": "MARKDOWN_VAULT_MCP_BASE_URL",
