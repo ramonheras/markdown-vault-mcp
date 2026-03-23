@@ -9,7 +9,7 @@ silent divergence.
 | Area | markdown-vault-mcp | image-generation-mcp | Notes |
 |------|-------------------|----------------------|-------|
 | **Auth: bearer** | `mcp_server.py:_build_bearer_auth()` | `mcp_server.py:_build_bearer_auth()` | Identical (env prefix differs) |
-| **Auth: remote** | `mcp_server.py:_build_remote_auth()` | `mcp_server.py:_build_remote_auth()` | MV has httpx ImportError guard; IG catches specific exceptions |
+| **Auth: remote** | `mcp_server.py:_build_remote_auth()` | `mcp_server.py:_build_remote_auth()` | MV guards missing httpx with ImportError; IG does bare import (crashes if absent) |
 | **Auth: oidc-proxy** | `mcp_server.py:_build_oidc_auth()` | `mcp_server.py:_build_oidc_auth()` | Identical (env prefix differs) |
 | **Auth: mode detect** | `mcp_server.py:_resolve_auth_mode()` | `mcp_server.py:_resolve_auth_mode()` | MV logs on explicit+auto-detect; IG logs only warning |
 | **Auth: multi-auth** | `mcp_server.py:create_server()` | `mcp_server.py:create_server()` | Both use `MultiAuth(…, required_scopes=[])` |
