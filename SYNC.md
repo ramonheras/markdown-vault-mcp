@@ -101,9 +101,7 @@ Completed ports, newest first.
 
 ## Pending Ports
 
-| Direction | What | Source | Priority | Notes |
-|-----------|------|--------|----------|-------|
-| MV → IG | Per-package server.json format | MV#243 | Medium | IG still uses legacy root-level format |
-| MV → IG | httpx ImportError guard in `_build_remote_auth()` | MV#268 | Low | Prevents crash when httpx not installed |
-| IG → MV | Versionless `_latest.deb`/`_latest.rpm` copies | IG release.yml | Low | Stable download URLs |
-| IG → MV | "No coverable lines" explicit diff-cover case | IG#102 ci.yml | Low | Cleaner than TOTAL="unknown" fallthrough |
+All known pending ports have been filed as issues:
+
+- **MV → IG**: [image-generation-mcp#110](https://github.com/pvliesdonk/image-generation-mcp/issues/110) — server.json, httpx guard, auth logging, CI diff-cover, release job deps
+- **IG → MV**: [markdown-vault-mcp#270](https://github.com/pvliesdonk/markdown-vault-mcp/issues/270) — diff-cover cleanup, versionless package copies
