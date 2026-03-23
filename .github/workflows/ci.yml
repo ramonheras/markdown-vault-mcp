@@ -117,7 +117,7 @@ jobs:
             OUTPUT=$(uv run diff-cover coverage.xml --compare-branch="origin/${BASE_REF}" --fail-under=80 2>&1) && RC=0 || RC=$?
             echo "$OUTPUT"
             TOTAL=$(echo "$OUTPUT" | grep -oP 'Total:\s+\K[\d.]+' || true)
-            if [ -z "$TOTAL" ] && [ "$RC" != "0" ]; then
+            if [ -z "$TOTAL" ] && [ "$RC" -ne 0 ]; then
               echo "state=error" >> "$GITHUB_OUTPUT"
               echo "description=diff-cover failed to compute patch coverage" >> "$GITHUB_OUTPUT"
             elif [ -z "$TOTAL" ]; then
