@@ -57,7 +57,6 @@ jobs:
     continue-on-error: ${{ matrix.experimental || false }}
     permissions:
       contents: read
-      pull-requests: read
       statuses: write
     strategy:
       fail-fast: false
@@ -117,7 +116,11 @@ jobs:
           else
             OUTPUT=$(uv run diff-cover coverage.xml --compare-branch="origin/${BASE_REF}" --fail-under=80 2>&1) && RC=0 || RC=$?
             echo "$OUTPUT"
-            TOTAL=$(echo "$OUTPUT" | grep -oP 'Total:\s+\K[\d.]+' || echo "0")
+            TOTAL=$(echo "$OUTPUT" | grep -oP 'Total:\s+\K[\d.]+' || true)
+            if [ -z "$TOTAL" ]; then
+              echo "WARNING: could not parse total from diff-cover output"
+              TOTAL="unknown"
+            fi
             if [ "$RC" -eq 0 ]; then
               echo "state=success" >> "$GITHUB_OUTPUT"
               echo "description=Patch coverage: ${TOTAL}%" >> "$GITHUB_OUTPUT"
@@ -133,8 +136,8 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            const state = '${{ steps.diffcover.outputs.state }}' || 'success';
-            const description = '${{ steps.diffcover.outputs.description }}' || 'Coverage not affected';
+            const state = '${{ steps.diffcover.outputs.state }}' || 'error';
+            const description = '${{ steps.diffcover.outputs.description }}' || 'diff-cover step did not run';
             const headSha = context.payload.pull_request.head.sha;
             core.info(`Posting codecov/patch: ${state} — ${description} to ${headSha}`);
             await github.rest.repos.createCommitStatus({
