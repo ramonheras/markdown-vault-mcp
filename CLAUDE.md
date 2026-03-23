@@ -48,6 +48,12 @@ Every issue, PR, and code change must consider documentation impact. Before clos
 
 When writing issues, include a "Documentation" section listing which docs need updating. When reviewing PRs, verify documentation is included — code without matching docs is incomplete.
 
+## Cross-Repo Sync
+
+This repo shares domain-independent infrastructure with [`pvliesdonk/image-generation-mcp`](https://github.com/pvliesdonk/image-generation-mcp). See [`SYNC.md`](SYNC.md) for the shared file mapping, known divergences, and port history.
+
+**Rule:** When fixing or improving shared infrastructure (auth, CI/CD, Docker entrypoint, release pipeline, packaging, CLI logging), create a corresponding issue in the other repo to port the change. Reference the source PR in the issue body. Domain-specific code (vault logic, image generation, tools, resources) does not need cross-posting.
+
 ## Key Design Decisions
 
 - Document identity: relative path with `.md` extension
