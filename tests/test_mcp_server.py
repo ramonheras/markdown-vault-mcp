@@ -2750,6 +2750,21 @@ class TestResolveAuthMode:
         monkeypatch.setenv("MARKDOWN_VAULT_MCP_AUTH_MODE", "invalid")
         assert _resolve_auth_mode() is None
 
+    def test_invalid_mode_warns_and_falls_through(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Invalid AUTH_MODE with auto-detect vars logs warning, falls to remote."""
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_AUTH_MODE", "typo")
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_BASE_URL", "https://mcp.example.com")
+        monkeypatch.setenv(
+            "MARKDOWN_VAULT_MCP_OIDC_CONFIG_URL",
+            "https://auth.example.com/.well-known/openid-configuration",
+        )
+        with caplog.at_level(logging.WARNING):
+            result = _resolve_auth_mode()
+        assert result == "remote"
+        assert "Unknown AUTH_MODE 'typo'" in caplog.text
+
     def test_only_base_url_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """BASE_URL alone is not enough for any OIDC mode."""
         monkeypatch.setenv("MARKDOWN_VAULT_MCP_BASE_URL", "https://mcp.example.com")
@@ -2821,6 +2836,25 @@ class TestBuildRemoteAuth:
         )
         with patch("httpx.get", side_effect=Exception("connection failed")):
             assert _build_remote_auth() is None
+
+    def test_httpx_import_error_returns_none(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Missing httpx gives a clear error, not a confusing discovery message."""
+        import sys
+        from unittest.mock import patch
+
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_BASE_URL", "https://mcp.example.com")
+        monkeypatch.setenv(
+            "MARKDOWN_VAULT_MCP_OIDC_CONFIG_URL",
+            "https://auth.example.com/.well-known/openid-configuration",
+        )
+        with (
+            patch.dict(sys.modules, {"httpx": None}),
+            caplog.at_level(logging.ERROR),
+        ):
+            assert _build_remote_auth() is None
+        assert "'httpx' is not installed" in caplog.text
 
     def test_happy_path_returns_non_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from unittest.mock import MagicMock, patch

@@ -85,6 +85,11 @@ def _resolve_auth_mode() -> str | None:
     if explicit in ("remote", "oidc-proxy"):
         logger.info("OIDC auth mode: %s (explicit via AUTH_MODE)", explicit)
         return explicit
+    if explicit:
+        logger.warning(
+            "Unknown AUTH_MODE %r — ignoring, falling back to auto-detection",
+            explicit,
+        )
 
     base_url = os.environ.get(f"{_ENV_PREFIX}_BASE_URL", "").strip()
     config_url = os.environ.get(f"{_ENV_PREFIX}_OIDC_CONFIG_URL", "").strip()
@@ -133,7 +138,15 @@ def _build_remote_auth() -> Any:
 
     try:
         import httpx
+    except ImportError:
+        logger.error(
+            "Remote auth: 'httpx' is not installed. "
+            "Install it with: pip install 'markdown-vault-mcp[all]' "
+            "or pip install httpx"
+        )
+        return None
 
+    try:
         resp = httpx.get(config_url, timeout=10)
         resp.raise_for_status()
         discovery = resp.json()
@@ -370,6 +383,9 @@ def create_server(transport: str = "stdio") -> FastMCP:
     if bearer_auth and oidc_auth:
         from fastmcp.server.auth import MultiAuth
 
+        # Override required_scopes to empty — OIDC's required_scopes
+        # (e.g. ["openid"]) would otherwise propagate to the HTTP
+        # middleware and reject bearer tokens that lack "openid".
         auth = MultiAuth(server=oidc_auth, verifiers=[bearer_auth], required_scopes=[])
         auth_mode = f"multi({oidc_mode}+bearer)"
         logger.info(
