@@ -7,13 +7,14 @@ This guide covers how to protect your markdown-vault-mcp server with authenticat
 
 ## Auth modes
 
-The server supports four authentication modes:
+The server supports five authentication modes:
 
 | Mode | When to use | Configuration |
 |------|-------------|---------------|
-| **Multi-auth** | Mixed clients — e.g. Claude web (OIDC) + Claude Code (bearer token) on the same server | Set both `MARKDOWN_VAULT_MCP_BEARER_TOKEN` and all four OIDC variables |
+| **Multi-auth** | Mixed clients — e.g. Claude web (OIDC) + Claude Code (bearer token) on the same server | Set both `MARKDOWN_VAULT_MCP_BEARER_TOKEN` and OIDC variables |
 | **Bearer token** | Simple deployments behind a VPN, Docker compose stacks, development | Set `MARKDOWN_VAULT_MCP_BEARER_TOKEN` only |
-| **OIDC** | Production with user identity, SSO, multi-user access | Set all four OIDC variables only |
+| **OIDC (remote)** | Production — recommended over oidc-proxy. Local JWKS validation, no token re-validation | Set `MARKDOWN_VAULT_MCP_BASE_URL` + `MARKDOWN_VAULT_MCP_OIDC_CONFIG_URL` only |
+| **OIDC (oidc-proxy)** | Production with user identity, SSO, multi-user access; backward-compatible mode | Set all four OIDC variables (`BASE_URL`, `OIDC_CONFIG_URL`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`) |
 | **No auth** | Local stdio usage, trusted networks | Default (nothing to configure) |
 
 When both bearer token and OIDC are configured, the server accepts **either** credential — a valid bearer token or a valid OIDC session. This is useful when different clients require different authentication flows against the same vault instance.
@@ -67,7 +68,33 @@ See also: [`examples/bearer-auth.env`](https://github.com/pvliesdonk/markdown-va
 
 Full OAuth 2.1 authentication using an external identity provider. Supports user login flows, SSO, and multi-user access control.
 
-### How it works
+### OIDC mode selection
+
+The server supports two OIDC modes:
+
+| Mode | How it works | When to use |
+|------|-------------|-------------|
+| **remote** (recommended) | Validates tokens locally via JWKS. No client credentials needed. Token refresh happens between client and IdP directly. | Most deployments. Avoids the OIDCProxy double-validation session timeout. |
+| **oidc-proxy** | Acts as an OAuth proxy — exchanges codes for tokens, stores sessions, re-validates upstream tokens on every request. | When your provider requires Dynamic Client Registration (DCR) emulation or you need the proxy's session management. |
+
+Set `MARKDOWN_VAULT_MCP_AUTH_MODE` to force a mode, or let the server auto-detect:
+
+- All four OIDC vars set (`BASE_URL`, `OIDC_CONFIG_URL`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`) → **oidc-proxy** (backward compatible)
+- Only `BASE_URL` + `OIDC_CONFIG_URL` set → **remote**
+
+!!! tip "Migrating from oidc-proxy to remote"
+    Remove `OIDC_CLIENT_ID` and `OIDC_CLIENT_SECRET` from your env. The server will auto-detect remote mode. Or set `AUTH_MODE=remote` explicitly.
+
+### How it works (remote mode)
+
+The server validates tokens locally using JWKS — no upstream token calls after startup:
+
+```
+Client → IdP (authenticate + get JWT)
+Client → markdown-vault-mcp (present JWT → validate via JWKS)
+```
+
+### How it works (oidc-proxy mode)
 
 The server uses FastMCP's built-in `OIDCProxy` — no external auth sidecar needed:
 
@@ -87,19 +114,20 @@ Client → markdown-vault-mcp (OIDCProxy) → OIDC Provider
 |----------|-------------|
 | `MARKDOWN_VAULT_MCP_BASE_URL` | Public base URL (e.g. `https://mcp.example.com`). Also required for `create_download_link`. |
 | `MARKDOWN_VAULT_MCP_OIDC_CONFIG_URL` | OIDC discovery endpoint |
-| `MARKDOWN_VAULT_MCP_OIDC_CLIENT_ID` | Client ID registered with your provider |
-| `MARKDOWN_VAULT_MCP_OIDC_CLIENT_SECRET` | Client secret |
+| `MARKDOWN_VAULT_MCP_OIDC_CLIENT_ID` | Client ID registered with your provider (oidc-proxy mode only) |
+| `MARKDOWN_VAULT_MCP_OIDC_CLIENT_SECRET` | Client secret (oidc-proxy mode only) |
 
 ### Optional variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `MARKDOWN_VAULT_MCP_OIDC_JWT_SIGNING_KEY` | ephemeral | JWT signing key — **required on Linux/Docker** |
+| `MARKDOWN_VAULT_MCP_AUTH_MODE` | auto-detected | Force OIDC mode: `remote` or `oidc-proxy` |
+| `MARKDOWN_VAULT_MCP_OIDC_JWT_SIGNING_KEY` | ephemeral | JWT signing key — **required on Linux/Docker** (oidc-proxy mode only) |
 | `MARKDOWN_VAULT_MCP_OIDC_AUDIENCE` | — | Expected JWT audience claim; leave unset if your provider does not set one |
 | `MARKDOWN_VAULT_MCP_OIDC_REQUIRED_SCOPES` | `openid` | Comma-separated required scopes |
-| `MARKDOWN_VAULT_MCP_OIDC_VERIFY_ACCESS_TOKEN` | `false` | Set `true` to verify the access token as a JWT instead of the id token; useful for audience-claim validation on JWT access tokens |
+| `MARKDOWN_VAULT_MCP_OIDC_VERIFY_ACCESS_TOKEN` | `false` | Set `true` to verify the access token as a JWT instead of the id token; useful for audience-claim validation on JWT access tokens (oidc-proxy mode only) |
 
-!!! danger "JWT signing key on Linux/Docker"
+!!! danger "JWT signing key on Linux/Docker (oidc-proxy mode)"
     Without `OIDC_JWT_SIGNING_KEY`, FastMCP generates an ephemeral key that invalidates all tokens on restart. Always set a stable key in production:
 
     ```bash
@@ -209,9 +237,11 @@ The server-side refresh architecture (FastMCP's `OAuthProxy.exchange_refresh_tok
 
 ### What works today
 
+**Remote auth mode** (`AUTH_MODE=remote` or auto-detected) avoids the double-validation problem entirely. The server validates tokens locally via JWKS — it never stores or re-validates upstream tokens. This is the recommended mode for new deployments.
+
 **Bearer token auth** is unaffected by all of the above. If your deployment allows it (e.g., Claude Code with env vars, or API clients), bearer tokens are the simplest and most reliable option.
 
-**Long token lifetimes** are the only viable workaround for OIDC. Set all three lifetimes (access, id, refresh) to cover your typical session duration:
+**Long token lifetimes** are the only viable workaround for OIDC in oidc-proxy mode. Set all three lifetimes (access, id, refresh) to cover your typical session duration:
 
 - `access_token: '8h'` — covers a workday
 - `id_token: '8h'` — **must match access_token** when using `verify_id_token` mode (critical for Authelia)

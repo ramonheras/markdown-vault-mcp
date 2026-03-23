@@ -18,6 +18,8 @@ from mcp.shared.exceptions import McpError
 from markdown_vault_mcp.mcp_server import (
     _build_bearer_auth,
     _build_oidc_auth,
+    _build_remote_auth,
+    _resolve_auth_mode,
     create_server,
 )
 
@@ -54,6 +56,7 @@ _CLEAR_VARS = (
     "MARKDOWN_VAULT_MCP_INSTRUCTIONS",
     # Auth vars — ensure non-auth tests run unauthenticated
     "MARKDOWN_VAULT_MCP_BEARER_TOKEN",
+    "MARKDOWN_VAULT_MCP_AUTH_MODE",
     "MARKDOWN_VAULT_MCP_BASE_URL",
     "MARKDOWN_VAULT_MCP_OIDC_CONFIG_URL",
     "MARKDOWN_VAULT_MCP_OIDC_CLIENT_ID",
@@ -648,6 +651,7 @@ class TestMCPExcludePatterns:
 # ---------------------------------------------------------------------------
 
 _OIDC_VARS = (
+    "MARKDOWN_VAULT_MCP_AUTH_MODE",
     "MARKDOWN_VAULT_MCP_BASE_URL",
     "MARKDOWN_VAULT_MCP_OIDC_CONFIG_URL",
     "MARKDOWN_VAULT_MCP_OIDC_CLIENT_ID",
@@ -2683,3 +2687,345 @@ class TestAuthDebugLogging:
         with caplog.at_level(logging.INFO):
             create_server()
         assert "version=unknown" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# _resolve_auth_mode() — OIDC mode detection
+# ---------------------------------------------------------------------------
+
+_RESOLVE_AUTH_VARS = (
+    "MARKDOWN_VAULT_MCP_AUTH_MODE",
+    "MARKDOWN_VAULT_MCP_BASE_URL",
+    "MARKDOWN_VAULT_MCP_OIDC_CONFIG_URL",
+    "MARKDOWN_VAULT_MCP_OIDC_CLIENT_ID",
+    "MARKDOWN_VAULT_MCP_OIDC_CLIENT_SECRET",
+)
+
+
+class TestResolveAuthMode:
+    """Tests for _resolve_auth_mode()."""
+
+    @pytest.fixture(autouse=True)
+    def _clear_auth_mode_vars(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Ensure all relevant env vars are absent before each test."""
+        for var in _RESOLVE_AUTH_VARS:
+            monkeypatch.delenv(var, raising=False)
+
+    def test_explicit_remote(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_AUTH_MODE", "remote")
+        assert _resolve_auth_mode() == "remote"
+
+    def test_explicit_oidc_proxy(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_AUTH_MODE", "oidc-proxy")
+        assert _resolve_auth_mode() == "oidc-proxy"
+
+    def test_explicit_case_insensitive(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_AUTH_MODE", "REMOTE")
+        assert _resolve_auth_mode() == "remote"
+
+    def test_auto_detect_oidc_proxy(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """All four OIDC vars set → oidc-proxy."""
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_BASE_URL", "https://mcp.example.com")
+        monkeypatch.setenv(
+            "MARKDOWN_VAULT_MCP_OIDC_CONFIG_URL",
+            "https://auth.example.com/.well-known/openid-configuration",
+        )
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_OIDC_CLIENT_ID", "test-client")
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_OIDC_CLIENT_SECRET", "test-secret")
+        assert _resolve_auth_mode() == "oidc-proxy"
+
+    def test_auto_detect_remote(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Only BASE_URL + CONFIG_URL → remote."""
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_BASE_URL", "https://mcp.example.com")
+        monkeypatch.setenv(
+            "MARKDOWN_VAULT_MCP_OIDC_CONFIG_URL",
+            "https://auth.example.com/.well-known/openid-configuration",
+        )
+        assert _resolve_auth_mode() == "remote"
+
+    def test_no_vars_returns_none(self) -> None:
+        assert _resolve_auth_mode() is None
+
+    def test_invalid_mode_ignored(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_AUTH_MODE", "invalid")
+        assert _resolve_auth_mode() is None
+
+    def test_only_base_url_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """BASE_URL alone is not enough for any OIDC mode."""
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_BASE_URL", "https://mcp.example.com")
+        assert _resolve_auth_mode() is None
+
+    def test_explicit_overrides_auto_detection(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """AUTH_MODE=remote forces remote even when all four vars are set."""
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_AUTH_MODE", "remote")
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_BASE_URL", "https://mcp.example.com")
+        monkeypatch.setenv(
+            "MARKDOWN_VAULT_MCP_OIDC_CONFIG_URL",
+            "https://auth.example.com/.well-known/openid-configuration",
+        )
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_OIDC_CLIENT_ID", "test-client")
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_OIDC_CLIENT_SECRET", "test-secret")
+        assert _resolve_auth_mode() == "remote"
+
+
+# ---------------------------------------------------------------------------
+# _build_remote_auth() — RemoteAuthProvider construction
+# ---------------------------------------------------------------------------
+
+_REMOTE_AUTH_VARS = (
+    "MARKDOWN_VAULT_MCP_BASE_URL",
+    "MARKDOWN_VAULT_MCP_OIDC_CONFIG_URL",
+    "MARKDOWN_VAULT_MCP_OIDC_AUDIENCE",
+    "MARKDOWN_VAULT_MCP_OIDC_REQUIRED_SCOPES",
+)
+
+
+class TestBuildRemoteAuth:
+    """Tests for _build_remote_auth()."""
+
+    @pytest.fixture(autouse=True)
+    def _clear_remote_auth_vars(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Ensure relevant env vars are absent before each test."""
+        for var in _REMOTE_AUTH_VARS:
+            monkeypatch.delenv(var, raising=False)
+
+    def test_missing_env_vars_returns_none(self) -> None:
+        assert _build_remote_auth() is None
+
+    def test_missing_config_url_returns_none(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_BASE_URL", "https://mcp.example.com")
+        assert _build_remote_auth() is None
+
+    def test_missing_base_url_returns_none(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv(
+            "MARKDOWN_VAULT_MCP_OIDC_CONFIG_URL",
+            "https://auth.example.com/.well-known/openid-configuration",
+        )
+        assert _build_remote_auth() is None
+
+    def test_discovery_fetch_failure_returns_none(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from unittest.mock import patch
+
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_BASE_URL", "https://mcp.example.com")
+        monkeypatch.setenv(
+            "MARKDOWN_VAULT_MCP_OIDC_CONFIG_URL",
+            "https://auth.example.com/.well-known/openid-configuration",
+        )
+        with patch("httpx.get", side_effect=Exception("connection failed")):
+            assert _build_remote_auth() is None
+
+    def test_happy_path_returns_non_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from unittest.mock import MagicMock, patch
+
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_BASE_URL", "https://mcp.example.com")
+        monkeypatch.setenv(
+            "MARKDOWN_VAULT_MCP_OIDC_CONFIG_URL",
+            "https://auth.example.com/.well-known/openid-configuration",
+        )
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {
+            "jwks_uri": "https://auth.example.com/.well-known/jwks.json",
+            "issuer": "https://auth.example.com",
+        }
+        mock_resp.raise_for_status = MagicMock()
+        with patch("httpx.get", return_value=mock_resp):
+            result = _build_remote_auth()
+        assert result is not None
+
+    def test_missing_jwks_uri_returns_none(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from unittest.mock import MagicMock, patch
+
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_BASE_URL", "https://mcp.example.com")
+        monkeypatch.setenv(
+            "MARKDOWN_VAULT_MCP_OIDC_CONFIG_URL",
+            "https://auth.example.com/.well-known/openid-configuration",
+        )
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"issuer": "https://auth.example.com"}
+        mock_resp.raise_for_status = MagicMock()
+        with patch("httpx.get", return_value=mock_resp):
+            assert _build_remote_auth() is None
+
+    def test_missing_issuer_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from unittest.mock import MagicMock, patch
+
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_BASE_URL", "https://mcp.example.com")
+        monkeypatch.setenv(
+            "MARKDOWN_VAULT_MCP_OIDC_CONFIG_URL",
+            "https://auth.example.com/.well-known/openid-configuration",
+        )
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {
+            "jwks_uri": "https://auth.example.com/.well-known/jwks.json"
+        }
+        mock_resp.raise_for_status = MagicMock()
+        with patch("httpx.get", return_value=mock_resp):
+            assert _build_remote_auth() is None
+
+    def test_audience_forwarded_when_set(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from unittest.mock import MagicMock, patch
+
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_BASE_URL", "https://mcp.example.com")
+        monkeypatch.setenv(
+            "MARKDOWN_VAULT_MCP_OIDC_CONFIG_URL",
+            "https://auth.example.com/.well-known/openid-configuration",
+        )
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_OIDC_AUDIENCE", "my-api")
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {
+            "jwks_uri": "https://auth.example.com/.well-known/jwks.json",
+            "issuer": "https://auth.example.com",
+        }
+        mock_resp.raise_for_status = MagicMock()
+
+        mock_jwt_verifier = MagicMock()
+        mock_verifier_cls = MagicMock(return_value=mock_jwt_verifier)
+        mock_remote_cls = MagicMock()
+
+        with (
+            patch("httpx.get", return_value=mock_resp),
+            patch("fastmcp.server.auth.JWTVerifier", mock_verifier_cls),
+            patch("fastmcp.server.auth.RemoteAuthProvider", mock_remote_cls),
+        ):
+            _build_remote_auth()
+
+        kw = mock_verifier_cls.call_args.kwargs
+        assert kw["audience"] == "my-api"
+
+    def test_audience_is_none_when_not_set(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from unittest.mock import MagicMock, patch
+
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_BASE_URL", "https://mcp.example.com")
+        monkeypatch.setenv(
+            "MARKDOWN_VAULT_MCP_OIDC_CONFIG_URL",
+            "https://auth.example.com/.well-known/openid-configuration",
+        )
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {
+            "jwks_uri": "https://auth.example.com/.well-known/jwks.json",
+            "issuer": "https://auth.example.com",
+        }
+        mock_resp.raise_for_status = MagicMock()
+
+        mock_jwt_verifier = MagicMock()
+        mock_verifier_cls = MagicMock(return_value=mock_jwt_verifier)
+        mock_remote_cls = MagicMock()
+
+        with (
+            patch("httpx.get", return_value=mock_resp),
+            patch("fastmcp.server.auth.JWTVerifier", mock_verifier_cls),
+            patch("fastmcp.server.auth.RemoteAuthProvider", mock_remote_cls),
+        ):
+            _build_remote_auth()
+
+        kw = mock_verifier_cls.call_args.kwargs
+        assert kw["audience"] is None
+
+    def test_required_scopes_parsed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from unittest.mock import MagicMock, patch
+
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_BASE_URL", "https://mcp.example.com")
+        monkeypatch.setenv(
+            "MARKDOWN_VAULT_MCP_OIDC_CONFIG_URL",
+            "https://auth.example.com/.well-known/openid-configuration",
+        )
+        monkeypatch.setenv(
+            "MARKDOWN_VAULT_MCP_OIDC_REQUIRED_SCOPES", "openid, profile, email"
+        )
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {
+            "jwks_uri": "https://auth.example.com/.well-known/jwks.json",
+            "issuer": "https://auth.example.com",
+        }
+        mock_resp.raise_for_status = MagicMock()
+
+        mock_jwt_verifier = MagicMock()
+        mock_verifier_cls = MagicMock(return_value=mock_jwt_verifier)
+        mock_remote_cls = MagicMock()
+
+        with (
+            patch("httpx.get", return_value=mock_resp),
+            patch("fastmcp.server.auth.JWTVerifier", mock_verifier_cls),
+            patch("fastmcp.server.auth.RemoteAuthProvider", mock_remote_cls),
+        ):
+            _build_remote_auth()
+
+        kw = mock_verifier_cls.call_args.kwargs
+        assert kw["required_scopes"] == ["openid", "profile", "email"]
+
+    def test_empty_required_scopes_results_in_none(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Empty REQUIRED_SCOPES results in None (no scope enforcement)."""
+        from unittest.mock import MagicMock, patch
+
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_BASE_URL", "https://mcp.example.com")
+        monkeypatch.setenv(
+            "MARKDOWN_VAULT_MCP_OIDC_CONFIG_URL",
+            "https://auth.example.com/.well-known/openid-configuration",
+        )
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_OIDC_REQUIRED_SCOPES", "")
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {
+            "jwks_uri": "https://auth.example.com/.well-known/jwks.json",
+            "issuer": "https://auth.example.com",
+        }
+        mock_resp.raise_for_status = MagicMock()
+
+        mock_jwt_verifier = MagicMock()
+        mock_verifier_cls = MagicMock(return_value=mock_jwt_verifier)
+        mock_remote_cls = MagicMock()
+
+        with (
+            patch("httpx.get", return_value=mock_resp),
+            patch("fastmcp.server.auth.JWTVerifier", mock_verifier_cls),
+            patch("fastmcp.server.auth.RemoteAuthProvider", mock_remote_cls),
+        ):
+            _build_remote_auth()
+
+        kw = mock_verifier_cls.call_args.kwargs
+        assert kw["required_scopes"] is None
+
+    def test_debug_logging_on_success(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        from unittest.mock import MagicMock, patch
+
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_BASE_URL", "https://mcp.example.com")
+        monkeypatch.setenv(
+            "MARKDOWN_VAULT_MCP_OIDC_CONFIG_URL",
+            "https://auth.example.com/.well-known/openid-configuration",
+        )
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {
+            "jwks_uri": "https://auth.example.com/.well-known/jwks.json",
+            "issuer": "https://auth.example.com",
+        }
+        mock_resp.raise_for_status = MagicMock()
+
+        mock_jwt_verifier = MagicMock()
+        mock_verifier_cls = MagicMock(return_value=mock_jwt_verifier)
+        mock_remote_cls = MagicMock()
+
+        with (
+            patch("httpx.get", return_value=mock_resp),
+            patch("fastmcp.server.auth.JWTVerifier", mock_verifier_cls),
+            patch("fastmcp.server.auth.RemoteAuthProvider", mock_remote_cls),
+            caplog.at_level(logging.DEBUG),
+        ):
+            _build_remote_auth()
+
+        assert "Remote auth config:" in caplog.text
+        assert "jwks_uri" in caplog.text
