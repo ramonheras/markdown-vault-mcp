@@ -335,6 +335,8 @@ _SPA_SHELL_HTML = """\
         <div class="context-title-row">
           <h2 id="ctx-title"></h2>
           <div class="context-actions">
+            <button class="action-btn" id="ctx-graph-btn" title="Show in Graph" style="background:var(--host-surface,var(--fallback-surface));color:var(--host-fg,var(--fallback-fg));border:1px solid var(--host-border,var(--fallback-border));">&#x1F517; Graph</button>
+            <button class="action-btn" id="ctx-browse-btn" title="Open in Browser" style="background:var(--host-surface,var(--fallback-surface));color:var(--host-fg,var(--fallback-fg));border:1px solid var(--host-border,var(--fallback-border));">&#x1F4C4; Browse</button>
             <button class="action-btn" id="ctx-send-btn" title="Send to Claude">&#x1F4AC; Send</button>
           </div>
         </div>
@@ -657,6 +659,16 @@ app.onDisplayModeChanged((mode) => {
     if (item) loadContext(item.dataset.path);
   });
 
+  // Show in Graph
+  document.getElementById('ctx-graph-btn').addEventListener('click', () => {
+    if (currentContextPath) window.navigateTo('graph', { path: currentContextPath });
+  });
+
+  // Open in Browser
+  document.getElementById('ctx-browse-btn').addEventListener('click', () => {
+    if (currentContextPath) window.navigateTo('browse', { path: currentContextPath });
+  });
+
   // Send to Claude
   document.getElementById('ctx-send-btn').addEventListener('click', () => {
     if (!currentContextData) return;
@@ -910,6 +922,12 @@ app.onDisplayModeChanged((mode) => {
 
   window.loadGraph = loadGraph;
 })();
+
+// ── Cross-view navigation wiring (#277) ──────────────────────────────────
+// Graph double-click → Context Card
+window.addEventListener('vault-graph-dblclick', (e) => {
+  if (e.detail.path) window.navigateTo('context', { path: e.detail.path });
+});
 
 // ── Vault Browser View ──────────────────────────────────────────────────
 (function() {
