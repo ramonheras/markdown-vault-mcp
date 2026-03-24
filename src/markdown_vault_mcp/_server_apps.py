@@ -11,6 +11,7 @@ instance in :func:`~markdown_vault_mcp.mcp_server.create_server`.
 from __future__ import annotations
 
 import asyncio
+import collections
 import hashlib
 import logging
 import os
@@ -489,11 +490,14 @@ def register_apps(mcp: FastMCP) -> None:
         Returns:
             NoteContext as a JSON-serializable dict.
         """
-        ctx = await asyncio.to_thread(collection.get_context, path)
+        try:
+            ctx = await asyncio.to_thread(collection.get_context, path)
+        except ValueError:
+            return {"error": f"Note not found: {path}"}
         return asdict(ctx)
 
     @mcp.tool(
-        icons=_TOOL_ICONS["get_context"],
+        icons=_TOOL_ICONS["show_context"],
         annotations={
             "readOnlyHint": True,
             "destructiveHint": False,
@@ -519,7 +523,14 @@ def register_apps(mcp: FastMCP) -> None:
             - ``view``: ``"context"``
             - ``summary``: text summary with relationship counts
         """
-        ctx = await asyncio.to_thread(collection.get_context, path)
+        try:
+            ctx = await asyncio.to_thread(collection.get_context, path)
+        except ValueError:
+            return {
+                "path": path,
+                "view": "context",
+                "summary": f"Note not found: {path}",
+            }
         summary_parts = [
             f"Context for: {ctx.title} ({path})",
             f"Folder: {ctx.folder}",
@@ -567,10 +578,10 @@ def register_apps(mcp: FastMCP) -> None:
         nodes: dict[str, dict[str, Any]] = {}
         edges: list[dict[str, Any]] = []
         visited: set[str] = set()
-        queue: list[tuple[str, int]] = [(path, 0)]
+        queue: collections.deque[tuple[str, int]] = collections.deque([(path, 0)])
 
         while queue:
-            current, d = queue.pop(0)
+            current, d = queue.popleft()
             if current in visited:
                 continue
             visited.add(current)
@@ -650,6 +661,7 @@ def register_apps(mcp: FastMCP) -> None:
         hubs = await asyncio.to_thread(collection.get_most_linked, limit=limit)
         nodes: dict[str, dict[str, Any]] = {}
         edges: list[dict[str, Any]] = []
+        seen_edges: set[tuple[str, str]] = set()
 
         for hub in hubs:
             nodes[hub.path] = {
@@ -674,13 +686,16 @@ def register_apps(mcp: FastMCP) -> None:
                         "label": label,
                         "group": "note",
                     }
-                edges.append(
-                    {
-                        "from": bl.source_path,
-                        "to": hub.path,
-                        "type": bl.link_type,
-                    }
-                )
+                edge_key = (bl.source_path, hub.path)
+                if edge_key not in seen_edges:
+                    seen_edges.add(edge_key)
+                    edges.append(
+                        {
+                            "from": bl.source_path,
+                            "to": hub.path,
+                            "type": bl.link_type,
+                        }
+                    )
 
         return {"nodes": list(nodes.values()), "edges": edges}
 
@@ -797,9 +812,12 @@ def register_apps(mcp: FastMCP) -> None:
         Returns:
             List of ``{path, title, snippet, score}``.
         """
-        results = await asyncio.to_thread(
-            collection.search, query, limit=limit, mode=mode
-        )
+        try:
+            results = await asyncio.to_thread(
+                collection.search, query, limit=limit, mode=mode
+            )
+        except ValueError as exc:
+            return [{"error": str(exc)}]
         return [
             {
                 "path": r.path,
