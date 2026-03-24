@@ -419,3 +419,161 @@ class TestAppDomainOverride:
         # it's internal to the resource config, but the server should not error.
         server = create_server()
         assert server is not None
+
+
+# ---------------------------------------------------------------------------
+# App-only tool data coverage
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def _linked_env(vault_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Create linked notes in the vault for graph traversal tests."""
+    (vault_path / "linked_a.md").write_text(
+        "---\ntitle: Linked A\n---\n\n# Linked A\n\n"
+        "Links to [Linked B](linked_b.md) and [Simple](simple.md).\n"
+    )
+    (vault_path / "linked_b.md").write_text(
+        "---\ntitle: Linked B\ntags:\n  - test\n---\n\n# Linked B\n\n"
+        "Links back to [Linked A](linked_a.md).\n"
+    )
+    monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", str(vault_path))
+    monkeypatch.delenv("MARKDOWN_VAULT_MCP_READ_ONLY", raising=False)
+    for var in _CLEAR_VARS:
+        monkeypatch.delenv(var, raising=False)
+
+
+@pytest.mark.usefixtures("_mcp_env")
+class TestAppToolData:
+    """Cover app-only tool Python paths for diff-cover."""
+
+    async def test_browse_vault_with_path(self) -> None:
+        server = create_server()
+        async with Client(server) as client:
+            result = await client.call_tool(
+                "browse_vault", {"path": "full_frontmatter.md", "view": "browse"}
+            )
+            data = _parse_tool_data(result)
+            assert data["path"] == "full_frontmatter.md"
+            assert data["view"] == "browse"
+            assert "Frontmatter:" in data["summary"]
+
+    async def test_browse_vault_no_path(self) -> None:
+        server = create_server()
+        async with Client(server) as client:
+            result = await client.call_tool("browse_vault", {})
+            data = _parse_tool_data(result)
+            assert "Vault:" in data["summary"]
+
+    async def test_show_context_tool(self) -> None:
+        server = create_server()
+        async with Client(server) as client:
+            result = await client.call_tool("show_context", {"path": "simple.md"})
+            data = _parse_tool_data(result)
+            assert data["path"] == "simple.md"
+            assert data["view"] == "context"
+            assert "Backlinks:" in data["summary"]
+
+    async def test_vault_graph_hubs(self) -> None:
+        server = create_server()
+        async with Client(server) as client:
+            result = await client.call_tool("_vault_graph_hubs", {})
+            data = _parse_tool_data(result)
+            assert "nodes" in data
+            assert "edges" in data
+
+    async def test_vault_list_root(self) -> None:
+        server = create_server()
+        async with Client(server) as client:
+            result = await client.call_tool("_vault_list", {})
+            data = _parse_tool_data(result)
+            assert "folders" in data
+            assert "notes" in data
+
+    async def test_vault_read_note(self) -> None:
+        server = create_server()
+        async with Client(server) as client:
+            result = await client.call_tool("_vault_read", {"path": "simple.md"})
+            data = _parse_tool_data(result)
+            assert data["path"] == "simple.md"
+            assert "content" in data
+
+    async def test_vault_search_keyword(self) -> None:
+        server = create_server()
+        async with Client(server) as client:
+            result = await client.call_tool(
+                "_vault_search", {"query": "simple", "mode": "keyword"}
+            )
+            data = _parse_tool_data(result)
+            assert isinstance(data, list)
+
+    async def test_domain_http_path_no_leading_slash(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_BASE_URL", "https://v.example.com")
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_HTTP_PATH", "custom")
+        result = _compute_claude_app_domain()
+        assert result is not None
+        assert result.endswith(".claudemcpcontent.com")
+
+
+@pytest.mark.usefixtures("_linked_env")
+class TestAppToolLinkedData:
+    """Cover graph traversal paths that require inter-note links."""
+
+    async def test_vault_graph_neighborhood_with_links(self) -> None:
+        server = create_server()
+        async with Client(server) as client:
+            result = await client.call_tool(
+                "_vault_graph_neighborhood", {"path": "linked_a.md", "depth": 2}
+            )
+            data = _parse_tool_data(result)
+            assert "nodes" in data
+            assert "edges" in data
+            node_ids = [n["id"] for n in data["nodes"]]
+            assert "linked_a.md" in node_ids
+            assert len(data["edges"]) > 0
+
+    async def test_vault_graph_neighborhood_dedup(self) -> None:
+        server = create_server()
+        async with Client(server) as client:
+            result = await client.call_tool(
+                "_vault_graph_neighborhood", {"path": "linked_a.md", "depth": 2}
+            )
+            data = _parse_tool_data(result)
+            edge_keys = [(e["from"], e["to"]) for e in data["edges"]]
+            assert len(edge_keys) == len(set(edge_keys))
+
+    async def test_vault_graph_hubs_with_links(self) -> None:
+        server = create_server()
+        async with Client(server) as client:
+            result = await client.call_tool("_vault_graph_hubs", {})
+            data = _parse_tool_data(result)
+            assert "nodes" in data
+            assert "edges" in data
+            if data["nodes"]:
+                assert len(data["edges"]) > 0
+
+    async def test_vault_context_with_links(self) -> None:
+        server = create_server()
+        async with Client(server) as client:
+            result = await client.call_tool("_vault_context", {"path": "linked_a.md"})
+            data = _parse_tool_data(result)
+            assert data["path"] == "linked_a.md"
+            assert "backlinks" in data
+            assert "outlinks" in data
+            assert len(data["outlinks"]) > 0
+
+    async def test_show_context_with_tags(
+        self, vault_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", str(vault_path))
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_INDEXED_FIELDS", "tags")
+        for var in _CLEAR_VARS:
+            if var != "MARKDOWN_VAULT_MCP_INDEXED_FIELDS":
+                monkeypatch.delenv(var, raising=False)
+        server = create_server()
+        async with Client(server) as client:
+            result = await client.call_tool("show_context", {"path": "linked_b.md"})
+            data = _parse_tool_data(result)
+            assert "Tags:" in data["summary"]
