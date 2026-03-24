@@ -16,7 +16,12 @@ import os
 import sys
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
-from typing import Any
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
+from urllib.parse import urlparse
+
+if TYPE_CHECKING:
+    from fastmcp.server.event_store import EventStore
 
 from fastmcp import FastMCP
 
@@ -37,7 +42,7 @@ logger = logging.getLogger(__name__)
 _DEFAULT_EVENT_STORE_DIR = "/data/state/events"
 
 
-def build_event_store(url: str | None = None) -> Any:
+def build_event_store(url: str | None = None) -> EventStore:
     """Build an ``EventStore`` for SSE polling/resumability.
 
     Parses the *url* scheme to select a storage backend:
@@ -52,10 +57,7 @@ def build_event_store(url: str | None = None) -> Any:
     Returns:
         A configured :class:`~fastmcp.server.event_store.EventStore`.
     """
-    from pathlib import Path
-    from urllib.parse import urlparse
-
-    from fastmcp.server.event_store import EventStore
+    from fastmcp.server.event_store import EventStore as _EventStore
 
     if not url:
         url = f"file://{_DEFAULT_EVENT_STORE_DIR}"
@@ -64,7 +66,7 @@ def build_event_store(url: str | None = None) -> Any:
 
     if parsed.scheme == "memory":
         logger.info("Event store: in-memory (sessions lost on restart)")
-        return EventStore(max_events_per_stream=100, ttl=3600)
+        return _EventStore(max_events_per_stream=100, ttl=3600)
 
     if parsed.scheme == "file":
         directory = parsed.path
@@ -73,10 +75,16 @@ def build_event_store(url: str | None = None) -> Any:
         Path(directory).mkdir(parents=True, exist_ok=True)
         logger.info("Event store: file-backed at %s", directory)
 
-        from key_value.aio.stores.filetree import FileTreeStore
+        try:
+            from key_value.aio.stores.filetree import FileTreeStore
+        except ImportError:
+            raise ImportError(
+                "FileTreeStore requires fastmcp>=3.0 with key-value support. "
+                "Install with: pip install 'markdown-vault-mcp[mcp]'"
+            ) from None
 
         storage = FileTreeStore(data_directory=directory)
-        return EventStore(
+        return _EventStore(
             storage=storage, max_events_per_stream=100, ttl=3600
         )
 

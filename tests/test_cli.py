@@ -254,7 +254,7 @@ class TestCmdServe:
         mock_create: MagicMock,
         mock_load_config: MagicMock,
         mock_build_es: MagicMock,
-        mock_uvicorn_run: MagicMock,
+        _mock_uvicorn_run: MagicMock,
     ) -> None:
         """_cmd_serve passes custom --path to http_app()."""
         mock_server = MagicMock()
@@ -283,7 +283,7 @@ class TestCmdServe:
         mock_create: MagicMock,
         mock_load_config: MagicMock,
         mock_build_es: MagicMock,
-        mock_uvicorn_run: MagicMock,
+        _mock_uvicorn_run: MagicMock,
     ) -> None:
         """_cmd_serve normalises --path by adding leading slash and trimming tail."""
         mock_server = MagicMock()
@@ -312,7 +312,7 @@ class TestCmdServe:
         mock_create: MagicMock,
         mock_load_config: MagicMock,
         mock_build_es: MagicMock,
-        mock_uvicorn_run: MagicMock,
+        _mock_uvicorn_run: MagicMock,
     ) -> None:
         """_cmd_serve uses MARKDOWN_VAULT_MCP_HTTP_PATH when --path is omitted."""
         mock_server = MagicMock()
@@ -340,7 +340,7 @@ class TestCmdServe:
         mock_create: MagicMock,
         mock_load_config: MagicMock,
         mock_build_es: MagicMock,
-        mock_uvicorn_run: MagicMock,
+        _mock_uvicorn_run: MagicMock,
     ) -> None:
         """_cmd_serve --path takes precedence over MARKDOWN_VAULT_MCP_HTTP_PATH."""
         mock_server = MagicMock()
