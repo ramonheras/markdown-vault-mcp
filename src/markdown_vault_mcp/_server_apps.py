@@ -299,7 +299,7 @@ _SPA_SHELL_HTML = """\
     display: flex; align-items: center; justify-content: space-between; gap: 8px;
     margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--host-border, var(--fallback-border));
   }
-  .preview-header h2 { font-size: 18px; margin: 0; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .preview-header h1 { font-size: 18px; margin: 0; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .preview-actions { display: flex; gap: 6px; flex-shrink: 0; }
   .preview-fm { margin-bottom: 12px; }
   .preview-content { font-size: 14px; line-height: 1.6; }
@@ -1398,7 +1398,7 @@ def register_apps(mcp: FastMCP) -> None:
             label = (
                 note.title if note else current.rsplit("/", 1)[-1].replace(".md", "")
             )
-            folder = current.rsplit("/", 1)[0] if "/" in current else ""
+            folder = note.folder if note else ""
 
             # Fetch backlinks before depth guard for backlink_count (AC9)
             try:
@@ -1487,7 +1487,8 @@ def register_apps(mcp: FastMCP) -> None:
         seen_edges: set[tuple[str, str]] = set()
 
         for hub in hubs:
-            hub_folder = hub.path.rsplit("/", 1)[0] if "/" in hub.path else ""
+            hub_note = await asyncio.to_thread(collection.read, hub.path)
+            hub_folder = hub_note.folder if hub_note else ""
             nodes[hub.path] = {
                 "id": hub.path,
                 "label": hub.title,
@@ -1509,16 +1510,12 @@ def register_apps(mcp: FastMCP) -> None:
                         if note
                         else bl.source_path.rsplit("/", 1)[-1].replace(".md", "")
                     )
-                    bl_folder = (
-                        bl.source_path.rsplit("/", 1)[0]
-                        if "/" in bl.source_path
-                        else ""
-                    )
+                    folder = note.folder if note else ""
                     nodes[bl.source_path] = {
                         "id": bl.source_path,
                         "label": label,
                         "group": "note",
-                        "folder": bl_folder,
+                        "folder": folder,
                     }
                 edge_key = (bl.source_path, hub.path)
                 if edge_key not in seen_edges:
