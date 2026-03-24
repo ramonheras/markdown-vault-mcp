@@ -1319,12 +1319,23 @@ MCP Apps are browser-based views that MCP clients supporting the protocol can re
 | Graph Explorer | Interactive force-directed link graph of the entire vault; nodes are notes, edges are links |
 | Vault Browser | Searchable, filterable file tree for direct vault navigation without issuing tool calls |
 
-**App-only tools** (`visibility="app"`): tools tagged `visibility="app"` are registered but hidden from the standard MCP tool list. They serve MCP Apps clients only:
+**Primary tools** (visible to LLM, launch apps):
 
 | Tool | Description |
 |------|-------------|
-| `browse_vault` | Returns the vault tree structure consumed by the Vault Browser view |
-| `show_context` | Returns the full context dossier for a path; consumed by the Context Card view |
+| `browse_vault` | Opens the SPA with optional path/view; returns text summary for non-Apps clients |
+| `show_context` | Opens the Context Card for a path; returns text summary for non-Apps clients |
+
+**App-only tools** (`visibility="app"`): registered but hidden from the standard MCP tool list, serving MCP Apps clients only:
+
+| Tool | Description |
+|------|-------------|
+| `_vault_context` | Returns full NoteContext JSON for the Context Card view |
+| `_vault_graph_neighborhood` | Returns `{nodes, edges}` for a note's link neighborhood |
+| `_vault_graph_hubs` | Returns `{nodes, edges}` for the most-linked hub notes |
+| `_vault_list` | Returns `{folders, notes}` for a vault directory |
+| `_vault_read` | Returns note content, frontmatter, and metadata |
+| `_vault_search` | Returns keyword search results with snippets |
 
 **CDN dependencies** (loaded client-side inside the iframe):
 - `vis-network` — force-directed graph rendering for Graph Explorer

@@ -286,7 +286,7 @@ _SPA_SHELL_HTML = """\
     color: var(--host-fg, var(--fallback-fg));
   }
   .tree-note:hover { background: var(--host-surface, var(--fallback-surface)); border-radius: 3px; }
-  .tree-note.active { background: var(--host-accent, var(--fallback-accent)); color: #fff; border-radius: 3px; }
+  .tree-note.active { background: var(--host-accent, var(--fallback-accent)); color: var(--host-accent-fg, #fff); border-radius: 3px; }
   .search-result {
     cursor: pointer; padding: 6px 8px; border-bottom: 1px solid var(--host-border, var(--fallback-border));
   }
@@ -1405,11 +1405,18 @@ def register_apps(mcp: FastMCP) -> None:
                 backlinks = await asyncio.to_thread(collection.get_backlinks, current)
             except ValueError:
                 backlinks = []
+            try:
+                outlinks = await asyncio.to_thread(
+                    collection.get_outlinks, current
+                )
+            except ValueError:
+                outlinks = []
+            is_orphan = len(backlinks) == 0 and len(outlinks) == 0
 
             nodes[current] = {
                 "id": current,
                 "label": label,
-                "group": "note",
+                "group": "orphan" if is_orphan else "note",
                 "folder": folder,
                 "backlink_count": len(backlinks),
             }
@@ -1429,11 +1436,7 @@ def register_apps(mcp: FastMCP) -> None:
                 if bl.source_path not in visited:
                     queue.append((bl.source_path, d + 1))
 
-            # Get outlinks
-            try:
-                outlinks = await asyncio.to_thread(collection.get_outlinks, current)
-            except ValueError:
-                outlinks = []
+            # Process outlinks (already fetched above for orphan detection)
             for ol in outlinks:
                 if ol.exists:
                     edges.append(
@@ -1511,11 +1514,15 @@ def register_apps(mcp: FastMCP) -> None:
                         else bl.source_path.rsplit("/", 1)[-1].replace(".md", "")
                     )
                     folder = note.folder if note else ""
+                    sat_backlinks = await asyncio.to_thread(
+                        collection.get_backlinks, bl.source_path
+                    )
                     nodes[bl.source_path] = {
                         "id": bl.source_path,
                         "label": label,
                         "group": "note",
                         "folder": folder,
+                        "backlink_count": len(sat_backlinks),
                     }
                 edge_key = (bl.source_path, hub.path)
                 if edge_key not in seen_edges:
