@@ -104,4 +104,5 @@ Completed ports, newest first.
 All known pending ports have been filed as issues:
 
 - **MV → IG**: [image-generation-mcp#110](https://github.com/pvliesdonk/image-generation-mcp/issues/110) — server.json, httpx guard, auth logging, CI diff-cover, release job deps
+- **MV → IG**: [image-generation-mcp#137](https://github.com/pvliesdonk/image-generation-mcp/issues/137) — persistent EventStore for HTTP session persistence (MV#278)
 - **IG → MV**: [markdown-vault-mcp#270](https://github.com/pvliesdonk/markdown-vault-mcp/issues/270) — diff-cover cleanup, versionless package copies

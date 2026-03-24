@@ -101,3 +101,30 @@ class TestEventStoreConfig:
         )
         config = load_config()
         assert config.event_store_url == "file:///data/state/events"
+
+
+class TestFileEventStorePersistence:
+    """Integration test: events persist across EventStore recreations."""
+
+    async def test_file_store_survives_restart(self, tmp_path):
+        """Store an event, recreate the store, verify the event is retrievable."""
+        store_dir = tmp_path / "events"
+        url = f"file://{store_dir}"
+
+        # First store instance — write an event (None message = priming event)
+        store1 = build_event_store(url)
+        stream_id = "test-session-1"
+        event_id = await store1.store_event(stream_id, None)
+        assert event_id  # UUID string returned
+
+        # Second store instance — same path, simulating restart
+        store2 = build_event_store(url)
+        # Verify the event is retrievable by replaying after it
+        replayed_events: list = []
+
+        async def collect(event_id: str, data: dict | None) -> None:
+            replayed_events.append((event_id, data))
+
+        result_stream = await store2.replay_events_after(event_id, collect)
+        # The stream should be found (returns stream_id, not None)
+        assert result_stream == stream_id
