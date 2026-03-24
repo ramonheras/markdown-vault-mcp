@@ -723,7 +723,14 @@ def register_apps(mcp: FastMCP) -> None:
             }
         )
 
-        notes = [{"path": d.path, "title": d.title, "kind": d.kind} for d in docs]
+        notes = [
+            {
+                "path": d.path,
+                "title": getattr(d, "title", d.path.rsplit("/", 1)[-1]),
+                "kind": d.kind,
+            }
+            for d in docs
+        ]
 
         return {"folders": child_folders, "notes": notes}
 
