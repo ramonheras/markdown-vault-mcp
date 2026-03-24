@@ -27,6 +27,7 @@ from fastmcp import FastMCP
 
 from markdown_vault_mcp.config import _ENV_PREFIX, load_config
 
+from ._server_apps import register_apps
 from ._server_deps import make_collection_lifespan
 from ._server_prompts import register_prompts
 from ._server_resources import register_resources
@@ -490,6 +491,7 @@ def create_server(transport: str = "stdio") -> FastMCP:
 
     register_tools(mcp, transport=transport)
     register_resources(mcp)
+    register_apps(mcp)
     register_prompts(
         mcp,
         templates_folder=config.templates_folder,

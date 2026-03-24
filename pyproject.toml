@@ -95,6 +95,7 @@ ignore = ["E501"]
 "src/markdown_vault_mcp/_server_tools.py" = ["B008", "TCH001", "TCH002"]
 "src/markdown_vault_mcp/_server_resources.py" = ["B008", "TCH001", "TCH002"]
 "src/markdown_vault_mcp/_server_prompts.py" = ["B008", "TCH002"]
+"src/markdown_vault_mcp/_server_apps.py" = ["B008", "TCH001", "TCH002"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["markdown_vault_mcp"]
