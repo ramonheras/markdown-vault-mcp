@@ -71,6 +71,8 @@ _SPA_SHELL_HTML = """\
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>Vault Explorer</title>
 <script src="https://unpkg.com/vis-network@10.0.2/standalone/umd/vis-network.min.js"></script>
+<script src="https://unpkg.com/marked@17.0.5/marked.min.js"></script>
+<script src="https://unpkg.com/dompurify@3.3.3/dist/purify.min.js"></script>
 <script type="module" src="https://unpkg.com/@anthropic-ai/claude-mcp-ext-apps@latest/dist/index.js"></script>
 <style>
   :root {
@@ -253,6 +255,66 @@ _SPA_SHELL_HTML = """\
     color: var(--host-fg, var(--fallback-fg)); font-family: inherit;
   }
   .graph-mini-card .mini-actions button:hover { background: var(--host-border, var(--fallback-border)); }
+  /* Browser styles */
+  .browser-layout { display: flex; flex: 1; min-height: 0; gap: 0; }
+  .browser-sidebar {
+    width: 240px; min-width: 180px; flex-shrink: 0; display: flex; flex-direction: column;
+    border-right: 1px solid var(--host-border, var(--fallback-border)); overflow: hidden;
+  }
+  .browser-search {
+    display: flex; padding: 6px; gap: 4px; border-bottom: 1px solid var(--host-border, var(--fallback-border)); flex-shrink: 0;
+  }
+  .browser-search input {
+    flex: 1; padding: 4px 8px; border: 1px solid var(--host-border, var(--fallback-border)); border-radius: 4px;
+    font-size: 12px; font-family: inherit; background: var(--host-bg, var(--fallback-bg)); color: var(--host-fg, var(--fallback-fg));
+  }
+  .browser-search button {
+    background: none; border: none; cursor: pointer; font-size: 16px; color: var(--host-muted, var(--fallback-muted)); padding: 0 4px;
+  }
+  .browser-tree { flex: 1; overflow-y: auto; padding: 4px; font-size: 12px; }
+  .tree-folder {
+    cursor: pointer; padding: 3px 4px; display: flex; align-items: center; gap: 4px;
+    font-weight: 600; color: var(--host-fg, var(--fallback-fg));
+  }
+  .tree-folder:hover { background: var(--host-surface, var(--fallback-surface)); border-radius: 3px; }
+  .tree-folder .arrow { font-size: 10px; width: 12px; transition: transform 0.15s; display: inline-block; }
+  .tree-folder.expanded .arrow { transform: rotate(90deg); }
+  .tree-children { padding-left: 16px; display: none; }
+  .tree-folder.expanded + .tree-children { display: block; }
+  .tree-note {
+    cursor: pointer; padding: 3px 4px 3px 20px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    color: var(--host-fg, var(--fallback-fg));
+  }
+  .tree-note:hover { background: var(--host-surface, var(--fallback-surface)); border-radius: 3px; }
+  .tree-note.active { background: var(--host-accent, var(--fallback-accent)); color: #fff; border-radius: 3px; }
+  .search-result {
+    cursor: pointer; padding: 6px 8px; border-bottom: 1px solid var(--host-border, var(--fallback-border));
+  }
+  .search-result:hover { background: var(--host-surface, var(--fallback-surface)); }
+  .search-result-title { font-weight: 600; font-size: 13px; }
+  .search-result-snippet { font-size: 11px; color: var(--host-muted, var(--fallback-muted)); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* Preview pane */
+  .browser-preview { flex: 1; overflow-y: auto; padding: 16px; min-width: 0; }
+  .preview-header {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--host-border, var(--fallback-border));
+  }
+  .preview-header h2 { font-size: 18px; margin: 0; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .preview-actions { display: flex; gap: 6px; flex-shrink: 0; }
+  .preview-fm { margin-bottom: 12px; }
+  .preview-content { font-size: 14px; line-height: 1.6; }
+  .preview-content h1, .preview-content h2, .preview-content h3 { margin-top: 16px; margin-bottom: 8px; }
+  .preview-content p { margin: 8px 0; }
+  .preview-content code { background: var(--host-surface, var(--fallback-surface)); padding: 1px 4px; border-radius: 3px; font-size: 13px; }
+  .preview-content pre { background: var(--host-surface, var(--fallback-surface)); padding: 12px; border-radius: 6px; overflow-x: auto; }
+  .preview-content pre code { background: none; padding: 0; }
+  .preview-content blockquote { border-left: 3px solid var(--host-accent, var(--fallback-accent)); padding-left: 12px; color: var(--host-muted, var(--fallback-muted)); margin: 8px 0; }
+  .preview-content a { color: var(--host-accent, var(--fallback-accent)); }
+  .edit-btn-disabled {
+    background: var(--host-surface, var(--fallback-surface)); color: var(--host-muted, var(--fallback-muted));
+    border: 1px solid var(--host-border, var(--fallback-border)); padding: 4px 10px; border-radius: 4px;
+    font-size: 12px; cursor: not-allowed; opacity: 0.6; font-family: inherit;
+  }
 </style>
 </head>
 <body>
@@ -299,7 +361,18 @@ _SPA_SHELL_HTML = """\
     <div id="graph-mini-card" class="graph-mini-card" style="display:none;"></div>
   </div>
   <div class="tab-panel" id="panel-browse" data-tab="browse">
-    <div class="placeholder">Vault browser — loading&hellip;</div>
+    <div class="browser-layout">
+      <div class="browser-sidebar">
+        <div class="browser-search">
+          <input type="text" id="browser-search-input" placeholder="Search vault..." />
+          <button id="browser-search-clear" style="display:none;" title="Clear search">&times;</button>
+        </div>
+        <div id="browser-tree" class="browser-tree"></div>
+      </div>
+      <div class="browser-preview" id="browser-preview">
+        <div class="placeholder">Select a note to preview</div>
+      </div>
+    </div>
   </div>
 </div>
 <div class="toast" id="toast"></div>
@@ -836,6 +909,202 @@ app.onDisplayModeChanged((mode) => {
   });
 
   window.loadGraph = loadGraph;
+})();
+
+// ── Vault Browser View ──────────────────────────────────────────────────
+(function() {
+  let currentPreviewPath = null;
+  let currentPreviewData = null;
+  let treeDataCache = {};
+  let isSearchMode = false;
+
+  const treeEl = document.getElementById('browser-tree');
+  const previewEl = document.getElementById('browser-preview');
+  const searchInput = document.getElementById('browser-search-input');
+  const searchClear = document.getElementById('browser-search-clear');
+
+  async function loadFolder(folder) {
+    const key = folder || '__root__';
+    if (treeDataCache[key]) return treeDataCache[key];
+    try {
+      const result = await app.callServerTool({ name: '_vault_list', arguments: { folder: folder || null } });
+      const data = typeof result === 'string' ? JSON.parse(result) : result;
+      treeDataCache[key] = data;
+      return data;
+    } catch (err) {
+      console.warn('Failed to load folder:', err);
+      return { folders: [], notes: [] };
+    }
+  }
+
+  function renderTree(data, parentEl, parentFolder) {
+    parentEl.innerHTML = '';
+    // Folders
+    for (const f of data.folders) {
+      const name = f.includes('/') ? f.split('/').pop() : f;
+      const folderDiv = document.createElement('div');
+      folderDiv.className = 'tree-folder';
+      folderDiv.innerHTML = '<span class="arrow">\\u25B6</span> \\uD83D\\uDCC1 ' + name;
+      folderDiv.dataset.folder = f;
+      parentEl.appendChild(folderDiv);
+
+      const childrenDiv = document.createElement('div');
+      childrenDiv.className = 'tree-children';
+      parentEl.appendChild(childrenDiv);
+
+      folderDiv.addEventListener('click', async () => {
+        const isExpanded = folderDiv.classList.contains('expanded');
+        if (isExpanded) {
+          folderDiv.classList.remove('expanded');
+        } else {
+          folderDiv.classList.add('expanded');
+          if (childrenDiv.children.length === 0) {
+            const subData = await loadFolder(f);
+            renderTree(subData, childrenDiv, f);
+          }
+        }
+      });
+    }
+    // Notes
+    for (const n of data.notes) {
+      const noteDiv = document.createElement('div');
+      noteDiv.className = 'tree-note';
+      noteDiv.textContent = n.title || n.path;
+      noteDiv.title = n.path;
+      noteDiv.dataset.path = n.path;
+      noteDiv.addEventListener('click', () => loadPreview(n.path));
+      parentEl.appendChild(noteDiv);
+    }
+  }
+
+  async function loadRootTree() {
+    treeDataCache = {};
+    const data = await loadFolder(null);
+    renderTree(data, treeEl, null);
+  }
+
+  async function loadPreview(path) {
+    currentPreviewPath = path;
+    // Highlight active note in tree
+    treeEl.querySelectorAll('.tree-note').forEach(el => {
+      el.classList.toggle('active', el.dataset.path === path);
+    });
+
+    try {
+      const result = await app.callServerTool({ name: '_vault_read', arguments: { path } });
+      const data = typeof result === 'string' ? JSON.parse(result) : result;
+      if (!data) { previewEl.innerHTML = '<div class="placeholder">Note not found</div>'; return; }
+      currentPreviewData = data;
+
+      let html = '<div class="preview-header">';
+      html += '<h2>' + (data.title || path) + '</h2>';
+      html += '<div class="preview-actions">';
+      html += '<button class="action-btn" id="preview-send-btn" title="Send to Claude">\\uD83D\\uDCAC Send</button>';
+      html += '<button class="action-btn" id="preview-ctx-btn" title="Show Context" style="background:var(--host-surface,var(--fallback-surface));color:var(--host-fg,var(--fallback-fg));border:1px solid var(--host-border,var(--fallback-border));">\\uD83D\\uDD0D Context</button>';
+      html += '<button class="action-btn" id="preview-graph-btn" title="Show in Graph" style="background:var(--host-surface,var(--fallback-surface));color:var(--host-fg,var(--fallback-fg));border:1px solid var(--host-border,var(--fallback-border));">\\uD83D\\uDD17 Graph</button>';
+      html += '<button class="edit-btn-disabled" title="Coming soon" disabled>\\u270F Edit</button>';
+      html += '</div></div>';
+
+      // Frontmatter
+      if (data.frontmatter && Object.keys(data.frontmatter).length > 0) {
+        html += '<div class="preview-fm"><table class="fm-table">';
+        for (const [k, v] of Object.entries(data.frontmatter)) {
+          const val = typeof v === 'object' ? JSON.stringify(v) : String(v);
+          html += '<tr><td>' + k + '</td><td>' + val + '</td></tr>';
+        }
+        html += '</table></div>';
+      }
+
+      // Rendered markdown
+      let rendered = '';
+      if (typeof marked !== 'undefined' && data.content) {
+        rendered = marked.parse(data.content);
+      } else {
+        rendered = '<pre>' + (data.content || '') + '</pre>';
+      }
+      if (typeof DOMPurify !== 'undefined') {
+        rendered = DOMPurify.sanitize(rendered);
+      }
+      html += '<div class="preview-content">' + rendered + '</div>';
+
+      previewEl.innerHTML = html;
+
+      // Wire action buttons
+      document.getElementById('preview-send-btn')?.addEventListener('click', () => {
+        window.sendToLLM(data.path, data.content || '');
+      });
+      document.getElementById('preview-ctx-btn')?.addEventListener('click', () => {
+        window.navigateTo('context', { path: data.path });
+      });
+      document.getElementById('preview-graph-btn')?.addEventListener('click', () => {
+        window.navigateTo('graph', { path: data.path });
+      });
+
+      window.updateContext('browser', path, data.title);
+    } catch (err) {
+      previewEl.innerHTML = '<div class="placeholder">Error: ' + (err.message || err) + '</div>';
+    }
+  }
+
+  // Search
+  let searchTimeout = null;
+  searchInput.addEventListener('input', () => {
+    clearTimeout(searchTimeout);
+    const q = searchInput.value.trim();
+    if (!q) { exitSearch(); return; }
+    searchTimeout = setTimeout(() => doSearch(q), 300);
+  });
+
+  async function doSearch(query) {
+    isSearchMode = true;
+    searchClear.style.display = '';
+    try {
+      const result = await app.callServerTool({
+        name: '_vault_search', arguments: { query, mode: 'keyword', limit: 20 }
+      });
+      const data = typeof result === 'string' ? JSON.parse(result) : result;
+      treeEl.innerHTML = '';
+      for (const r of data) {
+        const div = document.createElement('div');
+        div.className = 'search-result';
+        div.innerHTML = '<div class="search-result-title">' + (r.title || r.path) + '</div>'
+          + '<div class="search-result-snippet">' + (r.snippet || '') + '</div>';
+        div.addEventListener('click', () => loadPreview(r.path));
+        treeEl.appendChild(div);
+      }
+      if (data.length === 0) {
+        treeEl.innerHTML = '<div class="placeholder" style="padding:12px">No results</div>';
+      }
+    } catch (err) {
+      treeEl.innerHTML = '<div class="placeholder" style="padding:12px">Search error</div>';
+    }
+  }
+
+  function exitSearch() {
+    isSearchMode = false;
+    searchClear.style.display = 'none';
+    searchInput.value = '';
+    loadRootTree();
+  }
+
+  searchClear.addEventListener('click', exitSearch);
+
+  // Listen for navigation events
+  window.addEventListener('vault-navigate', (e) => {
+    if (e.detail.view === 'browse' && e.detail.path) {
+      loadPreview(e.detail.path);
+    }
+  });
+
+  // Auto-load when browse tab is selected
+  window.addEventListener('vault-tab-changed', (e) => {
+    if (e.detail.tab === 'browse' && treeEl.children.length === 0 && !isSearchMode) {
+      loadRootTree();
+    }
+  });
+
+  window.loadBrowser = loadRootTree;
+  window.loadPreview = loadPreview;
 })();
 
 // ── Connect ──────────────────────────────────────────────────────────────
