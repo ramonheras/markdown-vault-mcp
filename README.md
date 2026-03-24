@@ -140,6 +140,7 @@ All configuration is via environment variables with the `MARKDOWN_VAULT_MCP_` pr
 | `MARKDOWN_VAULT_MCP_INSTRUCTIONS` | (auto) | System-level instructions injected into LLM context; defaults to a description that reflects read-only vs read-write state |
 | `MARKDOWN_VAULT_MCP_HTTP_PATH` | `/mcp` | HTTP endpoint path for streamable HTTP transport (used by `serve --transport http`) |
 | `MARKDOWN_VAULT_MCP_EVENT_STORE_URL` | `file:///data/state/events` | Event store backend for HTTP session persistence. `file:///path` (default) survives restarts; `memory://` for dev (lost on restart). |
+| `MARKDOWN_VAULT_MCP_APP_DOMAIN` | (auto) | Override the Claude app domain used for MCP Apps iframe sandboxing. Auto-computed from `BASE_URL` when not set. |
 | `FASTMCP_LOG_LEVEL` | `INFO` | Log level for FastMCP internals (`DEBUG`, `INFO`, `WARNING`, `ERROR`). App loggers default to `INFO`. `-v` overrides both to `DEBUG`. |
 
 ### Search and embeddings
@@ -206,7 +207,7 @@ Full OAuth 2.1 authentication for HTTP deployments. OIDC activates when all four
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `MARKDOWN_VAULT_MCP_BASE_URL` | Yes | Public base URL of the server (e.g. `https://mcp.example.com`; include prefix if mounted under subpath, e.g. `https://mcp.example.com/vault`). Also required for `create_download_link`. |
+| `MARKDOWN_VAULT_MCP_BASE_URL` | Yes | Public base URL of the server (e.g. `https://mcp.example.com`; include prefix if mounted under subpath, e.g. `https://mcp.example.com/vault`). Also required for `create_download_link` and used to auto-compute the MCP Apps domain. |
 | `MARKDOWN_VAULT_MCP_OIDC_CONFIG_URL` | Yes | OIDC discovery endpoint (e.g. `https://auth.example.com/.well-known/openid-configuration`) |
 | `MARKDOWN_VAULT_MCP_OIDC_CLIENT_ID` | Yes | OIDC client ID registered with your provider |
 | `MARKDOWN_VAULT_MCP_OIDC_CLIENT_SECRET` | Yes | OIDC client secret |
@@ -355,6 +356,27 @@ Templates are regular markdown files. If placeholder template text pollutes sear
 Mount a directory of `.md` prompt files to override or extend the built-in prompts. Set `MARKDOWN_VAULT_MCP_PROMPTS_FOLDER` to the path. Each file's frontmatter defines `description`, `arguments` (a list of objects, each with `name`, `description`, and `required` fields), and optional `tags`. A user prompt with the same name as a built-in replaces it.
 
 For a complete example — including Zettelkasten capture, development, and review prompts — see the [Zettelkasten guide](https://pvliesdonk.github.io/markdown-vault-mcp/guides/zettelkasten/).
+
+## MCP Apps
+
+The server ships three browser-based views that MCP clients supporting the MCP Apps protocol can render inline or in fullscreen. They are delivered as a single HTML resource at `ui://vault/app.html` and registered using `visibility="app"` so they appear only in supporting clients and do not clutter the standard tool list.
+
+| View | Description |
+|------|-------------|
+| **Context Card** | Displays a note dossier (backlinks, outlinks, similar notes, tags) for the note currently in focus |
+| **Graph Explorer** | Interactive force-directed link graph of the vault, powered by vis-network |
+| **Vault Browser** | Searchable, filterable file tree for navigating the vault without issuing tool calls |
+
+The two primary tools exposed to MCP Apps clients are:
+
+| Tool | Description |
+|------|-------------|
+| `browse_vault` | Returns the vault tree structure for the Vault Browser view |
+| `show_context` | Returns the full context dossier for a given note path (used by the Context Card view) |
+
+**Domain configuration:** MCP Apps iframes are sandboxed to a specific Claude app domain. The domain is auto-computed from `MARKDOWN_VAULT_MCP_BASE_URL`. Override with `MARKDOWN_VAULT_MCP_APP_DOMAIN` if your deployment is hosted on a custom domain or behind a proxy that changes the apparent hostname.
+
+CDN dependencies loaded by the app: vis-network (graph rendering), marked.js (markdown rendering), DOMPurify (XSS sanitization).
 
 ## Attachments
 

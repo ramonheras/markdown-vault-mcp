@@ -1167,6 +1167,7 @@ For MCP server deployment:
 | `MARKDOWN_VAULT_MCP_OIDC_VERIFY_ACCESS_TOKEN` | Verify the upstream access token as JWT instead of the id token. Set `true` only when your provider issues JWT access tokens and you need audience-claim validation on that token | `false` (verify id token) |
 | `MARKDOWN_VAULT_MCP_ATTACHMENT_EXTENSIONS` | Comma-separated allowlist of non-.md extensions (without dot), e.g. `pdf,png,docx`; use `*` to allow all non-.md files | common list (pdf, png, jpg, docx, …) |
 | `MARKDOWN_VAULT_MCP_MAX_ATTACHMENT_SIZE_MB` | Maximum attachment size in MB enforced on both read and write; `0` disables the limit | `10.0` |
+| `MARKDOWN_VAULT_MCP_APP_DOMAIN` | Claude app domain for MCP Apps iframe sandboxing; auto-computed from `BASE_URL` via `_compute_claude_app_domain()` | derived from `BASE_URL` |
 | `EMBEDDING_PROVIDER` | `openai`, `ollama`, `fastembed` | auto-detect |
 | `OLLAMA_HOST` | Ollama server URL | `http://localhost:11434` |
 | `MARKDOWN_VAULT_MCP_OLLAMA_MODEL` | Ollama embedding model | `nomic-embed-text` |
@@ -1299,6 +1300,42 @@ The server supports reading and writing non-markdown binary files (PDFs, images,
 Attachments are **not indexed or searched** — only direct path-based read/write/delete/rename. MIME type is detected via Python's `mimetypes.guess_type()` (no extra dependencies).
 
 Size limit applies to both `read_attachment()` and `write_attachment()`. Set `MARKDOWN_VAULT_MCP_MAX_ATTACHMENT_SIZE_MB=0` to disable the limit.
+
+#### MCP Apps
+
+MCP Apps are browser-based views that MCP clients supporting the protocol can render inline (in a sidebar or panel) or fullscreen. They augment tool-based interaction with direct visual exploration.
+
+**Resource URI**: `ui://vault/app.html` — the entire application is a single HTML resource registered with `visibility="app"`. This keeps it out of the standard tool list and exposes it only to clients that support the MCP Apps protocol.
+
+**Display modes**:
+- **Inline**: rendered in a client sidebar or panel alongside the conversation
+- **Fullscreen**: rendered in a dedicated tab or window
+
+**Three views** are bundled in the single resource:
+
+| View | Description |
+|------|-------------|
+| Context Card | Note dossier — backlinks, outlinks, similar notes, tags, and last-modified time for the note in focus |
+| Graph Explorer | Interactive force-directed link graph of the entire vault; nodes are notes, edges are links |
+| Vault Browser | Searchable, filterable file tree for direct vault navigation without issuing tool calls |
+
+**App-only tools** (`visibility="app"`): tools tagged `visibility="app"` are registered but hidden from the standard MCP tool list. They serve MCP Apps clients only:
+
+| Tool | Description |
+|------|-------------|
+| `browse_vault` | Returns the vault tree structure consumed by the Vault Browser view |
+| `show_context` | Returns the full context dossier for a path; consumed by the Context Card view |
+
+**CDN dependencies** (loaded client-side inside the iframe):
+- `vis-network` — force-directed graph rendering for Graph Explorer
+- `marked.js` — markdown-to-HTML rendering for note previews
+- `DOMPurify` — XSS sanitization for all rendered HTML
+
+**Domain configuration**: MCP Apps iframes are sandboxed to a specific Claude app domain. The server computes it from `MARKDOWN_VAULT_MCP_BASE_URL` via `_compute_claude_app_domain()`. Override with `MARKDOWN_VAULT_MCP_APP_DOMAIN` when `BASE_URL` does not reflect the actual hostname visible to the Claude client (e.g. behind a proxy, or on a custom domain).
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MARKDOWN_VAULT_MCP_APP_DOMAIN` | (derived from `BASE_URL`) | Override Claude app domain for MCP Apps iframe sandboxing |
 
 ### Phase 3: Evaluate YAML
 
