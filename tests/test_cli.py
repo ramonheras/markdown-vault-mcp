@@ -235,7 +235,9 @@ class TestCmdServe:
         _cmd_serve(args)
 
         mock_server.http_app.assert_called_once_with(
-            path="/mcp", transport="http", event_store=mock_event_store,
+            path="/mcp",
+            transport="http",
+            event_store=mock_event_store,
         )
         mock_uvicorn_run.assert_called_once_with(
             mock_app,

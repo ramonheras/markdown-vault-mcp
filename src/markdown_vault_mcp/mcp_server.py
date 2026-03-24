@@ -84,9 +84,7 @@ def build_event_store(url: str | None = None) -> EventStore:
             ) from None
 
         storage = FileTreeStore(data_directory=directory)
-        return _EventStore(
-            storage=storage, max_events_per_stream=100, ttl=3600
-        )
+        return _EventStore(storage=storage, max_events_per_stream=100, ttl=3600)
 
     raise ValueError(
         f"Unsupported EVENT_STORE_URL scheme {parsed.scheme!r}. "

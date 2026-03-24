@@ -427,7 +427,9 @@ def load_config() -> CollectionConfig:
 
     raw_event_store_url = (_env("EVENT_STORE_URL") or "").strip()
     event_store_url: str | None = raw_event_store_url or None
-    logger.debug("load_config: event_store_url=%s", event_store_url or "not set (file default)")
+    logger.debug(
+        "load_config: event_store_url=%s", event_store_url or "not set (file default)"
+    )
 
     return CollectionConfig(
         source_dir=source_dir,
