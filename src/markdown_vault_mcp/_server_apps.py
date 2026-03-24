@@ -70,6 +70,7 @@ _SPA_SHELL_HTML = """\
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>Vault Explorer</title>
+<script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
 <script type="module" src="https://unpkg.com/@anthropic-ai/claude-mcp-ext-apps@latest/dist/index.js"></script>
 <style>
   :root {
@@ -232,6 +233,25 @@ _SPA_SHELL_HTML = """\
   .fm-table { width: 100%; border-collapse: collapse; }
   .fm-table td { padding: 3px 8px; border-bottom: 1px solid var(--host-border, var(--fallback-border)); font-size: 12px; vertical-align: top; }
   .fm-table td:first-child { font-weight: 600; white-space: nowrap; width: 1%; color: var(--host-muted, var(--fallback-muted)); }
+  /* Graph styles */
+  .graph-toolbar { display: flex; gap: 8px; padding: 4px 0; flex-shrink: 0; }
+  #graph-container { border: 1px solid var(--host-border, var(--fallback-border)); border-radius: 6px; }
+  .graph-mini-card {
+    position: absolute; bottom: 16px; right: 16px; width: 280px; max-height: 200px; overflow-y: auto;
+    background: var(--host-bg, var(--fallback-bg)); border: 1px solid var(--host-border, var(--fallback-border));
+    border-radius: 8px; padding: 12px; font-size: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); z-index: 10;
+  }
+  .graph-mini-card h4 { margin: 0 0 6px; font-size: 14px; }
+  .graph-mini-card .mini-links { margin: 4px 0; }
+  .graph-mini-card .mini-link { color: var(--host-accent, var(--fallback-accent)); cursor: pointer; padding: 1px 0; }
+  .graph-mini-card .mini-link:hover { text-decoration: underline; }
+  .graph-mini-card .mini-actions { margin-top: 8px; display: flex; gap: 6px; }
+  .graph-mini-card .mini-actions button {
+    font-size: 11px; padding: 3px 8px; border-radius: 3px; cursor: pointer;
+    background: var(--host-surface, var(--fallback-surface)); border: 1px solid var(--host-border, var(--fallback-border));
+    color: var(--host-fg, var(--fallback-fg)); font-family: inherit;
+  }
+  .graph-mini-card .mini-actions button:hover { background: var(--host-border, var(--fallback-border)); }
 </style>
 </head>
 <body>
@@ -270,7 +290,12 @@ _SPA_SHELL_HTML = """\
     </div>
   </div>
   <div class="tab-panel" id="panel-graph" data-tab="graph">
-    <div class="placeholder">Graph explorer — loading&hellip;</div>
+    <div class="graph-toolbar" id="graph-toolbar">
+      <button class="action-btn" id="graph-send-btn" title="Send graph summary to Claude">&#x1F4AC; Send</button>
+      <button class="action-btn" id="graph-fullscreen-btn" title="Request fullscreen for graph" style="background:var(--host-surface,var(--fallback-surface));color:var(--host-fg,var(--fallback-fg));border:1px solid var(--host-border,var(--fallback-border));">&#x26F6; Expand</button>
+    </div>
+    <div id="graph-container" style="flex:1;min-height:300px;"></div>
+    <div id="graph-mini-card" class="graph-mini-card" style="display:none;"></div>
   </div>
   <div class="tab-panel" id="panel-browse" data-tab="browse">
     <div class="placeholder">Vault browser — loading&hellip;</div>
@@ -579,6 +604,230 @@ app.onDisplayModeChanged((mode) => {
 
   // Expose for cross-view use
   window.loadContext = loadContext;
+})();
+
+// ── Graph Explorer View ──────────────────────────────────────────────────
+(function() {
+  let network = null;
+  let nodesDS = null;
+  let edgesDS = null;
+  let graphCenterPath = null;
+  let selectedNodeId = null;
+
+  // Color scheme derived from CSS variables at init time
+  function getColors() {
+    const s = getComputedStyle(document.documentElement);
+    return {
+      bg: s.getPropertyValue('--host-bg').trim() || '#ffffff',
+      fg: s.getPropertyValue('--host-fg').trim() || '#1a1a1a',
+      accent: s.getPropertyValue('--host-accent').trim() || '#6366f1',
+      muted: s.getPropertyValue('--host-muted').trim() || '#6b7280',
+      border: s.getPropertyValue('--host-border').trim() || '#e0e0e0',
+      surface: s.getPropertyValue('--host-surface').trim() || '#f5f5f5',
+    };
+  }
+
+  function edgeColorByType(type) {
+    const c = getColors();
+    if (type === 'wikilink') return c.accent;
+    if (type === 'reference') return c.muted;
+    return c.border; // markdown = default
+  }
+
+  function initNetwork() {
+    if (network) return;
+    const container = document.getElementById('graph-container');
+    if (!container || typeof vis === 'undefined') return;
+    const c = getColors();
+    nodesDS = new vis.DataSet();
+    edgesDS = new vis.DataSet();
+    const options = {
+      physics: { enabled: true, solver: 'forceAtlas2Based', forceAtlas2Based: { gravitationalConstant: -40 } },
+      nodes: {
+        shape: 'dot', font: { size: 12, color: c.fg }, color: { background: c.accent, border: c.border, highlight: { background: c.accent, border: c.fg } },
+        scaling: { min: 8, max: 30, label: { enabled: true, min: 10, max: 16 } },
+      },
+      edges: {
+        arrows: { to: { enabled: true, scaleFactor: 0.5 } }, font: { size: 9 }, smooth: { type: 'continuous' },
+      },
+      interaction: { hover: true, tooltipDelay: 200 },
+    };
+    network = new vis.Network(container, { nodes: nodesDS, edges: edgesDS }, options);
+
+    // Click: expand neighbors
+    network.on('click', async (params) => {
+      if (params.nodes.length > 0) {
+        const nodeId = params.nodes[0];
+        selectedNodeId = nodeId;
+        await expandNode(nodeId);
+        showMiniCard(nodeId);
+      } else {
+        hideMiniCard();
+        selectedNodeId = null;
+      }
+    });
+
+    // Hover: tooltip is built-in via node.title
+    // Double-click: emit event for cross-navigation (#277)
+    network.on('doubleClick', (params) => {
+      if (params.nodes.length > 0) {
+        const nodeId = params.nodes[0];
+        window.dispatchEvent(new CustomEvent('vault-graph-dblclick', { detail: { path: nodeId } }));
+      }
+    });
+  }
+
+  function addGraphData(data) {
+    if (!nodesDS || !edgesDS) return;
+    const c = getColors();
+    for (const n of data.nodes) {
+      if (!nodesDS.get(n.id)) {
+        const bc = n.backlink_count || 0;
+        nodesDS.add({
+          id: n.id, label: n.label,
+          value: Math.max(bc, 1),
+          title: n.label + (n.group === 'hub' ? ' (' + bc + ' backlinks)' : ''),
+          color: n.group === 'hub'
+            ? { background: c.accent, border: c.fg }
+            : { background: c.surface, border: c.border },
+          font: { color: c.fg },
+          borderWidth: n.group === 'orphan' ? 1 : 2,
+          borderWidthSelected: 3,
+          shapeProperties: n.group === 'orphan' ? { borderDashes: [5, 5] } : {},
+        });
+      }
+    }
+    for (const e of data.edges) {
+      const edgeId = e.from + '->' + e.to;
+      if (!edgesDS.get(edgeId)) {
+        edgesDS.add({
+          id: edgeId, from: e.from, to: e.to,
+          color: { color: edgeColorByType(e.type), highlight: c.accent },
+          title: e.type,
+        });
+      }
+    }
+  }
+
+  async function expandNode(path) {
+    try {
+      const result = await app.callServerTool({
+        name: '_vault_graph_neighborhood', arguments: { path, depth: 1 }
+      });
+      const data = typeof result === 'string' ? JSON.parse(result) : result;
+      addGraphData(data);
+      window.updateContext('graph explorer', path, nodesDS.get(path)?.label,
+        'Visible: ' + nodesDS.length + ' notes, ' + edgesDS.length + ' links');
+    } catch (err) {
+      console.warn('Graph expand failed:', err);
+    }
+  }
+
+  async function loadHubs() {
+    try {
+      const result = await app.callServerTool({ name: '_vault_graph_hubs', arguments: {} });
+      const data = typeof result === 'string' ? JSON.parse(result) : result;
+      addGraphData(data);
+      if (data.nodes.length > 0) {
+        window.updateContext('graph explorer', '(hub view)', null,
+          'Showing ' + data.nodes.length + ' most-linked notes');
+      }
+    } catch (err) {
+      console.warn('Graph hubs failed:', err);
+    }
+  }
+
+  async function loadGraph(path) {
+    initNetwork();
+    nodesDS.clear();
+    edgesDS.clear();
+    graphCenterPath = path || null;
+    if (path) {
+      await expandNode(path);
+      network.fit({ animation: true });
+    } else {
+      await loadHubs();
+      network.fit({ animation: true });
+    }
+  }
+
+  // Mini context card on single click
+  function showMiniCard(nodeId) {
+    const card = document.getElementById('graph-mini-card');
+    app.callServerTool({ name: '_vault_context', arguments: { path: nodeId } }).then(result => {
+      const data = typeof result === 'string' ? JSON.parse(result) : result;
+      const bl = (data.backlinks || []).slice(0, 3);
+      const ol = (data.outlinks || []).slice(0, 3);
+      let html = '<h4>' + (data.title || nodeId) + '</h4>';
+      if (data.tags && Object.keys(data.tags).length > 0) {
+        const allTags = Object.values(data.tags).flat().slice(0, 5);
+        html += '<div>' + allTags.map(t => '<span class="tag-pill" style="font-size:10px">' + t + '</span>').join(' ') + '</div>';
+      }
+      if (bl.length > 0) {
+        html += '<div class="mini-links"><strong>Backlinks:</strong>';
+        for (const b of bl) html += '<div class="mini-link" data-path="' + b.source_path + '">' + b.source_path + '</div>';
+        html += '</div>';
+      }
+      if (ol.length > 0) {
+        html += '<div class="mini-links"><strong>Outlinks:</strong>';
+        for (const o of ol) html += '<div class="mini-link" data-path="' + o.target_path + '">' + o.target_path + '</div>';
+        html += '</div>';
+      }
+      html += '<div class="mini-actions">'
+        + '<button id="mini-full-ctx">Full Context</button>'
+        + '<button id="mini-open-browser">Open in Browser</button>'
+        + '</div>';
+      card.innerHTML = html;
+      card.style.display = '';
+
+      card.querySelector('#mini-full-ctx')?.addEventListener('click', () => {
+        window.navigateTo('context', { path: nodeId });
+        hideMiniCard();
+      });
+      card.querySelector('#mini-open-browser')?.addEventListener('click', () => {
+        window.navigateTo('browse', { path: nodeId });
+        hideMiniCard();
+      });
+      card.querySelectorAll('.mini-link').forEach(el => {
+        el.addEventListener('click', () => expandNode(el.dataset.path));
+      });
+    }).catch(() => { card.style.display = 'none'; });
+  }
+
+  function hideMiniCard() {
+    document.getElementById('graph-mini-card').style.display = 'none';
+  }
+
+  // Send graph summary to Claude
+  document.getElementById('graph-send-btn').addEventListener('click', () => {
+    if (!nodesDS || nodesDS.length === 0) return;
+    const center = graphCenterPath || 'hub view';
+    const nodeLabels = nodesDS.get().map(n => n.label).slice(0, 20).join(', ');
+    const summary = 'Graph around ' + center + ': ' + nodesDS.length + ' notes, '
+      + edgesDS.length + ' links\\nNotes: ' + nodeLabels;
+    window.sendToLLM(center, summary);
+  });
+
+  // Fullscreen for graph
+  document.getElementById('graph-fullscreen-btn').addEventListener('click', async () => {
+    try { await app.setDisplayMode('fullscreen'); } catch (e) { console.warn(e); }
+  });
+
+  // Listen for navigation events
+  window.addEventListener('vault-navigate', (e) => {
+    if (e.detail.view === 'graph') {
+      loadGraph(e.detail.path || null);
+    }
+  });
+
+  // Auto-load when graph tab is selected
+  window.addEventListener('vault-tab-changed', (e) => {
+    if (e.detail.tab === 'graph' && (!nodesDS || nodesDS.length === 0)) {
+      loadGraph(graphCenterPath);
+    }
+  });
+
+  window.loadGraph = loadGraph;
 })();
 
 // ── Connect ──────────────────────────────────────────────────────────────
