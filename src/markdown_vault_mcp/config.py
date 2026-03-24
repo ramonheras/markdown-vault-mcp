@@ -116,6 +116,7 @@ class CollectionConfig:
     max_attachment_size_mb: float = 10.0
     templates_folder: str = "_templates"
     prompts_folder: str | None = None
+    event_store_url: str | None = None
 
     def to_collection_kwargs(self) -> dict[str, Any]:
         """Return keyword arguments suitable for ``Collection(**kwargs)``.
@@ -248,6 +249,9 @@ def load_config() -> CollectionConfig:
       template markdown files are stored; default ``_templates``.
     - ``MARKDOWN_VAULT_MCP_PROMPTS_FOLDER``: relative folder path where
       user-defined prompt markdown files are stored; default ``None`` (disabled).
+    - ``MARKDOWN_VAULT_MCP_EVENT_STORE_URL``: event store backend for HTTP session
+      persistence; ``file:///path`` (default ``/data/state/events``) or
+      ``memory://`` (in-memory, lost on restart).
 
     The ``EMBEDDING_PROVIDER`` variable is intentionally **not** resolved here;
     call :func:`~markdown_vault_mcp.providers.get_embedding_provider`
@@ -421,6 +425,10 @@ def load_config() -> CollectionConfig:
         prompts_folder = None
     logger.debug("load_config: prompts_folder=%s", prompts_folder)
 
+    raw_event_store_url = (_env("EVENT_STORE_URL") or "").strip()
+    event_store_url: str | None = raw_event_store_url or None
+    logger.debug("load_config: event_store_url=%s", event_store_url or "not set (file default)")
+
     return CollectionConfig(
         source_dir=source_dir,
         read_only=read_only,
@@ -442,4 +450,5 @@ def load_config() -> CollectionConfig:
         max_attachment_size_mb=max_attachment_size_mb,
         templates_folder=templates_folder,
         prompts_folder=prompts_folder,
+        event_store_url=event_store_url,
     )

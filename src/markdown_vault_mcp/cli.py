@@ -95,7 +95,7 @@ def _build_collection(args: argparse.Namespace) -> Collection:
 def _cmd_serve(args: argparse.Namespace) -> None:
     """Run the MCP server."""
     try:
-        from markdown_vault_mcp.mcp_server import create_server
+        from markdown_vault_mcp.mcp_server import build_event_store, create_server
     except ImportError:
         logger.error(
             "FastMCP is not installed. Install with: "
@@ -112,7 +112,24 @@ def _cmd_serve(args: argparse.Namespace) -> None:
     ):
         logger.warning("--host, --port and --path are only used with --transport http")
     if transport == "http":
-        server.run(transport="http", host=args.host, port=args.port, path=http_path)
+        import uvicorn
+
+        config = load_config()
+        event_store = build_event_store(config.event_store_url)
+        # FastMCP's run() doesn't pass event_store through to http_app(),
+        # so we build the ASGI app and run uvicorn directly.
+        app = server.http_app(
+            path=http_path,
+            transport="http",
+            event_store=event_store,
+        )
+        uvicorn.run(
+            app,
+            host=args.host,
+            port=args.port,
+            timeout_graceful_shutdown=0,
+            lifespan="on",
+        )
     else:
         server.run(transport=transport)
 

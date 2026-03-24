@@ -31,6 +31,62 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
+# Event store
+# ---------------------------------------------------------------------------
+
+_DEFAULT_EVENT_STORE_DIR = "/data/state/events"
+
+
+def build_event_store(url: str | None = None) -> Any:
+    """Build an ``EventStore`` for SSE polling/resumability.
+
+    Parses the *url* scheme to select a storage backend:
+
+    - ``None`` or empty → ``FileTreeStore`` at :data:`_DEFAULT_EVENT_STORE_DIR`
+    - ``file:///path`` → ``FileTreeStore`` at the given path
+    - ``memory://`` → in-memory (lost on restart, for development)
+
+    Args:
+        url: Event store URL from ``MARKDOWN_VAULT_MCP_EVENT_STORE_URL``.
+
+    Returns:
+        A configured :class:`~fastmcp.server.event_store.EventStore`.
+    """
+    from pathlib import Path
+    from urllib.parse import urlparse
+
+    from fastmcp.server.event_store import EventStore
+
+    if not url:
+        url = f"file://{_DEFAULT_EVENT_STORE_DIR}"
+
+    parsed = urlparse(url)
+
+    if parsed.scheme == "memory":
+        logger.info("Event store: in-memory (sessions lost on restart)")
+        return EventStore(max_events_per_stream=100, ttl=3600)
+
+    if parsed.scheme == "file":
+        directory = parsed.path
+        if not directory:
+            directory = _DEFAULT_EVENT_STORE_DIR
+        Path(directory).mkdir(parents=True, exist_ok=True)
+        logger.info("Event store: file-backed at %s", directory)
+
+        from key_value.aio.stores.filetree import FileTreeStore
+
+        storage = FileTreeStore(data_directory=directory)
+        return EventStore(
+            storage=storage, max_events_per_stream=100, ttl=3600
+        )
+
+    raise ValueError(
+        f"Unsupported EVENT_STORE_URL scheme {parsed.scheme!r}. "
+        "Use 'file:///path' or 'memory://'."
+    )
+
+
+# ---------------------------------------------------------------------------
 # Server factory
 # ---------------------------------------------------------------------------
 

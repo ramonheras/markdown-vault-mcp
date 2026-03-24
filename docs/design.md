@@ -378,6 +378,20 @@ In the MCP server, `close()` is called in the FastMCP lifespan `finally` block.
 Callers using `Collection` as a Python library must call `close()` explicitly
 (or use it as a context manager if one is added in future).
 
+### HTTP Session Persistence
+
+For HTTP/streamable-HTTP transport, the server uses an `EventStore` so MCP
+sessions survive container restarts. The backend is configured via
+`MARKDOWN_VAULT_MCP_EVENT_STORE_URL`:
+
+- **Default** (unset or `file:///path`): `FileTreeStore` at
+  `/data/state/events`. Sessions persist on disk inside the Docker state volume.
+- **`memory://`**: In-memory store; sessions are lost on restart. Suitable for
+  development or single-shot CI environments.
+
+The event store is only constructed for HTTP transport (`serve --transport http`).
+stdio transport does not use it.
+
 ### Concurrency
 
 The library is **synchronous** internally. This is appropriate for the
