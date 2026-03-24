@@ -51,7 +51,7 @@ volumes:
 | Container Path | Type | Purpose |
 |---------------|------|---------|
 | `/data/vault` | Bind mount or named volume | Your Markdown vault; pre-created in the image for managed repo mode |
-| `/data/state` | Named volume | All server-managed internal state: SQLite FTS index, embedding vectors, FastEmbed model cache, and OIDC proxy state |
+| `/data/state` | Named volume | All server-managed internal state: SQLite FTS index, embedding vectors, FastEmbed model cache, OIDC proxy state, and HTTP session event store |
 
 All `/data/*` directories are pre-created and owned by the runtime user in the image. For managed repo mode (where the server clones a git repo on first start), `/data/vault` must be writable — this works automatically with named volumes or when UID/GID match the bind-mount owner. The first startup triggers a full index build; subsequent starts only reindex changed files.
 

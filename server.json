@@ -43,6 +43,11 @@
           ]
         },
         {
+          "name": "MARKDOWN_VAULT_MCP_EVENT_STORE_URL",
+          "description": "Event store backend for HTTP session persistence (file:///path or memory://)",
+          "default": "file:///data/state/events"
+        },
+        {
           "name": "MARKDOWN_VAULT_MCP_SERVER_NAME",
           "description": "MCP server name shown to clients",
           "default": "markdown-vault-mcp"
@@ -253,6 +258,11 @@
             "WARNING",
             "ERROR"
           ]
+        },
+        {
+          "name": "MARKDOWN_VAULT_MCP_EVENT_STORE_URL",
+          "description": "Event store backend for HTTP session persistence (file:///path or memory://)",
+          "default": "file:///data/state/events"
         },
         {
           "name": "MARKDOWN_VAULT_MCP_SERVER_NAME",
