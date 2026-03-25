@@ -230,6 +230,16 @@ class TestSPAShellResource:
             assert "parseToolResult" in html
             assert "result.content" in html
 
+    async def test_html_browse_fallback_when_no_tool_input(self) -> None:
+        """After connect, app defaults to browse view when ontoolinput never fires."""
+        server = create_server()
+        async with Client(server) as client:
+            resource = await client.read_resource("ui://vault/app.html")
+            html = resource[0].text
+            # The else branch after pendingToolInput check must switch to browse
+            assert "switchTab('browse')" in html
+            assert "window.loadBrowser" in html
+
     async def test_html_contains_error_handler(self) -> None:
         server = create_server()
         async with Client(server) as client:
@@ -399,6 +409,33 @@ class TestAppOnlyTools:
             assert "notes" in data
             assert isinstance(data["notes"], list)
 
+    async def test_vault_list_root_notes_are_root_only(self) -> None:
+        """Root listing must not include notes from subfolders."""
+        server = create_server()
+        async with Client(server) as client:
+            result = await client.call_tool("_vault_list", {})
+            data = _parse_tool_data(result)
+            for note in data["notes"]:
+                assert "/" not in note["path"], (
+                    f"Root listing returned nested note: {note['path']}"
+                )
+
+    async def test_vault_list_subfolder_notes_are_direct_children(self) -> None:
+        """Subfolder listing must only include direct children, not deeper nesting."""
+        server = create_server()
+        async with Client(server) as client:
+            result = await client.call_tool("_vault_list", {"folder": "subfolder"})
+            data = _parse_tool_data(result)
+            for note in data["notes"]:
+                assert note["path"].startswith("subfolder/"), (
+                    f"Subfolder note has wrong prefix: {note['path']}"
+                )
+                # Must be a direct child: subfolder/foo.md (no further slash)
+                rest = note["path"][len("subfolder/"):]
+                assert "/" not in rest, (
+                    f"Subfolder listing returned deeply nested note: {note['path']}"
+                )
+
     async def test_vault_read(self) -> None:
         server = create_server()
         async with Client(server) as client:
@@ -532,6 +569,9 @@ class TestAppToolData:
             data = _parse_tool_data(result)
             assert "folders" in data
             assert "notes" in data
+            # Root listing must only include root-level notes
+            for note in data["notes"]:
+                assert "/" not in note["path"]
 
     async def test_vault_read_note(self) -> None:
         server = create_server()

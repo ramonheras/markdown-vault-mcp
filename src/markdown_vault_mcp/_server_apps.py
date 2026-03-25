@@ -477,10 +477,15 @@ def register_apps(mcp: FastMCP) -> None:
             {
                 f
                 for f in folders
-                if f.startswith(prefix) and "/" not in f[len(prefix) :] and f != folder
+                if f
+                and f.startswith(prefix)
+                and "/" not in f[len(prefix) :]
+                and f != folder
             }
         )
 
+        # Only return notes directly inside this folder (not nested ones)
+        target_folder = folder or ""
         notes = [
             {
                 "path": d.path,
@@ -488,6 +493,7 @@ def register_apps(mcp: FastMCP) -> None:
                 "kind": d.kind,
             }
             for d in docs
+            if (getattr(d, "folder", None) or "") == target_folder
         ]
 
         return {"folders": child_folders, "notes": notes}

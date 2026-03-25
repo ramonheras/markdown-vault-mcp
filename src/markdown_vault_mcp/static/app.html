@@ -379,7 +379,7 @@ if(__exports != exports)module.exports = exports;return module.exports}));
     font-size: 12px; cursor: not-allowed; opacity: 0.6; font-family: inherit;
   }
 </style>
-<!-- vendor-spa-source-sha256:0af5ca6defc1d2e78afd80217625f3e1721c4338da365c3f33dcb83299d922fc -->
+<!-- vendor-spa-source-sha256:db993e702f4ce7fd080f6d2694662312bc6299a12751de86d070e7febabeade1 -->
 </head>
 <body>
 <div class="app-container">
@@ -1269,10 +1269,15 @@ if (hostContext) handleHostContext(hostContext);
 
 updateFullscreenButton(hostContext?.availableDisplayModes?.includes('fullscreen') === true);
 
-// Process any tool input received during connection handshake
+// Process any tool input received during connection handshake.
+// If none arrived (host did not send ontoolinput), default to browse view so
+// the app shows data without requiring the LLM to pass explicit arguments.
 if (pendingToolInput) {
   processToolInput(pendingToolInput);
   pendingToolInput = null;
+} else {
+  switchTab('browse');
+  if (typeof window.loadBrowser === 'function') window.loadBrowser();
 }
 
 console.log('Vault Explorer connected');
