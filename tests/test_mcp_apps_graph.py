@@ -213,6 +213,17 @@ class TestGraphDataTools:
                 assert "to" in edge
                 assert "type" in edge
 
+    async def test_neighborhood_nodes_have_backlink_count(self) -> None:
+        server = create_server()
+        async with Client(server) as client:
+            result = await client.call_tool(
+                "_vault_graph_neighborhood", {"path": "simple.md"}
+            )
+            data = _parse_tool_data(result)
+            for node in data["nodes"]:
+                assert "backlink_count" in node
+                assert isinstance(node["backlink_count"], int)
+
     async def test_edges_deduplicated(self) -> None:
         server = create_server()
         async with Client(server) as client:

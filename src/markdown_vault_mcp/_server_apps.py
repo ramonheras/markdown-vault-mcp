@@ -1081,7 +1081,7 @@ def register_apps(mcp: FastMCP) -> None:
             depth: How many hops to traverse (default 1).
 
         Returns:
-            ``{nodes: [{id, label, group}], edges: [{from, to, type}]}``
+            ``{nodes: [{id, label, group, folder, backlink_count}], edges: [{from, to, type}]}``
         """
         nodes: dict[str, dict[str, Any]] = {}
         edges: list[dict[str, Any]] = []
@@ -1100,21 +1100,25 @@ def register_apps(mcp: FastMCP) -> None:
                 note.title if note else current.rsplit("/", 1)[-1].replace(".md", "")
             )
             folder = current.rsplit("/", 1)[0] if "/" in current else ""
+
+            # Fetch backlinks before depth guard for backlink_count (AC9)
+            try:
+                backlinks = await asyncio.to_thread(collection.get_backlinks, current)
+            except ValueError:
+                backlinks = []
+
             nodes[current] = {
                 "id": current,
                 "label": label,
                 "group": "note",
                 "folder": folder,
+                "backlink_count": len(backlinks),
             }
 
             if d >= depth:
                 continue
 
-            # Get backlinks
-            try:
-                backlinks = await asyncio.to_thread(collection.get_backlinks, current)
-            except ValueError:
-                backlinks = []
+            # Process backlinks (already fetched above)
             for bl in backlinks:
                 edges.append(
                     {
