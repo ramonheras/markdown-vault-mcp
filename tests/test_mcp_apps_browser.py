@@ -133,7 +133,7 @@ class TestBrowserHTML:
 
     async def test_host_font_inheritance(self) -> None:
         html = await self._get_html()
-        assert "font-family: inherit" in html or "--host-font-family" in html
+        assert "font-family: inherit" in html or "--font-sans" in html
 
     async def test_update_model_context(self) -> None:
         html = await self._get_html()

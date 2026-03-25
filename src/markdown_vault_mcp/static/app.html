@@ -9,18 +9,34 @@
 <script src="https://unpkg.com/dompurify@3.3.3/dist/purify.min.js"></script>
 <style>
   :root {
-    --fallback-bg: #ffffff;
-    --fallback-fg: #1a1a1a;
-    --fallback-border: #e0e0e0;
-    --fallback-accent: #6366f1;
-    --fallback-muted: #6b7280;
-    --fallback-surface: #f5f5f5;
+    /* Fallbacks when host does not provide style variables */
+    --color-background-primary: #ffffff;
+    --color-background-secondary: #f5f5f5;
+    --color-text-primary: #1a1a1a;
+    --color-text-secondary: #6b7280;
+    --color-text-inverse: #ffffff;
+    --color-text-info: #6366f1;
+    --color-text-success: #22c55e;
+    --color-text-danger: #ef4444;
+    --color-border-primary: #e0e0e0;
+    --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  }
+  [data-theme="dark"] {
+    --color-background-primary: #1a1a1a;
+    --color-background-secondary: #2a2a2a;
+    --color-text-primary: #e5e5e5;
+    --color-text-secondary: #9ca3af;
+    --color-text-inverse: #1a1a1a;
+    --color-text-info: #818cf8;
+    --color-text-success: #4ade80;
+    --color-text-danger: #f87171;
+    --color-border-primary: #404040;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
-    font-family: var(--host-font-family, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
-    background: var(--host-bg, var(--fallback-bg));
-    color: var(--host-fg, var(--fallback-fg));
+    font-family: var(--font-sans);
+    background: var(--color-background-primary);
+    color: var(--color-text-primary);
     line-height: 1.5;
     overflow: hidden;
     height: 100vh;
@@ -33,8 +49,8 @@
   /* Tab bar */
   .tab-bar {
     display: flex;
-    border-bottom: 1px solid var(--host-border, var(--fallback-border));
-    background: var(--host-surface, var(--fallback-surface));
+    border-bottom: 1px solid var(--color-border-primary);
+    background: var(--color-background-secondary);
     flex-shrink: 0;
   }
   .tab-bar button {
@@ -42,7 +58,7 @@
     padding: 8px 12px;
     border: none;
     background: transparent;
-    color: var(--host-muted, var(--fallback-muted));
+    color: var(--color-text-secondary);
     cursor: pointer;
     font-size: 13px;
     font-family: inherit;
@@ -50,11 +66,11 @@
     transition: color 0.15s, border-color 0.15s;
   }
   .tab-bar button:hover {
-    color: var(--host-fg, var(--fallback-fg));
+    color: var(--color-text-primary);
   }
   .tab-bar button.active {
-    color: var(--host-accent, var(--fallback-accent));
-    border-bottom-color: var(--host-accent, var(--fallback-accent));
+    color: var(--color-text-info);
+    border-bottom-color: var(--color-text-info);
     font-weight: 600;
   }
   /* Header with fullscreen toggle */
@@ -67,8 +83,8 @@
   }
   .fullscreen-btn {
     background: none;
-    border: 1px solid var(--host-border, var(--fallback-border));
-    color: var(--host-muted, var(--fallback-muted));
+    border: 1px solid var(--color-border-primary);
+    color: var(--color-text-secondary);
     cursor: pointer;
     padding: 4px 8px;
     border-radius: 4px;
@@ -76,8 +92,8 @@
     font-family: inherit;
   }
   .fullscreen-btn:hover {
-    color: var(--host-fg, var(--fallback-fg));
-    background: var(--host-surface, var(--fallback-surface));
+    color: var(--color-text-primary);
+    background: var(--color-background-secondary);
   }
   /* Tab panels */
   .tab-panel {
@@ -93,7 +109,7 @@
     align-items: center;
     justify-content: center;
     flex: 1;
-    color: var(--host-muted, var(--fallback-muted));
+    color: var(--color-text-secondary);
     font-size: 14px;
   }
   /* Toast notifications */
@@ -102,8 +118,8 @@
     bottom: 16px;
     left: 50%;
     transform: translateX(-50%);
-    background: var(--host-fg, var(--fallback-fg));
-    color: var(--host-bg, var(--fallback-bg));
+    background: var(--color-text-primary);
+    color: var(--color-background-primary);
     padding: 8px 16px;
     border-radius: 6px;
     font-size: 13px;
@@ -119,118 +135,118 @@
     display: flex; align-items: center; justify-content: space-between; gap: 8px;
   }
   .context-title-row h2 { font-size: 18px; margin: 0; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .context-meta { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; font-size: 12px; color: var(--host-muted, var(--fallback-muted)); }
+  .context-meta { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; font-size: 12px; color: var(--color-text-secondary); }
   .meta-item::before { content: ''; }
   .action-btn {
-    background: var(--host-accent, var(--fallback-accent)); color: var(--host-accent-fg, #fff); border: none; padding: 4px 10px;
+    background: var(--color-text-info); color: var(--color-text-inverse); border: none; padding: 4px 10px;
     border-radius: 4px; cursor: pointer; font-size: 12px; font-family: inherit; white-space: nowrap;
   }
   .action-btn:hover { opacity: 0.85; }
-  .context-section { margin-bottom: 8px; border: 1px solid var(--host-border, var(--fallback-border)); border-radius: 6px; overflow: hidden; }
+  .context-section { margin-bottom: 8px; border: 1px solid var(--color-border-primary); border-radius: 6px; overflow: hidden; }
   .section-header {
     display: flex; align-items: center; justify-content: space-between; padding: 8px 12px;
-    background: var(--host-surface, var(--fallback-surface)); cursor: pointer; font-size: 13px; font-weight: 600;
+    background: var(--color-background-secondary); cursor: pointer; font-size: 13px; font-weight: 600;
     user-select: none;
   }
-  .section-header .badge { background: var(--host-accent, var(--fallback-accent)); color: var(--host-accent-fg, #fff); padding: 1px 6px; border-radius: 10px; font-size: 11px; font-weight: 500; }
+  .section-header .badge { background: var(--color-text-info); color: var(--color-text-inverse); padding: 1px 6px; border-radius: 10px; font-size: 11px; font-weight: 500; }
   .section-body { padding: 8px 12px; font-size: 13px; display: none; }
   .context-section:not(.collapsed-section) .section-body { display: block; }
   .section-header::after { content: '\\25B6'; font-size: 10px; transition: transform 0.15s; }
   .context-section:not(.collapsed-section) .section-header::after { transform: rotate(90deg); }
   /* Tag pills */
   .tag-group { margin-bottom: 6px; }
-  .tag-group-label { font-size: 11px; color: var(--host-muted, var(--fallback-muted)); text-transform: uppercase; margin-bottom: 2px; }
+  .tag-group-label { font-size: 11px; color: var(--color-text-secondary); text-transform: uppercase; margin-bottom: 2px; }
   .tag-pill {
     display: inline-block; padding: 2px 8px; margin: 2px 4px 2px 0; border-radius: 12px; font-size: 12px;
-    background: var(--host-surface, var(--fallback-surface)); border: 1px solid var(--host-border, var(--fallback-border));
+    background: var(--color-background-secondary); border: 1px solid var(--color-border-primary);
   }
   /* Link lists */
   .link-item {
     display: flex; align-items: center; gap: 8px; padding: 4px 0; cursor: pointer;
-    border-bottom: 1px solid var(--host-border, var(--fallback-border));
+    border-bottom: 1px solid var(--color-border-primary);
   }
   .link-item:last-child { border-bottom: none; }
-  .link-item:hover { background: var(--host-surface, var(--fallback-surface)); }
-  .link-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--host-accent, var(--fallback-accent)); }
+  .link-item:hover { background: var(--color-background-secondary); }
+  .link-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-text-info); }
   .link-type-badge {
     font-size: 10px; padding: 1px 5px; border-radius: 3px;
-    background: var(--host-surface, var(--fallback-surface)); border: 1px solid var(--host-border, var(--fallback-border));
-    color: var(--host-muted, var(--fallback-muted));
+    background: var(--color-background-secondary); border: 1px solid var(--color-border-primary);
+    color: var(--color-text-secondary);
   }
-  .link-exists-yes { color: var(--host-success, #22c55e); }
-  .link-exists-no { color: var(--host-error, #ef4444); }
-  .link-text { font-size: 11px; color: var(--host-muted, var(--fallback-muted)); }
+  .link-exists-yes { color: var(--color-text-success); }
+  .link-exists-no { color: var(--color-text-danger); }
+  .link-text { font-size: 11px; color: var(--color-text-secondary); }
   /* Similar notes */
   .similar-score {
-    width: 60px; height: 6px; background: var(--host-border, var(--fallback-border)); border-radius: 3px; overflow: hidden; flex-shrink: 0;
+    width: 60px; height: 6px; background: var(--color-border-primary); border-radius: 3px; overflow: hidden; flex-shrink: 0;
   }
-  .similar-score-fill { height: 100%; background: var(--host-accent, var(--fallback-accent)); border-radius: 3px; }
+  .similar-score-fill { height: 100%; background: var(--color-text-info); border-radius: 3px; }
   /* Frontmatter table */
   .fm-table { width: 100%; border-collapse: collapse; }
-  .fm-table td { padding: 3px 8px; border-bottom: 1px solid var(--host-border, var(--fallback-border)); font-size: 12px; vertical-align: top; }
-  .fm-table td:first-child { font-weight: 600; white-space: nowrap; width: 1%; color: var(--host-muted, var(--fallback-muted)); }
+  .fm-table td { padding: 3px 8px; border-bottom: 1px solid var(--color-border-primary); font-size: 12px; vertical-align: top; }
+  .fm-table td:first-child { font-weight: 600; white-space: nowrap; width: 1%; color: var(--color-text-secondary); }
   /* Graph styles */
   .graph-toolbar { display: flex; gap: 8px; padding: 4px 0; flex-shrink: 0; }
-  #graph-container { border: 1px solid var(--host-border, var(--fallback-border)); border-radius: 6px; }
+  #graph-container { border: 1px solid var(--color-border-primary); border-radius: 6px; }
   .graph-mini-card {
     position: absolute; bottom: 16px; right: 16px; width: 280px; max-height: 200px; overflow-y: auto;
-    background: var(--host-bg, var(--fallback-bg)); border: 1px solid var(--host-border, var(--fallback-border));
+    background: var(--color-background-primary); border: 1px solid var(--color-border-primary);
     border-radius: 8px; padding: 12px; font-size: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); z-index: 10;
   }
   .graph-mini-card h4 { margin: 0 0 6px; font-size: 14px; }
   .graph-mini-card .mini-links { margin: 4px 0; }
-  .graph-mini-card .mini-link { color: var(--host-accent, var(--fallback-accent)); cursor: pointer; padding: 1px 0; }
+  .graph-mini-card .mini-link { color: var(--color-text-info); cursor: pointer; padding: 1px 0; }
   .graph-mini-card .mini-link:hover { text-decoration: underline; }
   .graph-mini-card .mini-actions { margin-top: 8px; display: flex; gap: 6px; }
   .graph-mini-card .mini-actions button {
     font-size: 11px; padding: 3px 8px; border-radius: 3px; cursor: pointer;
-    background: var(--host-surface, var(--fallback-surface)); border: 1px solid var(--host-border, var(--fallback-border));
-    color: var(--host-fg, var(--fallback-fg)); font-family: inherit;
+    background: var(--color-background-secondary); border: 1px solid var(--color-border-primary);
+    color: var(--color-text-primary); font-family: inherit;
   }
-  .graph-mini-card .mini-actions button:hover { background: var(--host-border, var(--fallback-border)); }
+  .graph-mini-card .mini-actions button:hover { background: var(--color-border-primary); }
   /* Browser styles */
   .browser-layout { display: flex; flex: 1; min-height: 0; gap: 0; }
   .browser-sidebar {
     width: 240px; min-width: 180px; flex-shrink: 0; display: flex; flex-direction: column;
-    border-right: 1px solid var(--host-border, var(--fallback-border)); overflow: hidden;
+    border-right: 1px solid var(--color-border-primary); overflow: hidden;
   }
   .browser-search {
-    display: flex; padding: 6px; gap: 4px; border-bottom: 1px solid var(--host-border, var(--fallback-border)); flex-shrink: 0;
+    display: flex; padding: 6px; gap: 4px; border-bottom: 1px solid var(--color-border-primary); flex-shrink: 0;
   }
   .browser-search input {
-    flex: 1; padding: 4px 8px; border: 1px solid var(--host-border, var(--fallback-border)); border-radius: 4px;
-    font-size: 12px; font-family: inherit; background: var(--host-bg, var(--fallback-bg)); color: var(--host-fg, var(--fallback-fg));
+    flex: 1; padding: 4px 8px; border: 1px solid var(--color-border-primary); border-radius: 4px;
+    font-size: 12px; font-family: inherit; background: var(--color-background-primary); color: var(--color-text-primary);
   }
   .browser-search button {
-    background: none; border: none; cursor: pointer; font-size: 16px; color: var(--host-muted, var(--fallback-muted)); padding: 0 4px;
+    background: none; border: none; cursor: pointer; font-size: 16px; color: var(--color-text-secondary); padding: 0 4px;
   }
   .browser-tree { flex: 1; overflow-y: auto; padding: 4px; font-size: 12px; }
   .tree-folder {
     cursor: pointer; padding: 3px 4px; display: flex; align-items: center; gap: 4px;
-    font-weight: 600; color: var(--host-fg, var(--fallback-fg));
+    font-weight: 600; color: var(--color-text-primary);
   }
-  .tree-folder:hover { background: var(--host-surface, var(--fallback-surface)); border-radius: 3px; }
+  .tree-folder:hover { background: var(--color-background-secondary); border-radius: 3px; }
   .tree-folder .arrow { font-size: 10px; width: 12px; transition: transform 0.15s; display: inline-block; }
   .tree-folder.expanded .arrow { transform: rotate(90deg); }
   .tree-children { padding-left: 16px; display: none; }
   .tree-folder.expanded + .tree-children { display: block; }
   .tree-note {
     cursor: pointer; padding: 3px 4px 3px 20px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-    color: var(--host-fg, var(--fallback-fg));
+    color: var(--color-text-primary);
   }
-  .tree-note:hover { background: var(--host-surface, var(--fallback-surface)); border-radius: 3px; }
-  .tree-note.active { background: var(--host-accent, var(--fallback-accent)); color: var(--host-accent-fg, #fff); border-radius: 3px; }
+  .tree-note:hover { background: var(--color-background-secondary); border-radius: 3px; }
+  .tree-note.active { background: var(--color-text-info); color: var(--color-text-inverse); border-radius: 3px; }
   .search-result {
-    cursor: pointer; padding: 6px 8px; border-bottom: 1px solid var(--host-border, var(--fallback-border));
+    cursor: pointer; padding: 6px 8px; border-bottom: 1px solid var(--color-border-primary);
   }
-  .search-result:hover { background: var(--host-surface, var(--fallback-surface)); }
+  .search-result:hover { background: var(--color-background-secondary); }
   .search-result-title { font-weight: 600; font-size: 13px; }
-  .search-result-snippet { font-size: 11px; color: var(--host-muted, var(--fallback-muted)); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .search-result-snippet { font-size: 11px; color: var(--color-text-secondary); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   /* Preview pane */
   .browser-preview { flex: 1; overflow-y: auto; padding: 16px; min-width: 0; }
   .preview-header {
     display: flex; align-items: center; justify-content: space-between; gap: 8px;
-    margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--host-border, var(--fallback-border));
+    margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--color-border-primary);
   }
   .preview-header h1 { font-size: 18px; margin: 0; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .preview-actions { display: flex; gap: 6px; flex-shrink: 0; }
@@ -238,14 +254,14 @@
   .preview-content { font-size: 14px; line-height: 1.6; }
   .preview-content h1, .preview-content h2, .preview-content h3 { margin-top: 16px; margin-bottom: 8px; }
   .preview-content p { margin: 8px 0; }
-  .preview-content code { background: var(--host-surface, var(--fallback-surface)); padding: 1px 4px; border-radius: 3px; font-size: 13px; }
-  .preview-content pre { background: var(--host-surface, var(--fallback-surface)); padding: 12px; border-radius: 6px; overflow-x: auto; }
+  .preview-content code { background: var(--color-background-secondary); padding: 1px 4px; border-radius: 3px; font-size: 13px; }
+  .preview-content pre { background: var(--color-background-secondary); padding: 12px; border-radius: 6px; overflow-x: auto; }
   .preview-content pre code { background: none; padding: 0; }
-  .preview-content blockquote { border-left: 3px solid var(--host-accent, var(--fallback-accent)); padding-left: 12px; color: var(--host-muted, var(--fallback-muted)); margin: 8px 0; }
-  .preview-content a { color: var(--host-accent, var(--fallback-accent)); }
+  .preview-content blockquote { border-left: 3px solid var(--color-text-info); padding-left: 12px; color: var(--color-text-secondary); margin: 8px 0; }
+  .preview-content a { color: var(--color-text-info); }
   .edit-btn-disabled {
-    background: var(--host-surface, var(--fallback-surface)); color: var(--host-muted, var(--fallback-muted));
-    border: 1px solid var(--host-border, var(--fallback-border)); padding: 4px 10px; border-radius: 4px;
+    background: var(--color-background-secondary); color: var(--color-text-secondary);
+    border: 1px solid var(--color-border-primary); padding: 4px 10px; border-radius: 4px;
     font-size: 12px; cursor: not-allowed; opacity: 0.6; font-family: inherit;
   }
 </style>
@@ -268,8 +284,8 @@
         <div class="context-title-row">
           <h2 id="ctx-title"></h2>
           <div class="context-actions">
-            <button class="action-btn" id="ctx-graph-btn" title="Show in Graph" style="background:var(--host-surface,var(--fallback-surface));color:var(--host-fg,var(--fallback-fg));border:1px solid var(--host-border,var(--fallback-border));">&#x1F517; Graph</button>
-            <button class="action-btn" id="ctx-browse-btn" title="Open in Browser" style="background:var(--host-surface,var(--fallback-surface));color:var(--host-fg,var(--fallback-fg));border:1px solid var(--host-border,var(--fallback-border));">&#x1F4C4; Browse</button>
+            <button class="action-btn" id="ctx-graph-btn" title="Show in Graph" style="background:var(--color-background-secondary);color:var(--color-text-primary);border:1px solid var(--color-border-primary);">&#x1F517; Graph</button>
+            <button class="action-btn" id="ctx-browse-btn" title="Open in Browser" style="background:var(--color-background-secondary);color:var(--color-text-primary);border:1px solid var(--color-border-primary);">&#x1F4C4; Browse</button>
             <button class="action-btn" id="ctx-send-btn" title="Send to Claude">&#x1F4AC; Send</button>
           </div>
         </div>
@@ -290,7 +306,7 @@
   <div class="tab-panel" id="panel-graph" data-tab="graph">
     <div class="graph-toolbar" id="graph-toolbar">
       <button class="action-btn" id="graph-send-btn" title="Send graph summary to Claude">&#x1F4AC; Send</button>
-      <button class="action-btn" id="graph-fullscreen-btn" title="Request fullscreen for graph" style="background:var(--host-surface,var(--fallback-surface));color:var(--host-fg,var(--fallback-fg));border:1px solid var(--host-border,var(--fallback-border));">&#x26F6; Expand</button>
+      <button class="action-btn" id="graph-fullscreen-btn" title="Request fullscreen for graph" style="background:var(--color-background-secondary);color:var(--color-text-primary);border:1px solid var(--color-border-primary);">&#x26F6; Expand</button>
     </div>
     <div id="graph-container" style="flex:1;min-height:300px;"></div>
     <div id="graph-mini-card" class="graph-mini-card" style="display:none;"></div>
@@ -340,6 +356,10 @@ function handleHostContext(ctx) {
   if (ctx.theme) applyDocumentTheme(ctx.theme);
   if (ctx.styles?.variables) applyHostStyleVariables(ctx.styles.variables);
   if (ctx.styles?.css?.fonts) applyHostFonts(ctx.styles.css.fonts);
+  if (ctx.displayMode !== undefined) {
+    isFullscreen = ctx.displayMode === 'fullscreen';
+    fullscreenBtn.textContent = isFullscreen ? '\u2716 Exit Fullscreen' : '\u26F6 Fullscreen';
+  }
 }
 
 // ── Tab navigation ───────────────────────────────────────────────────────
@@ -377,15 +397,8 @@ function updateFullscreenButton(available) {
 
 fullscreenBtn.addEventListener('click', async () => {
   try {
-    if (isFullscreen) {
-      await app.setDisplayMode('inline');
-      fullscreenBtn.textContent = '\\u26F6 Fullscreen';
-      isFullscreen = false;
-    } else {
-      await app.setDisplayMode('fullscreen');
-      fullscreenBtn.textContent = '\\u2716 Exit Fullscreen';
-      isFullscreen = true;
-    }
+    const mode = isFullscreen ? 'inline' : 'fullscreen';
+    await app.requestDisplayMode({ mode });
   } catch (err) {
     console.warn('Display mode change failed:', err);
   }
@@ -643,12 +656,12 @@ app.onerror = (err) => {
   function getColors() {
     const s = getComputedStyle(document.documentElement);
     return {
-      bg: s.getPropertyValue('--host-bg').trim() || '#ffffff',
-      fg: s.getPropertyValue('--host-fg').trim() || '#1a1a1a',
-      accent: s.getPropertyValue('--host-accent').trim() || '#6366f1',
-      muted: s.getPropertyValue('--host-muted').trim() || '#6b7280',
-      border: s.getPropertyValue('--host-border').trim() || '#e0e0e0',
-      surface: s.getPropertyValue('--host-surface').trim() || '#f5f5f5',
+      bg: s.getPropertyValue('--color-background-primary').trim() || '#ffffff',
+      fg: s.getPropertyValue('--color-text-primary').trim() || '#1a1a1a',
+      accent: s.getPropertyValue('--color-text-info').trim() || '#6366f1',
+      muted: s.getPropertyValue('--color-text-secondary').trim() || '#6b7280',
+      border: s.getPropertyValue('--color-border-primary').trim() || '#e0e0e0',
+      surface: s.getPropertyValue('--color-background-secondary').trim() || '#f5f5f5',
     };
   }
 
@@ -835,7 +848,7 @@ app.onerror = (err) => {
 
   // Fullscreen for graph
   document.getElementById('graph-fullscreen-btn').addEventListener('click', async () => {
-    try { await app.setDisplayMode('fullscreen'); } catch (e) { console.warn(e); }
+    try { await app.requestDisplayMode({ mode: 'fullscreen' }); } catch (e) { console.warn(e); }
   });
 
   // Listen for navigation events
@@ -958,8 +971,8 @@ window.addEventListener('vault-graph-dblclick', (e) => {
       html += '<h2>' + escHtml(data.title || path) + '</h2>';
       html += '<div class="preview-actions">';
       html += '<button class="action-btn" id="preview-send-btn" title="Send to Claude">\\uD83D\\uDCAC Send</button>';
-      html += '<button class="action-btn" id="preview-ctx-btn" title="Show Context" style="background:var(--host-surface,var(--fallback-surface));color:var(--host-fg,var(--fallback-fg));border:1px solid var(--host-border,var(--fallback-border));">\\uD83D\\uDD0D Context</button>';
-      html += '<button class="action-btn" id="preview-graph-btn" title="Show in Graph" style="background:var(--host-surface,var(--fallback-surface));color:var(--host-fg,var(--fallback-fg));border:1px solid var(--host-border,var(--fallback-border));">\\uD83D\\uDD17 Graph</button>';
+      html += '<button class="action-btn" id="preview-ctx-btn" title="Show Context" style="background:var(--color-background-secondary);color:var(--color-text-primary);border:1px solid var(--color-border-primary);">\\uD83D\\uDD0D Context</button>';
+      html += '<button class="action-btn" id="preview-graph-btn" title="Show in Graph" style="background:var(--color-background-secondary);color:var(--color-text-primary);border:1px solid var(--color-border-primary);">\\uD83D\\uDD17 Graph</button>';
       html += '<button class="edit-btn-disabled" title="Coming soon" disabled>\\u270F Edit</button>';
       html += '</div></div>';
 
@@ -1075,8 +1088,7 @@ try {
   const hostContext = app.getHostContext();
   if (hostContext) handleHostContext(hostContext);
 
-  const caps = app.getHostCapabilities();
-  updateFullscreenButton(caps?.setDisplayMode === true);
+  updateFullscreenButton(hostContext?.availableDisplayModes?.includes('fullscreen') === true);
 
   // If launched with initial params, navigate
   if (hostContext?.toolInput?.view) {
@@ -1091,16 +1103,27 @@ try {
   console.log('Vault Explorer connected');
 } catch (err) {
   console.error('Failed to connect to host:', err);
-  document.querySelector('.placeholder')?.textContent ||
-    (document.body.innerHTML += '<div style="padding:12px;color:#999;text-align:center;">SDK connection failed. This app requires a compatible MCP client.</div>');
+  const container = document.querySelector('.app-container');
+  if (container) {
+    container.innerHTML = '<div style="padding:24px;text-align:center;color:var(--color-text-secondary);">'
+      + '<p>SDK connection failed. This app requires a compatible MCP client.</p>'
+      + '<p style="font-size:12px;margin-top:8px;">Error: ' + escHtml(String(err.message || err)) + '</p>'
+      + '</div>';
+  }
 }
 
 } catch (err) {
-  document.body.innerHTML = '<div style="padding:24px;font-family:sans-serif;color:#666;text-align:center;">'
-    + '<h2>Vault Explorer</h2>'
-    + '<p>This app requires a compatible MCP client with ext-apps SDK support.</p>'
-    + '<p style="font-size:12px;color:#999;">Error: ' + (err.message || err) + '</p>'
-    + '</div>';
+  const el = document.createElement('div');
+  el.style.cssText = 'padding:24px;font-family:sans-serif;color:#666;text-align:center;';
+  const h = document.createElement('h2');
+  h.textContent = 'Vault Explorer';
+  const p1 = document.createElement('p');
+  p1.textContent = 'This app requires a compatible MCP client with ext-apps SDK support.';
+  const p2 = document.createElement('p');
+  p2.style.cssText = 'font-size:12px;color:#999;';
+  p2.textContent = 'Error: ' + (err.message || err);
+  el.append(h, p1, p2);
+  document.body.replaceChildren(el);
 }
 </script>
 </body>

@@ -162,8 +162,9 @@ class TestSPAShellResource:
                 resource[0].text if hasattr(resource[0], "text") else str(resource[0])
             )
             assert "handleHostContext" in html
-            assert "--host-bg" in html
-            assert "--host-fg" in html
+            assert "applyDocumentTheme" in html
+            assert "--color-background-primary" in html
+            assert "--color-text-primary" in html
 
     async def test_html_handlers_before_connect(self) -> None:
         server = create_server()
@@ -185,7 +186,7 @@ class TestSPAShellResource:
                 resource[0].text if hasattr(resource[0], "text") else str(resource[0])
             )
             assert "fullscreenBtn" in html
-            assert "setDisplayMode" in html
+            assert "requestDisplayMode" in html
 
     async def test_html_contains_error_handler(self) -> None:
         server = create_server()
