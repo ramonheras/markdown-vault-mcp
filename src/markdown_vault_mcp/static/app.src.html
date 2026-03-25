@@ -510,6 +510,17 @@ app.onteardown = () => {
       .replace(/'/g, '&#39;');
   }
 
+  /** Extract parsed JSON from a CallToolResult ({content: [{type:'text', text:'...'}]}). */
+  function parseToolResult(result) {
+    if (!result) return null;
+    if (result.content && Array.isArray(result.content)) {
+      const tb = result.content.find(c => c.type === 'text');
+      if (tb) return JSON.parse(tb.text);
+    }
+    if (typeof result === 'string') return JSON.parse(result);
+    return result;
+  }
+
   function makeSection(id, title, count, bodyHtml) {
     const el = document.getElementById(id);
     if (!el) return;
@@ -595,7 +606,7 @@ app.onteardown = () => {
 
     try {
       const result = await app.callServerTool({ name: '_vault_context', arguments: { path } });
-      const data = typeof result === 'string' ? JSON.parse(result) : result;
+      const data = parseToolResult(result);
       currentContextPath = path;
       currentContextData = data;
 
@@ -787,7 +798,7 @@ app.onteardown = () => {
       const result = await app.callServerTool({
         name: '_vault_graph_neighborhood', arguments: { path, depth: 1 }
       });
-      const data = typeof result === 'string' ? JSON.parse(result) : result;
+      const data = parseToolResult(result);
       addGraphData(data);
       window.updateContext('graph explorer', path, nodesDS.get(path)?.label,
         'Visible: ' + nodesDS.length + ' notes, ' + edgesDS.length + ' links');
@@ -799,7 +810,7 @@ app.onteardown = () => {
   async function loadHubs() {
     try {
       const result = await app.callServerTool({ name: '_vault_graph_hubs', arguments: {} });
-      const data = typeof result === 'string' ? JSON.parse(result) : result;
+      const data = parseToolResult(result);
       addGraphData(data);
       if (data.nodes.length > 0) {
         window.updateContext('graph explorer', '(hub view)', null,
@@ -829,7 +840,7 @@ app.onteardown = () => {
   function showMiniCard(nodeId) {
     const card = document.getElementById('graph-mini-card');
     app.callServerTool({ name: '_vault_context', arguments: { path: nodeId } }).then(result => {
-      const data = typeof result === 'string' ? JSON.parse(result) : result;
+      const data = parseToolResult(result);
       const bl = (data.backlinks || []).slice(0, 3);
       const ol = (data.outlinks || []).slice(0, 3);
       let html = '<h4>' + escHtml(data.title || nodeId) + '</h4>';
@@ -935,7 +946,7 @@ window.addEventListener('vault-graph-dblclick', (e) => {
     if (treeDataCache[key]) return treeDataCache[key];
     try {
       const result = await app.callServerTool({ name: '_vault_list', arguments: { folder: folder || null } });
-      const data = typeof result === 'string' ? JSON.parse(result) : result;
+      const data = parseToolResult(result);
       treeDataCache[key] = data;
       return data;
     } catch (err) {
@@ -999,7 +1010,7 @@ window.addEventListener('vault-graph-dblclick', (e) => {
 
     try {
       const result = await app.callServerTool({ name: '_vault_read', arguments: { path } });
-      const data = typeof result === 'string' ? JSON.parse(result) : result;
+      const data = parseToolResult(result);
       if (!data) { previewEl.innerHTML = '<div class="placeholder">Note not found</div>'; return; }
       currentPreviewData = data;
 
@@ -1073,7 +1084,7 @@ window.addEventListener('vault-graph-dblclick', (e) => {
       const result = await app.callServerTool({
         name: '_vault_search', arguments: { query, mode: 'keyword', limit: 20 }
       });
-      const data = typeof result === 'string' ? JSON.parse(result) : result;
+      const data = parseToolResult(result);
       treeEl.innerHTML = '';
       for (const r of data) {
         const div = document.createElement('div');

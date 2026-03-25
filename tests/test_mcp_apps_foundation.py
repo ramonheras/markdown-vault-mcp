@@ -221,6 +221,15 @@ class TestSPAShellResource:
             assert "importmap" in html
             assert "await import(" not in html
 
+    async def test_html_parse_tool_result(self) -> None:
+        server = create_server()
+        async with Client(server) as client:
+            resource = await client.read_resource("ui://vault/app.html")
+            html = resource[0].text
+            # parseToolResult extracts JSON from CallToolResult.content[0].text
+            assert "parseToolResult" in html
+            assert "result.content" in html
+
     async def test_html_contains_error_handler(self) -> None:
         server = create_server()
         async with Client(server) as client:
