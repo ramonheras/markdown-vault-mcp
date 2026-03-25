@@ -452,7 +452,9 @@ let connected = false;
 let pendingToolInput = null;
 
 function processToolInput(args) {
-  const view = args.view || (args.path ? 'context' : 'browse');
+  const validViews = ['context', 'graph', 'browse'];
+  const view = (validViews.includes(args.view) ? args.view
+    : (args.path ? 'context' : 'browse'));
   switchTab(view);
   if (args.path) {
     window.dispatchEvent(new CustomEvent('vault-navigate', {
