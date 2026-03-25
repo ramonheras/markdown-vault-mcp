@@ -174,3 +174,80 @@ class TestVaultContextToolData:
             data = _parse_tool_data(result)
             assert data["path"] == "full_frontmatter.md"
             assert isinstance(data["frontmatter"], dict)
+
+
+# ---------------------------------------------------------------------------
+# show_context tool (AC2)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.usefixtures("_mcp_env")
+class TestShowContextTool:
+    """Verify show_context primary tool behaviour (AC2)."""
+
+    async def test_returns_view_and_summary(self) -> None:
+        server = create_server()
+        async with Client(server) as client:
+            result = await client.call_tool("show_context", {"path": "simple.md"})
+            data = _parse_tool_data(result)
+            assert data["view"] == "context"
+            assert data["path"] == "simple.md"
+            assert "Backlinks:" in data["summary"]
+
+    async def test_summary_contains_relationship_counts(self) -> None:
+        server = create_server()
+        async with Client(server) as client:
+            result = await client.call_tool("show_context", {"path": "simple.md"})
+            data = _parse_tool_data(result)
+            summary = data["summary"]
+            assert "Outlinks:" in summary
+            assert "Similar notes:" in summary
+            assert "Folder peers:" in summary
+
+    async def test_show_context_visible_to_llm(self) -> None:
+        server = create_server()
+        async with Client(server) as client:
+            tools = await client.list_tools()
+            names = [t.name for t in tools]
+            assert "show_context" in names
+            assert "_vault_context" not in names  # app-only, hidden from LLM
+
+    async def test_missing_note_returns_error_summary(self) -> None:
+        server = create_server()
+        async with Client(server) as client:
+            result = await client.call_tool(
+                "show_context", {"path": "nonexistent.md"}
+            )
+            data = _parse_tool_data(result)
+            assert data["view"] == "context"
+            assert "not found" in data["summary"].lower()
+
+
+# ---------------------------------------------------------------------------
+# No hardcoded colors (AC7)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.usefixtures("_mcp_env")
+class TestNoHardcodedColors:
+    """Verify context card CSS uses variables instead of hardcoded hex colours."""
+
+    async def _get_html(self) -> str:
+        server = create_server()
+        async with Client(server) as client:
+            resource = await client.read_resource("ui://vault/app.html")
+            return (
+                resource[0].text if hasattr(resource[0], "text") else str(resource[0])
+            )
+
+    async def test_success_color_is_variable(self) -> None:
+        html = await self._get_html()
+        assert "var(--host-success" in html
+
+    async def test_error_color_is_variable(self) -> None:
+        html = await self._get_html()
+        assert "var(--host-error" in html
+
+    async def test_accent_fg_color_is_variable(self) -> None:
+        html = await self._get_html()
+        assert "var(--host-accent-fg" in html

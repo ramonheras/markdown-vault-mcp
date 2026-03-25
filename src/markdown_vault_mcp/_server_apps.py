@@ -185,7 +185,7 @@ _SPA_SHELL_HTML = """\
   .context-meta { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; font-size: 12px; color: var(--host-muted, var(--fallback-muted)); }
   .meta-item::before { content: ''; }
   .action-btn {
-    background: var(--host-accent, var(--fallback-accent)); color: #fff; border: none; padding: 4px 10px;
+    background: var(--host-accent, var(--fallback-accent)); color: var(--host-accent-fg, #fff); border: none; padding: 4px 10px;
     border-radius: 4px; cursor: pointer; font-size: 12px; font-family: inherit; white-space: nowrap;
   }
   .action-btn:hover { opacity: 0.85; }
@@ -195,7 +195,7 @@ _SPA_SHELL_HTML = """\
     background: var(--host-surface, var(--fallback-surface)); cursor: pointer; font-size: 13px; font-weight: 600;
     user-select: none;
   }
-  .section-header .badge { background: var(--host-accent, var(--fallback-accent)); color: #fff; padding: 1px 6px; border-radius: 10px; font-size: 11px; font-weight: 500; }
+  .section-header .badge { background: var(--host-accent, var(--fallback-accent)); color: var(--host-accent-fg, #fff); padding: 1px 6px; border-radius: 10px; font-size: 11px; font-weight: 500; }
   .section-body { padding: 8px 12px; font-size: 13px; display: none; }
   .context-section:not(.collapsed-section) .section-body { display: block; }
   .section-header::after { content: '\\25B6'; font-size: 10px; transition: transform 0.15s; }
@@ -220,8 +220,9 @@ _SPA_SHELL_HTML = """\
     background: var(--host-surface, var(--fallback-surface)); border: 1px solid var(--host-border, var(--fallback-border));
     color: var(--host-muted, var(--fallback-muted));
   }
-  .link-exists-yes { color: #22c55e; }
-  .link-exists-no { color: #ef4444; }
+  .link-exists-yes { color: var(--host-success, #22c55e); }
+  .link-exists-no { color: var(--host-error, #ef4444); }
+  .link-text { font-size: 11px; color: var(--host-muted, var(--fallback-muted)); }
   /* Similar notes */
   .similar-score {
     width: 60px; height: 6px; background: var(--host-border, var(--fallback-border)); border-radius: 3px; overflow: hidden; flex-shrink: 0;
@@ -411,17 +412,24 @@ app.onDisplayModeChanged((mode) => {
   let currentContextPath = null;
   let currentContextData = null;
 
+  function escapeHtml(s) {
+    return String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
   function makeSection(id, title, count, bodyHtml) {
     const el = document.getElementById(id);
     if (!el) return;
     if (count === 0 && !bodyHtml) { el.style.display = 'none'; return; }
     el.style.display = '';
-    el.innerHTML = '<div class="section-header"><span>' + title + '</span><span class="badge">' + count + '</span></div>'
+    el.innerHTML = '<div class="section-header"><span>' + escapeHtml(title) + '</span><span class="badge">' + count + '</span></div>'
       + '<div class="section-body">' + bodyHtml + '</div>';
     el.classList.add('collapsed-section');
-    el.querySelector('.section-header').addEventListener('click', () => {
-      el.classList.toggle('collapsed-section');
-    });
+    // toggle handled by delegated listener on #panel-context
   }
 
   function renderFrontmatter(fm) {
@@ -429,7 +437,7 @@ app.onDisplayModeChanged((mode) => {
     let rows = '';
     for (const [k, v] of Object.entries(fm)) {
       const val = typeof v === 'object' ? JSON.stringify(v) : String(v);
-      rows += '<tr><td>' + k + '</td><td>' + val + '</td></tr>';
+      rows += '<tr><td>' + escapeHtml(k) + '</td><td>' + escapeHtml(val) + '</td></tr>';
     }
     return '<table class="fm-table">' + rows + '</table>';
   }
@@ -438,9 +446,9 @@ app.onDisplayModeChanged((mode) => {
     if (!tags || Object.keys(tags).length === 0) return '';
     let html = '';
     for (const [field, values] of Object.entries(tags)) {
-      html += '<div class="tag-group"><div class="tag-group-label">' + field + '</div>';
+      html += '<div class="tag-group"><div class="tag-group-label">' + escapeHtml(field) + '</div>';
       for (const v of values) {
-        html += '<span class="tag-pill">' + v + '</span>';
+        html += '<span class="tag-pill">' + escapeHtml(v) + '</span>';
       }
       html += '</div>';
     }
@@ -450,10 +458,10 @@ app.onDisplayModeChanged((mode) => {
   function renderBacklinks(backlinks) {
     if (!backlinks || backlinks.length === 0) return '';
     return backlinks.map(bl =>
-      '<div class="link-item" data-path="' + bl.source_path + '">'
-      + '<span class="link-path">' + bl.source_path + '</span>'
-      + (bl.link_text ? '<span style="font-size:11px;color:var(--host-muted,var(--fallback-muted))">' + bl.link_text + '</span>' : '')
-      + '<span class="link-type-badge">' + bl.link_type + '</span>'
+      '<div class="link-item" data-path="' + escapeHtml(bl.source_path) + '">'
+      + '<span class="link-path">' + escapeHtml(bl.source_path) + '</span>'
+      + (bl.link_text ? '<span class="link-text">' + escapeHtml(bl.link_text) + '</span>' : '')
+      + '<span class="link-type-badge">' + escapeHtml(bl.link_type) + '</span>'
       + '</div>'
     ).join('');
   }
@@ -461,10 +469,10 @@ app.onDisplayModeChanged((mode) => {
   function renderOutlinks(outlinks) {
     if (!outlinks || outlinks.length === 0) return '';
     return outlinks.map(ol =>
-      '<div class="link-item" data-path="' + ol.target_path + '">'
-      + '<span class="link-path">' + ol.target_path + '</span>'
+      '<div class="link-item" data-path="' + escapeHtml(ol.target_path) + '">'
+      + '<span class="link-path">' + escapeHtml(ol.target_path) + '</span>'
       + '<span class="' + (ol.exists ? 'link-exists-yes' : 'link-exists-no') + '">' + (ol.exists ? '\\u2713' : '\\u2717') + '</span>'
-      + '<span class="link-type-badge">' + ol.link_type + '</span>'
+      + '<span class="link-type-badge">' + escapeHtml(ol.link_type) + '</span>'
       + '</div>'
     ).join('');
   }
@@ -473,8 +481,8 @@ app.onDisplayModeChanged((mode) => {
     if (!similar || similar.length === 0) return '';
     const maxScore = Math.max(...similar.map(s => s.score), 0.001);
     return similar.map(s =>
-      '<div class="link-item" data-path="' + s.path + '">'
-      + '<span class="link-path">' + (s.title || s.path) + '</span>'
+      '<div class="link-item" data-path="' + escapeHtml(s.path) + '">'
+      + '<span class="link-path">' + escapeHtml(s.title || s.path) + '</span>'
       + '<div class="similar-score"><div class="similar-score-fill" style="width:' + Math.round((s.score / maxScore) * 100) + '%"></div></div>'
       + '</div>'
     ).join('');
@@ -483,8 +491,8 @@ app.onDisplayModeChanged((mode) => {
   function renderPeers(peers) {
     if (!peers || peers.length === 0) return '';
     return peers.map(p =>
-      '<div class="link-item" data-path="' + p + '">'
-      + '<span class="link-path">' + p + '</span>'
+      '<div class="link-item" data-path="' + escapeHtml(p) + '">'
+      + '<span class="link-path">' + escapeHtml(p) + '</span>'
       + '</div>'
     ).join('');
   }
@@ -505,6 +513,7 @@ app.onDisplayModeChanged((mode) => {
       document.getElementById('ctx-title').textContent = data.title || path;
       document.getElementById('ctx-path').textContent = data.path;
       document.getElementById('ctx-folder').textContent = data.folder ? '\\uD83D\\uDCC1 ' + data.folder : '';
+      document.getElementById('ctx-modified').textContent = '';
       if (data.modified_at) {
         const d = new Date(data.modified_at * 1000);
         document.getElementById('ctx-modified').textContent = d.toLocaleString();
@@ -528,12 +537,16 @@ app.onDisplayModeChanged((mode) => {
       window.updateContext('context card', path, data.title,
         'Backlinks: ' + (data.backlinks || []).length + ', Outlinks: ' + (data.outlinks || []).length);
     } catch (err) {
-      card.innerHTML = '<div class="placeholder">Error loading context: ' + (err.message || err) + '</div>';
+      placeholder.style.display = '';
+      placeholder.textContent = 'Error loading context: ' + (err.message || String(err));
+      card.style.display = 'none';
     }
   }
 
-  // Click on link items to navigate
+  // Delegated handler: link-item navigation + section-header toggle
   document.getElementById('panel-context').addEventListener('click', (e) => {
+    const header = e.target.closest('.section-header');
+    if (header) { header.closest('.context-section')?.classList.toggle('collapsed-section'); return; }
     const item = e.target.closest('.link-item[data-path]');
     if (item) loadContext(item.dataset.path);
   });
