@@ -54,7 +54,7 @@ def register_resources(mcp: FastMCP) -> None:
         ctx: Context = CurrentContext(),
         collection: Collection = Depends(get_collection),
     ) -> str:
-        """Vault configuration and runtime state."""
+        """Vault configuration: source path, read-only mode, indexed frontmatter fields, exclude patterns, allowed attachment extensions. For counts and search capabilities, use stats://vault."""
         config = _get_config(ctx)
         stats = await asyncio.to_thread(collection.stats)
         return json.dumps(
@@ -133,7 +133,7 @@ def register_resources(mcp: FastMCP) -> None:
         path: str,
         collection: Collection = Depends(get_collection),
     ) -> str:
-        """Table of contents for a document — headings with levels."""
+        """Table of contents — ordered list of {level, text, anchor} headings. Useful for navigating long notes without reading full content."""
         toc = await asyncio.to_thread(collection.get_toc, path)
         return json.dumps(toc)
 

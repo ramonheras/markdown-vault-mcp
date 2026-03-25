@@ -1,5 +1,5 @@
 ---
-description: Compare two documents.
+description: "Compare two vault notes: agreements, contradictions, and unique information in each."
 arguments:
   - name: path1
     description: Path to the first document.

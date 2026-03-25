@@ -125,9 +125,7 @@ def _build_default_instructions(*, read_only: bool) -> str:
         f"{write_line} "
         "Use 'search' (mode='hybrid' preferred when available) to find documents, "
         "'read' for full content, 'list_documents' to enumerate, 'stats' to check "
-        "capabilities. "
-        "Operators: set MARKDOWN_VAULT_MCP_INSTRUCTIONS to describe this "
-        "collection's domain and frontmatter vocabulary."
+        "capabilities."
     )
 
 

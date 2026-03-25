@@ -88,9 +88,10 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
     ) -> list[dict[str, Any]]:
         """Find documents matching a query using full-text or semantic search.
 
-        Prefer mode="hybrid" when semantic search is available (check 'stats'
-        for semantic_search_available). Use mode="keyword" for exact term
-        matches; mode="semantic" for meaning-based similarity.
+        Search the collection. Default mode is "keyword" (FTS5/BM25). Pass
+        mode="hybrid" when 'stats' shows semantic_search_available=True —
+        hybrid fuses keyword and vector results for best quality. Use
+        mode="semantic" for pure vector similarity.
 
         Args:
             query: Natural language or keyword query string.
@@ -100,6 +101,7 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
                 via reciprocal rank fusion — best quality when available.
             folder: Restrict to documents under this folder path (e.g.
                 "Journal"). Must match a value from 'list_folders'.
+                Use folder="" for root-level (top-level) documents only.
             filters: Filter by indexed frontmatter field values, e.g.
                 {"cluster": "craft", "tags": "pacing"}. Only fields listed
                 in indexed_frontmatter_fields (see 'stats') can be filtered.
@@ -197,6 +199,7 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
 
         Args:
             folder: Return only documents in this folder (e.g. "Journal").
+                Use folder="" for root-level (top-level) documents only.
             pattern: Unix glob matched against relative paths (e.g.
                 "Journal/*.md", "**/*meeting*.md").
             include_attachments: When True, also returns non-.md files (PDFs,
@@ -303,7 +306,8 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
             - indexed_frontmatter_fields (list[str]): Field names usable as
               'filters' in 'search' and as 'field' in 'list_tags'.
             - attachment_extensions (list[str]): Allowed non-.md extensions.
-            - link_count (int): Total number of indexed links.
+            - link_count (int): Total number of indexed links. 0 may mean no
+              links exist or link tracking not yet built (call 'reindex').
             - broken_link_count (int): Links pointing to missing documents.
               Call 'get_broken_links' if non-zero.
             - orphan_count (int): Notes with no inbound or outbound links.
@@ -333,9 +337,10 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
         scratch after changing the embedding model.
 
         Returns:
-            Dict with available (bool), provider (str — provider class name,
-            e.g. "OllamaProvider"), chunk_count (int — embedded chunks in the
-            vector index), and path (str — vector index file path).
+            Dict with available (bool), provider (str or null — provider class
+            name when configured, e.g. "OllamaProvider"), chunk_count (int —
+            embedded chunks in the vector index), and path (str or null —
+            vector index file path when configured).
         """
         return await asyncio.to_thread(collection.embeddings_status)
 
@@ -486,7 +491,8 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
         reference document is excluded from results. Requires semantic
         search to be configured (check 'stats' for
         semantic_search_available). Returns an empty list if embeddings
-        are not available or the document has no stored vectors.
+        are not configured (check 'embeddings_status') or the document has
+        no stored vectors (call 'build_embeddings' to embed missing chunks).
 
         Args:
             path: Relative path of the reference document (e.g.
@@ -558,6 +564,9 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
     ) -> dict[str, Any]:
         """Get a consolidated context dossier for a document.
 
+        Replaces separate calls to 'get_backlinks', 'get_outlinks', and
+        'get_similar' when you need more than one.
+
         Returns everything useful about a note in one call: its metadata,
         backlinks (documents that link to it), outlinks (documents it links
         to), semantically similar notes, other notes in the same folder, and
@@ -578,9 +587,10 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
         Returns:
             Dict with: path, title, folder, frontmatter (dict),
             modified_at (Unix timestamp), backlinks (list), outlinks (list),
-            similar (list of {path, title, score}), folder_notes (list of
-            path strings for other notes in the same folder, max 20), tags
-            (dict of indexed frontmatter field → list of values).
+            similar (list of {path, title, score}).
+            folder_notes (list[str]): Paths of other notes in the same folder
+            (max 20). Plain strings, not dicts — unlike backlinks/outlinks/similar.
+            tags (dict[str, list[str]]): Indexed frontmatter field → list of values.
             backlinks and outlinks are empty if link tracking is not
             available. similar is empty if semantic search is not configured
             or similar_limit is 0.
@@ -607,13 +617,15 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
     async def get_orphan_notes(
         collection: Collection = Depends(get_collection),
     ) -> list[dict[str, Any]]:
-        """Return all documents with no inbound links AND no outbound links.
+        """Return all notes with no inbound or outbound links.
+
+        WARNING: returns ALL orphans with no limit — check 'stats' for
+        orphan_count before calling on large vaults.
 
         An orphan note has no backlinks (no other note links to it) and no
         outlinks (it links to nothing). Call this when 'stats' shows
-        orphan_count > 0 — on large vaults this returns many results and
-        there is no limit parameter. Useful for finding isolated notes that
-        may need to be connected to the rest of the vault or removed.
+        orphan_count > 0. Useful for finding isolated notes that may need to
+        be connected to the rest of the vault or removed.
 
         Returns:
             List of dicts ordered by path, each with:
@@ -644,7 +656,7 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
 
         Useful for discovering hub notes — frequently-referenced notes that are
         likely key concepts in the vault. For the specific documents that link to
-        a particular note, use get_backlinks instead.
+        a particular note, use 'get_backlinks' instead.
 
         Args:
             limit: Maximum number of results to return. Default 10.
@@ -723,10 +735,9 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
         'delete', or 'rename' — those tools update the index immediately as
         part of the operation.
 
-        Note: this also re-embeds changed documents in the vector index
-        when semantic search is configured. Use 'build_embeddings' with
-        force=True only to rebuild all embeddings from scratch (e.g. after
-        changing the embedding model).
+        After reindexing, changed documents are automatically re-embedded. To
+        rebuild all embeddings from scratch (e.g. after changing the embedding
+        model), use 'build_embeddings' with force=True instead.
 
         Returns:
             Dict with counts: added, modified, deleted, unchanged.
@@ -852,7 +863,7 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
         if_match: str | None = None,
         collection: Collection = Depends(get_collection),
     ) -> dict[str, Any]:
-        """Make a targeted text replacement in an existing document.
+        """Make a targeted text replacement in an existing .md note (not supported for attachments).
 
         Always call 'read' first to get the exact current text, then pass
         a portion of it as old_text. The match is exact and must appear
@@ -911,6 +922,11 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
 
         Returns:
             Dict with path (str) of the deleted file.
+
+        Raises:
+            ValueError: If no file exists at the given path.
+            McpError: If if_match is provided and the file has been modified
+                (ConcurrentModificationError).
         """
         result = await asyncio.to_thread(collection.delete, path, if_match=if_match)
         return asdict(result)
@@ -958,6 +974,12 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
         Returns:
             Dict with old_path (str), new_path (str), and updated_links (int)
             counting the number of source documents whose links were updated.
+
+        Raises:
+            ValueError: If old_path does not exist, new_path already exists,
+                or the path fails traversal validation.
+            McpError: If if_match is provided and the file has been modified
+                (ConcurrentModificationError).
         """
         result = await asyncio.to_thread(
             collection.rename,

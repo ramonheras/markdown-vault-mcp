@@ -1,5 +1,5 @@
 ---
-description: Find related notes and suggest cross-references.
+description: Find related notes and suggest cross-references. Read-only — does not modify any documents.
 arguments:
   - name: path
     description: Path to the document to find related notes for.

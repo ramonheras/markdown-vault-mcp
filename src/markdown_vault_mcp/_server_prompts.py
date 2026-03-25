@@ -340,7 +340,7 @@ def register_prompts(
 
         @mcp.prompt(tags={"write"}, icons=_TOOL_ICONS["write"])
         def create_from_template(template_name: str | None = None) -> str:
-            """Create a new note by adapting a template from the templates folder."""
+            """Create a new note from a vault template. Pass template_name (e.g. "meeting-notes" or "meeting-notes.md") to skip discovery, or omit to browse available templates first."""
             template_hint = "None" if template_name is None else repr(template_name)
             template_name_clean = (
                 (template_name or "").strip().replace("\\", "/").lstrip("/")
