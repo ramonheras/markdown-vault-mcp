@@ -75,10 +75,10 @@ class TestGraphExplorerHTML:
                 resource[0].text if hasattr(resource[0], "text") else str(resource[0])
             )
 
-    async def test_vis_network_cdn_import(self) -> None:
+    async def test_vis_network_vendored(self) -> None:
         html = await self._get_html()
         assert "vis-network" in html
-        assert "unpkg.com/vis-network@" in html  # pinned version
+        assert "vis-network" in html and "vendored" in html
 
     async def test_graph_container(self) -> None:
         html = await self._get_html()

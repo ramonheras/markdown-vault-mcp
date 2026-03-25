@@ -75,13 +75,13 @@ class TestBrowserHTML:
                 resource[0].text if hasattr(resource[0], "text") else str(resource[0])
             )
 
-    async def test_marked_js_cdn(self) -> None:
+    async def test_marked_js_vendored(self) -> None:
         html = await self._get_html()
-        assert "unpkg.com/marked" in html
+        assert "marked" in html and "vendored" in html
 
-    async def test_dompurify_cdn(self) -> None:
+    async def test_dompurify_vendored(self) -> None:
         html = await self._get_html()
-        assert "unpkg.com/dompurify" in html
+        assert "dompurify" in html and "vendored" in html
         assert "DOMPurify.sanitize" in html
 
     async def test_browser_layout(self) -> None:

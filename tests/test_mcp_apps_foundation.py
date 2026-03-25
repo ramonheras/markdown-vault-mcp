@@ -216,8 +216,9 @@ class TestSPAShellResource:
         async with Client(server) as client:
             resource = await client.read_resource("ui://vault/app.html")
             html = resource[0].text
-            # Static import (not dynamic) for Android webview compatibility
-            assert 'from "https://unpkg.com/@modelcontextprotocol/ext-apps' in html
+            # Static import via import map (vendored SDK, Android compatible)
+            assert 'from "@modelcontextprotocol/ext-apps"' in html
+            assert "importmap" in html
             assert "await import(" not in html
 
     async def test_html_contains_error_handler(self) -> None:
