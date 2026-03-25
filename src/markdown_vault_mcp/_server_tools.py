@@ -590,8 +590,7 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
             similar (list of {path, title, score}),
             folder_notes (list[str]): Paths of other notes in the same folder
             (max 20). Plain strings, not dicts — unlike backlinks/outlinks/similar.
-            tags
-            (dict of indexed frontmatter field → list of values).
+            tags (dict[str, list[str]]): Indexed frontmatter field → list of values.
             backlinks and outlinks are empty if link tracking is not
             available. similar is empty if semantic search is not configured
             or similar_limit is 0.
