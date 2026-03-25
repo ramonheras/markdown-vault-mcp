@@ -7,7 +7,6 @@
 <script src="https://unpkg.com/vis-network@10.0.2/standalone/umd/vis-network.min.js"></script>
 <script src="https://unpkg.com/marked@17.0.5/marked.min.js"></script>
 <script src="https://unpkg.com/dompurify@3.3.3/dist/purify.min.js"></script>
-<script type="module" src="https://unpkg.com/@anthropic-ai/claude-mcp-ext-apps@1.3.1/dist/index.js"></script>
 <style>
   :root {
     --fallback-bg: #ffffff;
@@ -314,10 +313,17 @@
 <div class="toast" id="toast"></div>
 
 <script type="module">
-import { createApp } from 'https://unpkg.com/@anthropic-ai/claude-mcp-ext-apps@1.3.1/dist/index.js';
+import { App, applyDocumentTheme, applyHostStyleVariables, applyHostFonts }
+  from "https://unpkg.com/@modelcontextprotocol/ext-apps@1.3.1/app-with-deps";
+
+try {
 
 // ── Globals ──────────────────────────────────────────────────────────────
-const app = createApp();
+const app = new App(
+  { name: "Vault Explorer", version: "1.0.0" },
+  {},
+  { autoResize: false }
+);
 let currentTab = 'context';
 let isFullscreen = false;
 
@@ -329,20 +335,11 @@ function escHtml(s) {
 }
 
 // ── Host theming ─────────────────────────────────────────────────────────
-function applyHostTheme(hostContext) {
-  if (!hostContext) return;
-  const root = document.documentElement;
-  if (hostContext.theme) {
-    root.style.setProperty('--host-bg', hostContext.theme.backgroundColor || '');
-    root.style.setProperty('--host-fg', hostContext.theme.foregroundColor || '');
-    root.style.setProperty('--host-border', hostContext.theme.borderColor || '');
-    root.style.setProperty('--host-accent', hostContext.theme.accentColor || '');
-    root.style.setProperty('--host-muted', hostContext.theme.mutedColor || '');
-    root.style.setProperty('--host-surface', hostContext.theme.surfaceColor || '');
-  }
-  if (hostContext.fonts) {
-    root.style.setProperty('--host-font-family', hostContext.fonts.fontFamily || '');
-  }
+function handleHostContext(ctx) {
+  if (!ctx) return;
+  if (ctx.theme) applyDocumentTheme(ctx.theme);
+  if (ctx.styles?.variables) applyHostStyleVariables(ctx.styles.variables);
+  if (ctx.styles?.css?.fonts) applyHostFonts(ctx.styles.css.fonts);
 }
 
 // ── Tab navigation ───────────────────────────────────────────────────────
@@ -439,15 +436,16 @@ window.vaultApp = app;
 
 // ── Handler registration (before connect) ────────────────────────────────
 
-app.onToolResult(async (result) => {
+app.ontoolresult = (result) => {
   // Tool results are dispatched to views via custom events
   window.dispatchEvent(new CustomEvent('vault-tool-result', { detail: result }));
-});
+};
 
-app.onDisplayModeChanged((mode) => {
-  isFullscreen = mode === 'fullscreen';
-  fullscreenBtn.textContent = isFullscreen ? '\\u2716 Exit Fullscreen' : '\\u26F6 Fullscreen';
-});
+app.onhostcontextchanged = handleHostContext;
+
+app.onerror = (err) => {
+  console.error('MCP App error:', err);
+};
 
 // ── Context Card View ────────────────────────────────────────────────────
 (function() {
@@ -1072,33 +1070,38 @@ window.addEventListener('vault-graph-dblclick', (e) => {
 })();
 
 // ── Connect ──────────────────────────────────────────────────────────────
-app.connect().then((hostContext) => {
-  applyHostTheme(hostContext);
+try {
+  await app.connect();
+  const hostContext = app.getHostContext();
+  if (hostContext) handleHostContext(hostContext);
 
-  // Show fullscreen button if host supports it
-  const modes = hostContext?.availableDisplayModes || [];
-  updateFullscreenButton(modes.includes('fullscreen'));
+  const caps = app.getHostCapabilities();
+  updateFullscreenButton(caps?.setDisplayMode === true);
 
   // If launched with initial params, navigate
-  const params = hostContext?.toolInput;
-  if (params?.view) {
-    switchTab(params.view);
+  if (hostContext?.toolInput?.view) {
+    switchTab(hostContext.toolInput.view);
   }
-  if (params?.path) {
+  if (hostContext?.toolInput?.path) {
     window.dispatchEvent(new CustomEvent('vault-navigate', {
-      detail: { view: params.view || currentTab, path: params.path }
+      detail: { view: hostContext.toolInput?.view || currentTab, path: hostContext.toolInput.path }
     }));
   }
 
-  console.log('Vault Explorer connected', hostContext);
-}).catch(err => {
+  console.log('Vault Explorer connected');
+} catch (err) {
   console.error('Failed to connect to host:', err);
-});
+  document.querySelector('.placeholder')?.textContent ||
+    (document.body.innerHTML += '<div style="padding:12px;color:#999;text-align:center;">SDK connection failed. This app requires a compatible MCP client.</div>');
+}
 
-// ── Teardown ─────────────────────────────────────────────────────────────
-app.onTeardown(() => {
-  console.log('Vault Explorer teardown');
-});
+} catch (err) {
+  document.body.innerHTML = '<div style="padding:24px;font-family:sans-serif;color:#666;text-align:center;">'
+    + '<h2>Vault Explorer</h2>'
+    + '<p>This app requires a compatible MCP client with ext-apps SDK support.</p>'
+    + '<p style="font-size:12px;color:#999;">Error: ' + (err.message || err) + '</p>'
+    + '</div>';
+}
 </script>
 </body>
 </html>
