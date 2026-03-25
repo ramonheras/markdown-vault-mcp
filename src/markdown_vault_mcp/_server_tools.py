@@ -587,7 +587,7 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
         Returns:
             Dict with: path, title, folder, frontmatter (dict),
             modified_at (Unix timestamp), backlinks (list), outlinks (list),
-            similar (list of {path, title, score}),
+            similar (list of {path, title, score}).
             folder_notes (list[str]): Paths of other notes in the same folder
             (max 20). Plain strings, not dicts — unlike backlinks/outlinks/similar.
             tags (dict[str, list[str]]): Indexed frontmatter field → list of values.
