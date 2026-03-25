@@ -510,14 +510,23 @@ app.onteardown = () => {
       .replace(/'/g, '&#39;');
   }
 
-  /** Extract parsed JSON from a CallToolResult ({content: [{type:'text', text:'...'}]}). */
+  /** Extract parsed JSON from a CallToolResult ({content: [{type:'text', text:'...'}]}).
+   *  Returns the parsed object, or null if no text content found.
+   *  Throws Error with descriptive message on malformed JSON. */
   function parseToolResult(result) {
     if (!result) return null;
     if (result.content && Array.isArray(result.content)) {
       const tb = result.content.find(c => c.type === 'text');
-      if (tb) return JSON.parse(tb.text);
+      if (tb) {
+        try { return JSON.parse(tb.text); }
+        catch (e) { throw new Error('Invalid JSON in tool result: ' + e.message); }
+      }
+      return null;
     }
-    if (typeof result === 'string') return JSON.parse(result);
+    if (typeof result === 'string') {
+      try { return JSON.parse(result); }
+      catch (e) { throw new Error('Invalid JSON in tool result: ' + e.message); }
+    }
     return result;
   }
 
@@ -607,6 +616,7 @@ app.onteardown = () => {
     try {
       const result = await app.callServerTool({ name: '_vault_context', arguments: { path } });
       const data = parseToolResult(result);
+      if (!data) { placeholder.style.display = ''; card.style.display = 'none'; return; }
       currentContextPath = path;
       currentContextData = data;
 
@@ -799,6 +809,7 @@ app.onteardown = () => {
         name: '_vault_graph_neighborhood', arguments: { path, depth: 1 }
       });
       const data = parseToolResult(result);
+      if (!data) return;
       addGraphData(data);
       window.updateContext('graph explorer', path, nodesDS.get(path)?.label,
         'Visible: ' + nodesDS.length + ' notes, ' + edgesDS.length + ' links');
@@ -811,6 +822,7 @@ app.onteardown = () => {
     try {
       const result = await app.callServerTool({ name: '_vault_graph_hubs', arguments: {} });
       const data = parseToolResult(result);
+      if (!data) return;
       addGraphData(data);
       if (data.nodes.length > 0) {
         window.updateContext('graph explorer', '(hub view)', null,
@@ -841,6 +853,7 @@ app.onteardown = () => {
     const card = document.getElementById('graph-mini-card');
     app.callServerTool({ name: '_vault_context', arguments: { path: nodeId } }).then(result => {
       const data = parseToolResult(result);
+      if (!data) { card.style.display = 'none'; return; }
       const bl = (data.backlinks || []).slice(0, 3);
       const ol = (data.outlinks || []).slice(0, 3);
       let html = '<h4>' + escHtml(data.title || nodeId) + '</h4>';
@@ -947,6 +960,7 @@ window.addEventListener('vault-graph-dblclick', (e) => {
     try {
       const result = await app.callServerTool({ name: '_vault_list', arguments: { folder: folder || null } });
       const data = parseToolResult(result);
+      if (!data) return { folders: [], notes: [] };
       treeDataCache[key] = data;
       return data;
     } catch (err) {
@@ -1084,7 +1098,7 @@ window.addEventListener('vault-graph-dblclick', (e) => {
       const result = await app.callServerTool({
         name: '_vault_search', arguments: { query, mode: 'keyword', limit: 20 }
       });
-      const data = parseToolResult(result);
+      const data = parseToolResult(result) || [];
       treeEl.innerHTML = '';
       for (const r of data) {
         const div = document.createElement('div');
