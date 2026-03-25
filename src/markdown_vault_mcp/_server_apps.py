@@ -176,6 +176,62 @@ _SPA_SHELL_HTML = """\
     z-index: 1000;
   }
   .toast.visible { opacity: 1; }
+  /* Context card styles */
+  .context-header { margin-bottom: 12px; }
+  .context-title-row {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  }
+  .context-title-row h2 { font-size: 18px; margin: 0; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .context-meta { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; font-size: 12px; color: var(--host-muted, var(--fallback-muted)); }
+  .meta-item::before { content: ''; }
+  .action-btn {
+    background: var(--host-accent, var(--fallback-accent)); color: var(--host-accent-fg, #fff); border: none; padding: 4px 10px;
+    border-radius: 4px; cursor: pointer; font-size: 12px; font-family: inherit; white-space: nowrap;
+  }
+  .action-btn:hover { opacity: 0.85; }
+  .context-section { margin-bottom: 8px; border: 1px solid var(--host-border, var(--fallback-border)); border-radius: 6px; overflow: hidden; }
+  .section-header {
+    display: flex; align-items: center; justify-content: space-between; padding: 8px 12px;
+    background: var(--host-surface, var(--fallback-surface)); cursor: pointer; font-size: 13px; font-weight: 600;
+    user-select: none;
+  }
+  .section-header .badge { background: var(--host-accent, var(--fallback-accent)); color: var(--host-accent-fg, #fff); padding: 1px 6px; border-radius: 10px; font-size: 11px; font-weight: 500; }
+  .section-body { padding: 8px 12px; font-size: 13px; display: none; }
+  .context-section:not(.collapsed-section) .section-body { display: block; }
+  .section-header::after { content: '\\25B6'; font-size: 10px; transition: transform 0.15s; }
+  .context-section:not(.collapsed-section) .section-header::after { transform: rotate(90deg); }
+  /* Tag pills */
+  .tag-group { margin-bottom: 6px; }
+  .tag-group-label { font-size: 11px; color: var(--host-muted, var(--fallback-muted)); text-transform: uppercase; margin-bottom: 2px; }
+  .tag-pill {
+    display: inline-block; padding: 2px 8px; margin: 2px 4px 2px 0; border-radius: 12px; font-size: 12px;
+    background: var(--host-surface, var(--fallback-surface)); border: 1px solid var(--host-border, var(--fallback-border));
+  }
+  /* Link lists */
+  .link-item {
+    display: flex; align-items: center; gap: 8px; padding: 4px 0; cursor: pointer;
+    border-bottom: 1px solid var(--host-border, var(--fallback-border));
+  }
+  .link-item:last-child { border-bottom: none; }
+  .link-item:hover { background: var(--host-surface, var(--fallback-surface)); }
+  .link-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--host-accent, var(--fallback-accent)); }
+  .link-type-badge {
+    font-size: 10px; padding: 1px 5px; border-radius: 3px;
+    background: var(--host-surface, var(--fallback-surface)); border: 1px solid var(--host-border, var(--fallback-border));
+    color: var(--host-muted, var(--fallback-muted));
+  }
+  .link-exists-yes { color: var(--host-success, #22c55e); }
+  .link-exists-no { color: var(--host-error, #ef4444); }
+  .link-text { font-size: 11px; color: var(--host-muted, var(--fallback-muted)); }
+  /* Similar notes */
+  .similar-score {
+    width: 60px; height: 6px; background: var(--host-border, var(--fallback-border)); border-radius: 3px; overflow: hidden; flex-shrink: 0;
+  }
+  .similar-score-fill { height: 100%; background: var(--host-accent, var(--fallback-accent)); border-radius: 3px; }
+  /* Frontmatter table */
+  .fm-table { width: 100%; border-collapse: collapse; }
+  .fm-table td { padding: 3px 8px; border-bottom: 1px solid var(--host-border, var(--fallback-border)); font-size: 12px; vertical-align: top; }
+  .fm-table td:first-child { font-weight: 600; white-space: nowrap; width: 1%; color: var(--host-muted, var(--fallback-muted)); }
 </style>
 </head>
 <body>
@@ -190,7 +246,28 @@ _SPA_SHELL_HTML = """\
     <button data-tab="browse">Browse</button>
   </div>
   <div class="tab-panel active" id="panel-context" data-tab="context">
-    <div class="placeholder">Select a note to view its context</div>
+    <div class="placeholder" id="context-placeholder">Select a note to view its context</div>
+    <div id="context-card" style="display:none;">
+      <div class="context-header">
+        <div class="context-title-row">
+          <h2 id="ctx-title"></h2>
+          <div class="context-actions">
+            <button class="action-btn" id="ctx-send-btn" title="Send to Claude">&#x1F4AC; Send</button>
+          </div>
+        </div>
+        <div class="context-meta">
+          <span id="ctx-path" class="meta-item"></span>
+          <span id="ctx-folder" class="meta-item"></span>
+          <span id="ctx-modified" class="meta-item"></span>
+        </div>
+      </div>
+      <div id="ctx-frontmatter" class="context-section collapsed-section"></div>
+      <div id="ctx-tags" class="context-section collapsed-section"></div>
+      <div id="ctx-backlinks" class="context-section collapsed-section"></div>
+      <div id="ctx-outlinks" class="context-section collapsed-section"></div>
+      <div id="ctx-similar" class="context-section collapsed-section"></div>
+      <div id="ctx-peers" class="context-section collapsed-section"></div>
+    </div>
   </div>
   <div class="tab-panel" id="panel-graph" data-tab="graph">
     <div class="placeholder">Graph explorer — loading&hellip;</div>
@@ -329,6 +406,180 @@ app.onDisplayModeChanged((mode) => {
   isFullscreen = mode === 'fullscreen';
   fullscreenBtn.textContent = isFullscreen ? '\\u2716 Exit Fullscreen' : '\\u26F6 Fullscreen';
 });
+
+// ── Context Card View ────────────────────────────────────────────────────
+(function() {
+  let currentContextPath = null;
+  let currentContextData = null;
+
+  function escapeHtml(s) {
+    return String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  function makeSection(id, title, count, bodyHtml) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    if (count === 0 && !bodyHtml) { el.style.display = 'none'; return; }
+    el.style.display = '';
+    el.innerHTML = '<div class="section-header"><span>' + escapeHtml(title) + '</span><span class="badge">' + count + '</span></div>'
+      + '<div class="section-body">' + bodyHtml + '</div>';
+    el.classList.add('collapsed-section');
+    // toggle handled by delegated listener on #panel-context
+  }
+
+  function renderFrontmatter(fm) {
+    if (!fm || Object.keys(fm).length === 0) return '';
+    let rows = '';
+    for (const [k, v] of Object.entries(fm)) {
+      const val = typeof v === 'object' ? JSON.stringify(v) : String(v);
+      rows += '<tr><td>' + escapeHtml(k) + '</td><td>' + escapeHtml(val) + '</td></tr>';
+    }
+    return '<table class="fm-table">' + rows + '</table>';
+  }
+
+  function renderTags(tags) {
+    if (!tags || Object.keys(tags).length === 0) return '';
+    let html = '';
+    for (const [field, values] of Object.entries(tags)) {
+      html += '<div class="tag-group"><div class="tag-group-label">' + escapeHtml(field) + '</div>';
+      for (const v of values) {
+        html += '<span class="tag-pill">' + escapeHtml(v) + '</span>';
+      }
+      html += '</div>';
+    }
+    return html;
+  }
+
+  function renderBacklinks(backlinks) {
+    if (!backlinks || backlinks.length === 0) return '';
+    return backlinks.map(bl =>
+      '<div class="link-item" data-path="' + escapeHtml(bl.source_path) + '">'
+      + '<span class="link-path">' + escapeHtml(bl.source_path) + '</span>'
+      + (bl.link_text ? '<span class="link-text">' + escapeHtml(bl.link_text) + '</span>' : '')
+      + '<span class="link-type-badge">' + escapeHtml(bl.link_type) + '</span>'
+      + '</div>'
+    ).join('');
+  }
+
+  function renderOutlinks(outlinks) {
+    if (!outlinks || outlinks.length === 0) return '';
+    return outlinks.map(ol =>
+      '<div class="link-item" data-path="' + escapeHtml(ol.target_path) + '">'
+      + '<span class="link-path">' + escapeHtml(ol.target_path) + '</span>'
+      + '<span class="' + (ol.exists ? 'link-exists-yes' : 'link-exists-no') + '">' + (ol.exists ? '\\u2713' : '\\u2717') + '</span>'
+      + '<span class="link-type-badge">' + escapeHtml(ol.link_type) + '</span>'
+      + '</div>'
+    ).join('');
+  }
+
+  function renderSimilar(similar) {
+    if (!similar || similar.length === 0) return '';
+    const maxScore = Math.max(...similar.map(s => s.score), 0.001);
+    return similar.map(s =>
+      '<div class="link-item" data-path="' + escapeHtml(s.path) + '">'
+      + '<span class="link-path">' + escapeHtml(s.title || s.path) + '</span>'
+      + '<div class="similar-score"><div class="similar-score-fill" style="width:' + Math.round((s.score / maxScore) * 100) + '%"></div></div>'
+      + '</div>'
+    ).join('');
+  }
+
+  function renderPeers(peers) {
+    if (!peers || peers.length === 0) return '';
+    return peers.map(p =>
+      '<div class="link-item" data-path="' + escapeHtml(p) + '">'
+      + '<span class="link-path">' + escapeHtml(p) + '</span>'
+      + '</div>'
+    ).join('');
+  }
+
+  async function loadContext(path) {
+    const placeholder = document.getElementById('context-placeholder');
+    const card = document.getElementById('context-card');
+    if (!path) { placeholder.style.display = ''; card.style.display = 'none'; return; }
+    placeholder.style.display = 'none';
+    card.style.display = '';
+
+    try {
+      const result = await app.callServerTool({ name: '_vault_context', arguments: { path } });
+      const data = typeof result === 'string' ? JSON.parse(result) : result;
+      currentContextPath = path;
+      currentContextData = data;
+
+      document.getElementById('ctx-title').textContent = data.title || path;
+      document.getElementById('ctx-path').textContent = data.path;
+      document.getElementById('ctx-folder').textContent = data.folder ? '\\uD83D\\uDCC1 ' + data.folder : '';
+      document.getElementById('ctx-modified').textContent = '';
+      if (data.modified_at) {
+        const d = new Date(data.modified_at * 1000);
+        document.getElementById('ctx-modified').textContent = d.toLocaleString();
+      }
+
+      const fmCount = data.frontmatter ? Object.keys(data.frontmatter).length : 0;
+      makeSection('ctx-frontmatter', 'Frontmatter', fmCount, renderFrontmatter(data.frontmatter));
+      const tagCount = data.tags ? Object.values(data.tags).reduce((a, v) => a + v.length, 0) : 0;
+      makeSection('ctx-tags', 'Tags', tagCount, renderTags(data.tags));
+      makeSection('ctx-backlinks', 'Backlinks', (data.backlinks || []).length, renderBacklinks(data.backlinks));
+      makeSection('ctx-outlinks', 'Outlinks', (data.outlinks || []).length, renderOutlinks(data.outlinks));
+      makeSection('ctx-similar', 'Similar', (data.similar || []).length, renderSimilar(data.similar));
+      makeSection('ctx-peers', 'Folder Peers', (data.folder_notes || []).length, renderPeers(data.folder_notes));
+
+      // Auto-expand sections with content
+      for (const id of ['ctx-backlinks', 'ctx-outlinks']) {
+        const el = document.getElementById(id);
+        if (el && el.style.display !== 'none') el.classList.remove('collapsed-section');
+      }
+
+      window.updateContext('context card', path, data.title,
+        'Backlinks: ' + (data.backlinks || []).length + ', Outlinks: ' + (data.outlinks || []).length);
+    } catch (err) {
+      placeholder.style.display = '';
+      placeholder.textContent = 'Error loading context: ' + (err.message || String(err));
+      card.style.display = 'none';
+    }
+  }
+
+  // Delegated handler: link-item navigation + section-header toggle
+  document.getElementById('panel-context').addEventListener('click', (e) => {
+    const header = e.target.closest('.section-header');
+    if (header) { header.closest('.context-section')?.classList.toggle('collapsed-section'); return; }
+    const item = e.target.closest('.link-item[data-path]');
+    if (item) loadContext(item.dataset.path);
+  });
+
+  // Send to Claude
+  document.getElementById('ctx-send-btn').addEventListener('click', () => {
+    if (!currentContextData) return;
+    const d = currentContextData;
+    const lines = [
+      'Context for: ' + d.title + ' (' + d.path + ')',
+      'Backlinks: ' + (d.backlinks || []).length,
+      'Outlinks: ' + (d.outlinks || []).length,
+      'Similar: ' + (d.similar || []).length,
+    ];
+    if (d.backlinks && d.backlinks.length > 0) {
+      lines.push('Top backlinks: ' + d.backlinks.slice(0, 5).map(b => b.source_path).join(', '));
+    }
+    if (d.similar && d.similar.length > 0) {
+      lines.push('Top similar: ' + d.similar.slice(0, 3).map(s => s.title || s.path).join(', '));
+    }
+    window.sendToLLM(d.path, lines.join('\\n'));
+  });
+
+  // Listen for navigation events
+  window.addEventListener('vault-navigate', (e) => {
+    if (e.detail.view === 'context' && e.detail.path) {
+      loadContext(e.detail.path);
+    }
+  });
+
+  // Expose for cross-view use
+  window.loadContext = loadContext;
+})();
 
 // ── Connect ──────────────────────────────────────────────────────────────
 app.connect().then((hostContext) => {
