@@ -86,16 +86,12 @@ def _source_hash(src_html: str) -> str:
     h = hashlib.sha256(src_html.encode("utf-8"))
     for name in sorted(VENDORED_VERSIONS):
         cfg = VENDORED_VERSIONS[name]
-        h.update(f"{name}={sorted(cfg.items())}".encode())
+        h.update(f"{name}={json.dumps(cfg, sort_keys=True)}".encode())
     return h.hexdigest()
 
 
 def _inline_script(html: str, name: str, cfg: dict[str, str], js: str) -> str:
     """Replace ``<script src="…{name}…"></script>`` with an inline block."""
-    if "</script>" in js.lower():
-        raise ValueError(
-            f"Vendored JS for '{name}' contains '</script>' — cannot safely inline"
-        )
     pattern = re.compile(
         rf"<script\s+src=\"[^\"]*{re.escape(name)}[^\"]*\">\s*</script>",
         re.IGNORECASE,
@@ -103,7 +99,9 @@ def _inline_script(html: str, name: str, cfg: dict[str, str], js: str) -> str:
     match = pattern.search(html)
     if not match:
         raise ValueError(f"No <script src> tag matched for '{name}'")
-    tag = f"<script>/* {name}@{cfg['version']} (vendored) */\n{js}</script>"
+    # Escape </script> inside JS to prevent premature tag closure (standard bundler technique)
+    js_safe = re.sub(r"</script>", r"<\/script>", js, flags=re.IGNORECASE)
+    tag = f"<script>/* {name}@{cfg['version']} (vendored) */\n{js_safe}</script>"
     return html[: match.start()] + tag + html[match.end() :]
 
 

@@ -77,7 +77,8 @@ class TestGraphExplorerHTML:
 
     async def test_vis_network_vendored(self) -> None:
         html = await self._get_html()
-        assert "vis-network@" in html and "(vendored)" in html
+        assert "vis-network@" in html
+        assert "(vendored)" in html
 
     async def test_graph_container(self) -> None:
         html = await self._get_html()
