@@ -73,7 +73,7 @@ _SPA_SHELL_HTML = """\
 <script src="https://unpkg.com/vis-network@10.0.2/standalone/umd/vis-network.min.js"></script>
 <script src="https://unpkg.com/marked@17.0.5/marked.min.js"></script>
 <script src="https://unpkg.com/dompurify@3.3.3/dist/purify.min.js"></script>
-<script type="module" src="https://unpkg.com/@anthropic-ai/claude-mcp-ext-apps@latest/dist/index.js"></script>
+<script type="module" src="https://unpkg.com/@anthropic-ai/claude-mcp-ext-apps@1.3.1/dist/index.js"></script>
 <style>
   :root {
     --fallback-bg: #ffffff;
@@ -380,7 +380,7 @@ _SPA_SHELL_HTML = """\
 <div class="toast" id="toast"></div>
 
 <script type="module">
-import { createApp } from 'https://unpkg.com/@anthropic-ai/claude-mcp-ext-apps@latest/dist/index.js';
+import { createApp } from 'https://unpkg.com/@anthropic-ai/claude-mcp-ext-apps@1.3.1/dist/index.js';
 
 // ── Globals ──────────────────────────────────────────────────────────────
 const app = createApp();
