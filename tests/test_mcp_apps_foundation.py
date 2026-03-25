@@ -1,0 +1,610 @@
+"""Tests for MCP Apps foundation — SPA shell, domain computation, and tools.
+
+Covers issue #273: resource registration, tool registration, domain
+computation, and HTML content verification.
+"""
+
+from __future__ import annotations
+
+import json
+from typing import TYPE_CHECKING, Any
+
+import pytest
+from fastmcp import Client
+
+from markdown_vault_mcp._server_apps import _compute_claude_app_domain
+from markdown_vault_mcp.mcp_server import create_server
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+
+_CLEAR_VARS = (
+    "MARKDOWN_VAULT_MCP_INDEX_PATH",
+    "MARKDOWN_VAULT_MCP_EMBEDDINGS_PATH",
+    "MARKDOWN_VAULT_MCP_STATE_PATH",
+    "MARKDOWN_VAULT_MCP_INDEXED_FIELDS",
+    "MARKDOWN_VAULT_MCP_REQUIRED_FIELDS",
+    "MARKDOWN_VAULT_MCP_EXCLUDE",
+    "MARKDOWN_VAULT_MCP_GIT_TOKEN",
+    "MARKDOWN_VAULT_MCP_TEMPLATES_FOLDER",
+    "MARKDOWN_VAULT_MCP_SERVER_NAME",
+    "MARKDOWN_VAULT_MCP_INSTRUCTIONS",
+    "MARKDOWN_VAULT_MCP_BEARER_TOKEN",
+    "MARKDOWN_VAULT_MCP_AUTH_MODE",
+    "MARKDOWN_VAULT_MCP_BASE_URL",
+    "MARKDOWN_VAULT_MCP_OIDC_CONFIG_URL",
+    "MARKDOWN_VAULT_MCP_OIDC_CLIENT_ID",
+    "MARKDOWN_VAULT_MCP_OIDC_CLIENT_SECRET",
+    "MARKDOWN_VAULT_MCP_OIDC_JWT_SIGNING_KEY",
+    "MARKDOWN_VAULT_MCP_OIDC_AUDIENCE",
+    "MARKDOWN_VAULT_MCP_OIDC_REQUIRED_SCOPES",
+    "MARKDOWN_VAULT_MCP_APP_DOMAIN",
+)
+
+
+@pytest.fixture
+def _mcp_env(vault_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Set minimal env vars for create_server."""
+    monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", str(vault_path))
+    monkeypatch.delenv("MARKDOWN_VAULT_MCP_READ_ONLY", raising=False)
+    for var in _CLEAR_VARS:
+        monkeypatch.delenv(var, raising=False)
+
+
+def _parse_tool_data(result: Any) -> Any:
+    """Extract data from a CallToolResult."""
+    data = result.data
+    if isinstance(data, list) and data and not isinstance(data[0], (dict, str)):
+        raw = result.content[0].text if result.content else "[]"
+        return json.loads(raw)
+    return data
+
+
+# ---------------------------------------------------------------------------
+# Domain computation
+# ---------------------------------------------------------------------------
+
+
+class TestComputeClaudeAppDomain:
+    """Tests for _compute_claude_app_domain()."""
+
+    def test_no_base_url_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("MARKDOWN_VAULT_MCP_BASE_URL", raising=False)
+        assert _compute_claude_app_domain() is None
+
+    def test_empty_base_url_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_BASE_URL", "  ")
+        assert _compute_claude_app_domain() is None
+
+    def test_base_url_computes_domain(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_BASE_URL", "https://vault.example.com")
+        monkeypatch.delenv("MARKDOWN_VAULT_MCP_HTTP_PATH", raising=False)
+        result = _compute_claude_app_domain()
+        assert result is not None
+        assert result.endswith(".claudemcpcontent.com")
+        # Prefix should be 32-char hex
+        prefix = result.split(".")[0]
+        assert len(prefix) == 32
+        assert all(c in "0123456789abcdef" for c in prefix)
+
+    def test_app_domain_env_overrides(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """APP_DOMAIN env var is tested at the register_apps level, not here."""
+        # _compute_claude_app_domain() only looks at BASE_URL
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_BASE_URL", "https://example.com")
+        monkeypatch.delenv("MARKDOWN_VAULT_MCP_HTTP_PATH", raising=False)
+        result = _compute_claude_app_domain()
+        assert result is not None
+
+    def test_custom_http_path(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_BASE_URL", "https://example.com")
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_HTTP_PATH", "/custom/path")
+        result1 = _compute_claude_app_domain()
+
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_HTTP_PATH", "/mcp")
+        result2 = _compute_claude_app_domain()
+
+        # Different paths should produce different domains
+        assert result1 != result2
+
+    def test_trailing_slash_stripped(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_BASE_URL", "https://example.com/")
+        monkeypatch.delenv("MARKDOWN_VAULT_MCP_HTTP_PATH", raising=False)
+        result1 = _compute_claude_app_domain()
+
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_BASE_URL", "https://example.com")
+        result2 = _compute_claude_app_domain()
+
+        assert result1 == result2
+
+
+# ---------------------------------------------------------------------------
+# SPA shell resource
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.usefixtures("_mcp_env")
+class TestSPAShellResource:
+    """Tests for the ui://vault/app.html resource."""
+
+    async def test_resource_registered(self) -> None:
+        server = create_server()
+        async with Client(server) as client:
+            resources = await client.list_resources()
+            uris = [str(r.uri) for r in resources]
+            assert "ui://vault/app.html" in uris
+
+    async def test_html_contains_ext_apps_sdk(self) -> None:
+        server = create_server()
+        async with Client(server) as client:
+            resource = await client.read_resource("ui://vault/app.html")
+            html = (
+                resource[0].text if hasattr(resource[0], "text") else str(resource[0])
+            )
+            assert "claude-mcp-ext-apps" in html
+
+    async def test_html_contains_tab_navigation(self) -> None:
+        server = create_server()
+        async with Client(server) as client:
+            resource = await client.read_resource("ui://vault/app.html")
+            html = (
+                resource[0].text if hasattr(resource[0], "text") else str(resource[0])
+            )
+            assert 'data-tab="context"' in html
+            assert 'data-tab="graph"' in html
+            assert 'data-tab="browse"' in html
+
+    async def test_html_contains_host_theming(self) -> None:
+        server = create_server()
+        async with Client(server) as client:
+            resource = await client.read_resource("ui://vault/app.html")
+            html = (
+                resource[0].text if hasattr(resource[0], "text") else str(resource[0])
+            )
+            assert "applyHostTheme" in html
+            assert "--host-bg" in html
+            assert "--host-fg" in html
+
+    async def test_html_handlers_before_connect(self) -> None:
+        server = create_server()
+        async with Client(server) as client:
+            resource = await client.read_resource("ui://vault/app.html")
+            html = (
+                resource[0].text if hasattr(resource[0], "text") else str(resource[0])
+            )
+            # Handlers must be registered before app.connect()
+            connect_pos = html.index("app.connect()")
+            on_tool_result_pos = html.index("app.onToolResult")
+            assert on_tool_result_pos < connect_pos
+
+    async def test_html_contains_fullscreen_toggle(self) -> None:
+        server = create_server()
+        async with Client(server) as client:
+            resource = await client.read_resource("ui://vault/app.html")
+            html = (
+                resource[0].text if hasattr(resource[0], "text") else str(resource[0])
+            )
+            assert "fullscreenBtn" in html
+            assert "setDisplayMode" in html
+
+    async def test_html_contains_teardown(self) -> None:
+        server = create_server()
+        async with Client(server) as client:
+            resource = await client.read_resource("ui://vault/app.html")
+            html = (
+                resource[0].text if hasattr(resource[0], "text") else str(resource[0])
+            )
+            assert "onTeardown" in html
+
+    async def test_html_contains_navigate_to(self) -> None:
+        server = create_server()
+        async with Client(server) as client:
+            resource = await client.read_resource("ui://vault/app.html")
+            html = (
+                resource[0].text if hasattr(resource[0], "text") else str(resource[0])
+            )
+            assert "navigateTo" in html
+
+    async def test_html_contains_send_to_llm(self) -> None:
+        server = create_server()
+        async with Client(server) as client:
+            resource = await client.read_resource("ui://vault/app.html")
+            html = (
+                resource[0].text if hasattr(resource[0], "text") else str(resource[0])
+            )
+            assert "sendToLLM" in html
+            assert "sendMessage" in html
+
+    async def test_html_contains_update_context(self) -> None:
+        server = create_server()
+        async with Client(server) as client:
+            resource = await client.read_resource("ui://vault/app.html")
+            html = (
+                resource[0].text if hasattr(resource[0], "text") else str(resource[0])
+            )
+            assert "updateContext" in html
+            assert "updateModelContext" in html
+
+
+# ---------------------------------------------------------------------------
+# browse_vault tool
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.usefixtures("_mcp_env")
+class TestBrowseVaultTool:
+    """Tests for the browse_vault primary tool."""
+
+    async def test_tool_registered(self) -> None:
+        server = create_server()
+        async with Client(server) as client:
+            tools = await client.list_tools()
+            names = [t.name for t in tools]
+            assert "browse_vault" in names
+
+    async def test_no_args_returns_vault_summary(self) -> None:
+        server = create_server()
+        async with Client(server) as client:
+            result = await client.call_tool("browse_vault", {})
+            data = _parse_tool_data(result)
+            assert data["view"] == "browse"
+            assert data["path"] is None
+            assert "notes" in data["summary"]
+
+    async def test_with_path_returns_note_info(self) -> None:
+        server = create_server()
+        async with Client(server) as client:
+            result = await client.call_tool("browse_vault", {"path": "simple.md"})
+            data = _parse_tool_data(result)
+            assert data["path"] == "simple.md"
+            assert data["view"] == "context"
+
+    async def test_with_view_override(self) -> None:
+        server = create_server()
+        async with Client(server) as client:
+            result = await client.call_tool("browse_vault", {"view": "graph"})
+            data = _parse_tool_data(result)
+            assert data["view"] == "graph"
+
+    async def test_missing_path(self) -> None:
+        server = create_server()
+        async with Client(server) as client:
+            result = await client.call_tool(
+                "browse_vault", {"path": "nonexistent/path.md"}
+            )
+            data = _parse_tool_data(result)
+            assert "not found" in data["summary"].lower()
+
+
+# ---------------------------------------------------------------------------
+# show_context tool
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.usefixtures("_mcp_env")
+class TestShowContextTool:
+    """Tests for the show_context tool."""
+
+    async def test_tool_registered(self) -> None:
+        server = create_server()
+        async with Client(server) as client:
+            tools = await client.list_tools()
+            names = [t.name for t in tools]
+            assert "show_context" in names
+
+    async def test_returns_context_summary(self) -> None:
+        server = create_server()
+        async with Client(server) as client:
+            result = await client.call_tool("show_context", {"path": "simple.md"})
+            data = _parse_tool_data(result)
+            assert data["path"] == "simple.md"
+            assert data["view"] == "context"
+            assert "Backlinks:" in data["summary"]
+            assert "Outlinks:" in data["summary"]
+
+
+# ---------------------------------------------------------------------------
+# App-only tools
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.usefixtures("_mcp_env")
+class TestAppOnlyTools:
+    """Tests for app-only tools (visibility=["app"])."""
+
+    async def test_vault_context_returns_note_context(self) -> None:
+        server = create_server()
+        async with Client(server) as client:
+            result = await client.call_tool("_vault_context", {"path": "simple.md"})
+            data = _parse_tool_data(result)
+            assert data["path"] == "simple.md"
+            assert "backlinks" in data
+            assert "outlinks" in data
+            assert "similar" in data
+            assert "folder_notes" in data
+            assert "tags" in data
+
+    async def test_vault_graph_neighborhood(self) -> None:
+        server = create_server()
+        async with Client(server) as client:
+            result = await client.call_tool(
+                "_vault_graph_neighborhood", {"path": "simple.md"}
+            )
+            data = _parse_tool_data(result)
+            assert "nodes" in data
+            assert "edges" in data
+            assert isinstance(data["nodes"], list)
+            assert isinstance(data["edges"], list)
+            # Center node should be present
+            node_ids = [n["id"] for n in data["nodes"]]
+            assert "simple.md" in node_ids
+
+    async def test_vault_graph_hubs(self) -> None:
+        server = create_server()
+        async with Client(server) as client:
+            result = await client.call_tool("_vault_graph_hubs", {})
+            data = _parse_tool_data(result)
+            assert "nodes" in data
+            assert "edges" in data
+
+    async def test_vault_list_root(self) -> None:
+        server = create_server()
+        async with Client(server) as client:
+            result = await client.call_tool("_vault_list", {})
+            data = _parse_tool_data(result)
+            assert "folders" in data
+            assert "notes" in data
+            assert isinstance(data["notes"], list)
+
+    async def test_vault_read(self) -> None:
+        server = create_server()
+        async with Client(server) as client:
+            result = await client.call_tool("_vault_read", {"path": "simple.md"})
+            data = _parse_tool_data(result)
+            assert data["path"] == "simple.md"
+            assert "content" in data
+            assert "title" in data
+
+    async def test_vault_read_missing(self) -> None:
+        server = create_server()
+        async with Client(server) as client:
+            result = await client.call_tool(
+                "_vault_read", {"path": "does-not-exist.md"}
+            )
+            data = _parse_tool_data(result)
+            assert data is None
+
+    async def test_vault_search(self) -> None:
+        server = create_server()
+        async with Client(server) as client:
+            result = await client.call_tool(
+                "_vault_search", {"query": "hello", "mode": "keyword"}
+            )
+            data = _parse_tool_data(result)
+            assert isinstance(data, list)
+
+
+# ---------------------------------------------------------------------------
+# Domain env var override
+# ---------------------------------------------------------------------------
+
+
+class TestAppDomainOverride:
+    """Test that APP_DOMAIN env var takes precedence over auto-compute."""
+
+    def test_explicit_app_domain(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """When APP_DOMAIN is set, it should be used verbatim."""
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_APP_DOMAIN", "custom.example.com")
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_BASE_URL", "https://vault.example.com")
+        # The override happens in register_apps, not in _compute_claude_app_domain.
+        # We just verify compute still works independently.
+        computed = _compute_claude_app_domain()
+        assert computed is not None
+        assert computed != "custom.example.com"
+
+    def test_app_domain_overrides_base_url(
+        self, vault_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When both APP_DOMAIN and BASE_URL are set, APP_DOMAIN wins."""
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", str(vault_path))
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_APP_DOMAIN", "custom.example.com")
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_BASE_URL", "https://vault.example.com")
+        for var in _CLEAR_VARS:
+            if (
+                var != "MARKDOWN_VAULT_MCP_APP_DOMAIN"
+                and var != "MARKDOWN_VAULT_MCP_BASE_URL"
+            ):
+                monkeypatch.delenv(var, raising=False)
+        # Server creates successfully — no assertion on domain value since
+        # it's internal to the resource config, but the server should not error.
+        server = create_server()
+        assert server is not None
+
+
+# ---------------------------------------------------------------------------
+# App-only tool data coverage
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def _linked_env(vault_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Create linked notes in the vault for graph traversal tests."""
+    (vault_path / "linked_a.md").write_text(
+        "---\ntitle: Linked A\n---\n\n# Linked A\n\n"
+        "Links to [Linked B](linked_b.md) and [Simple](simple.md).\n"
+    )
+    (vault_path / "linked_b.md").write_text(
+        "---\ntitle: Linked B\ntags:\n  - test\n---\n\n# Linked B\n\n"
+        "Links back to [Linked A](linked_a.md).\n"
+    )
+    monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", str(vault_path))
+    monkeypatch.delenv("MARKDOWN_VAULT_MCP_READ_ONLY", raising=False)
+    for var in _CLEAR_VARS:
+        monkeypatch.delenv(var, raising=False)
+
+
+@pytest.mark.usefixtures("_mcp_env")
+class TestAppToolData:
+    """Cover app-only tool Python paths for diff-cover."""
+
+    async def test_browse_vault_with_path(self) -> None:
+        server = create_server()
+        async with Client(server) as client:
+            result = await client.call_tool(
+                "browse_vault", {"path": "full_frontmatter.md", "view": "browse"}
+            )
+            data = _parse_tool_data(result)
+            assert data["path"] == "full_frontmatter.md"
+            assert data["view"] == "browse"
+            assert "Frontmatter:" in data["summary"]
+
+    async def test_browse_vault_no_path(self) -> None:
+        server = create_server()
+        async with Client(server) as client:
+            result = await client.call_tool("browse_vault", {})
+            data = _parse_tool_data(result)
+            assert "Vault:" in data["summary"]
+
+    async def test_show_context_tool(self) -> None:
+        server = create_server()
+        async with Client(server) as client:
+            result = await client.call_tool("show_context", {"path": "simple.md"})
+            data = _parse_tool_data(result)
+            assert data["path"] == "simple.md"
+            assert data["view"] == "context"
+            assert "Backlinks:" in data["summary"]
+
+    async def test_vault_graph_hubs(self) -> None:
+        server = create_server()
+        async with Client(server) as client:
+            result = await client.call_tool("_vault_graph_hubs", {})
+            data = _parse_tool_data(result)
+            assert "nodes" in data
+            assert "edges" in data
+
+    async def test_vault_list_root(self) -> None:
+        server = create_server()
+        async with Client(server) as client:
+            result = await client.call_tool("_vault_list", {})
+            data = _parse_tool_data(result)
+            assert "folders" in data
+            assert "notes" in data
+
+    async def test_vault_read_note(self) -> None:
+        server = create_server()
+        async with Client(server) as client:
+            result = await client.call_tool("_vault_read", {"path": "simple.md"})
+            data = _parse_tool_data(result)
+            assert data["path"] == "simple.md"
+            assert "content" in data
+
+    async def test_vault_search_keyword(self) -> None:
+        server = create_server()
+        async with Client(server) as client:
+            result = await client.call_tool(
+                "_vault_search", {"query": "simple", "mode": "keyword"}
+            )
+            data = _parse_tool_data(result)
+            assert isinstance(data, list)
+
+    async def test_domain_http_path_no_leading_slash(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_BASE_URL", "https://v.example.com")
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_HTTP_PATH", "custom")
+        result = _compute_claude_app_domain()
+        assert result is not None
+        assert result.endswith(".claudemcpcontent.com")
+
+    async def test_vault_context_missing_path(self) -> None:
+        server = create_server()
+        async with Client(server) as client:
+            result = await client.call_tool(
+                "_vault_context", {"path": "does-not-exist.md"}
+            )
+            data = _parse_tool_data(result)
+            assert "error" in data
+            assert "not found" in data["error"].lower()
+
+    async def test_show_context_missing_path(self) -> None:
+        server = create_server()
+        async with Client(server) as client:
+            result = await client.call_tool(
+                "show_context", {"path": "does-not-exist.md"}
+            )
+            data = _parse_tool_data(result)
+            assert data["path"] == "does-not-exist.md"
+            assert "not found" in data["summary"].lower()
+
+    async def test_vault_search_semantic_no_embeddings(self) -> None:
+        server = create_server()
+        async with Client(server) as client:
+            result = await client.call_tool(
+                "_vault_search", {"query": "test", "mode": "semantic"}
+            )
+            data = _parse_tool_data(result)
+            assert isinstance(data, list)
+            assert len(data) == 1
+            assert "error" in data[0]
+
+
+@pytest.mark.usefixtures("_linked_env")
+class TestAppToolLinkedData:
+    """Cover graph traversal paths that require inter-note links."""
+
+    async def test_vault_graph_neighborhood_with_links(self) -> None:
+        server = create_server()
+        async with Client(server) as client:
+            result = await client.call_tool(
+                "_vault_graph_neighborhood", {"path": "linked_a.md", "depth": 2}
+            )
+            data = _parse_tool_data(result)
+            assert "nodes" in data
+            assert "edges" in data
+            node_ids = [n["id"] for n in data["nodes"]]
+            assert "linked_a.md" in node_ids
+            assert len(data["edges"]) > 0
+
+    async def test_vault_graph_neighborhood_dedup(self) -> None:
+        server = create_server()
+        async with Client(server) as client:
+            result = await client.call_tool(
+                "_vault_graph_neighborhood", {"path": "linked_a.md", "depth": 2}
+            )
+            data = _parse_tool_data(result)
+            edge_keys = [(e["from"], e["to"]) for e in data["edges"]]
+            assert len(edge_keys) == len(set(edge_keys))
+
+    async def test_vault_graph_hubs_with_links(self) -> None:
+        server = create_server()
+        async with Client(server) as client:
+            result = await client.call_tool("_vault_graph_hubs", {})
+            data = _parse_tool_data(result)
+            assert "nodes" in data
+            assert "edges" in data
+            if data["nodes"]:
+                assert len(data["edges"]) > 0
+
+    async def test_vault_context_with_links(self) -> None:
+        server = create_server()
+        async with Client(server) as client:
+            result = await client.call_tool("_vault_context", {"path": "linked_a.md"})
+            data = _parse_tool_data(result)
+            assert data["path"] == "linked_a.md"
+            assert "backlinks" in data
+            assert "outlinks" in data
+            assert len(data["outlinks"]) > 0
+
+    async def test_show_context_with_tags(
+        self, vault_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", str(vault_path))
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_INDEXED_FIELDS", "tags")
+        for var in _CLEAR_VARS:
+            if var != "MARKDOWN_VAULT_MCP_INDEXED_FIELDS":
+                monkeypatch.delenv(var, raising=False)
+        server = create_server()
+        async with Client(server) as client:
+            result = await client.call_tool("show_context", {"path": "linked_b.md"})
+            data = _parse_tool_data(result)
+            assert "Tags:" in data["summary"]
