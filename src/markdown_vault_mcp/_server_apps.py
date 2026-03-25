@@ -693,7 +693,7 @@ app.onDisplayModeChanged((mode) => {
         nodesDS.add({
           id: n.id, label: n.label,
           value: Math.max(bc, 1),
-          title: n.label + (n.folder ? ' (' + n.folder + ')' : '') + (n.group === 'hub' ? ' \u2014 ' + bc + ' backlinks' : ''),
+          title: n.label + (n.folder ? ' (' + n.folder + ')' : '') + (bc > 0 ? ' \u2014 ' + bc + ' backlinks' : ''),
           color: n.group === 'hub'
             ? { background: c.accent, border: c.fg }
             : { background: c.surface, border: c.border },
