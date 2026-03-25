@@ -185,7 +185,7 @@ _RRF_K = 60
 # Maximum chunks per embedding provider call.  Keeps memory bounded during
 # build_embeddings() — FastEmbed/ONNX can allocate pathologically large buffers
 # when the entire corpus is sent in one batch (see issue #159).
-_EMBEDDING_BATCH_SIZE = 64
+_EMBEDDING_BATCH_SIZE = 4
 
 # Seconds between automatic background flushes of dirty embeddings to disk.
 # Write operations mark documents as dirty; the flush re-embeds them in bulk.
