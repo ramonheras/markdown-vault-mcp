@@ -195,7 +195,15 @@ def _load_builtin_prompt(name: str) -> dict[str, Any] | None:
     except FileNotFoundError:
         logger.warning("Built-in prompt file %s.md not found — skipping", name)
         return None
-    post = frontmatter.loads(text)
+    try:
+        post = frontmatter.loads(text)
+    except Exception:
+        logger.warning(
+            "Failed to parse built-in prompt file %s.md — skipping",
+            name,
+            exc_info=True,
+        )
+        return None
     raw_arguments = post.get("arguments") or []
     arguments: list[dict[str, Any]] = []
     for arg in raw_arguments:
@@ -267,7 +275,15 @@ def _register_one_builtin_prompt(mcp: FastMCP, name: str, defn: dict[str, Any]) 
             "_Template": Template,
             "_re_sub": re.sub,
         }
-        exec(fn_src, local_ns)
+        try:
+            exec(fn_src, local_ns)
+        except SyntaxError:
+            logger.warning(
+                "Built-in prompt %r generated invalid function signature — skipping",
+                name,
+                exc_info=True,
+            )
+            return
         fn = local_ns["prompt_fn"]
 
     fn.__name__ = name
