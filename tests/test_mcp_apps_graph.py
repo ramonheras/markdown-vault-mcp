@@ -1,0 +1,235 @@
+"""Tests for the Graph Explorer MCP App view.
+
+Covers issue #275: vis-network integration, _vault_graph_neighborhood and
+_vault_graph_hubs tools, and HTML graph view content.
+"""
+
+from __future__ import annotations
+
+import json
+from typing import TYPE_CHECKING, Any
+
+import pytest
+from fastmcp import Client
+
+from markdown_vault_mcp.mcp_server import create_server
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+
+_CLEAR_VARS = (
+    "MARKDOWN_VAULT_MCP_INDEX_PATH",
+    "MARKDOWN_VAULT_MCP_EMBEDDINGS_PATH",
+    "MARKDOWN_VAULT_MCP_STATE_PATH",
+    "MARKDOWN_VAULT_MCP_INDEXED_FIELDS",
+    "MARKDOWN_VAULT_MCP_REQUIRED_FIELDS",
+    "MARKDOWN_VAULT_MCP_EXCLUDE",
+    "MARKDOWN_VAULT_MCP_GIT_TOKEN",
+    "MARKDOWN_VAULT_MCP_TEMPLATES_FOLDER",
+    "MARKDOWN_VAULT_MCP_SERVER_NAME",
+    "MARKDOWN_VAULT_MCP_INSTRUCTIONS",
+    "MARKDOWN_VAULT_MCP_BEARER_TOKEN",
+    "MARKDOWN_VAULT_MCP_AUTH_MODE",
+    "MARKDOWN_VAULT_MCP_BASE_URL",
+    "MARKDOWN_VAULT_MCP_OIDC_CONFIG_URL",
+    "MARKDOWN_VAULT_MCP_OIDC_CLIENT_ID",
+    "MARKDOWN_VAULT_MCP_OIDC_CLIENT_SECRET",
+    "MARKDOWN_VAULT_MCP_OIDC_JWT_SIGNING_KEY",
+    "MARKDOWN_VAULT_MCP_OIDC_AUDIENCE",
+    "MARKDOWN_VAULT_MCP_OIDC_REQUIRED_SCOPES",
+    "MARKDOWN_VAULT_MCP_APP_DOMAIN",
+)
+
+
+@pytest.fixture
+def _mcp_env(vault_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", str(vault_path))
+    monkeypatch.delenv("MARKDOWN_VAULT_MCP_READ_ONLY", raising=False)
+    for var in _CLEAR_VARS:
+        monkeypatch.delenv(var, raising=False)
+
+
+def _parse_tool_data(result: Any) -> Any:
+    data = result.data
+    if isinstance(data, list) and data and not isinstance(data[0], (dict, str)):
+        raw = result.content[0].text if result.content else "[]"
+        return json.loads(raw)
+    return data
+
+
+# ---------------------------------------------------------------------------
+# Graph HTML content
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.usefixtures("_mcp_env")
+class TestGraphExplorerHTML:
+    """Verify graph explorer elements exist in the SPA HTML."""
+
+    async def _get_html(self) -> str:
+        server = create_server()
+        async with Client(server) as client:
+            resource = await client.read_resource("ui://vault/app.html")
+            return (
+                resource[0].text if hasattr(resource[0], "text") else str(resource[0])
+            )
+
+    async def test_vis_network_cdn_import(self) -> None:
+        html = await self._get_html()
+        assert "vis-network" in html
+        assert "unpkg.com/vis-network@" in html  # pinned version
+
+    async def test_graph_container(self) -> None:
+        html = await self._get_html()
+        assert 'id="graph-container"' in html
+
+    async def test_vis_network_initialization(self) -> None:
+        html = await self._get_html()
+        assert "vis.Network" in html
+        assert "vis.DataSet" in html
+
+    async def test_click_handler(self) -> None:
+        html = await self._get_html()
+        assert "network.on('click'" in html
+
+    async def test_hover_tooltip(self) -> None:
+        html = await self._get_html()
+        # Tooltip via node.title property
+        assert "tooltipDelay" in html
+
+    async def test_double_click_handler(self) -> None:
+        html = await self._get_html()
+        assert "doubleClick" in html
+        assert "vault-graph-dblclick" in html
+
+    async def test_dynamic_expansion(self) -> None:
+        html = await self._get_html()
+        assert "expandNode" in html
+        assert "_vault_graph_neighborhood" in html
+
+    async def test_hub_view(self) -> None:
+        html = await self._get_html()
+        assert "_vault_graph_hubs" in html
+        assert "loadHubs" in html
+
+    async def test_node_visual_encoding(self) -> None:
+        html = await self._get_html()
+        # Node size proportional to backlink_count via value
+        assert "backlink_count" in html
+        # Edge color by type
+        assert "edgeColorByType" in html
+        # Orphan dashed border
+        assert "borderDashes" in html
+
+    async def test_send_to_claude_button(self) -> None:
+        html = await self._get_html()
+        assert 'id="graph-send-btn"' in html
+
+    async def test_fullscreen_button(self) -> None:
+        html = await self._get_html()
+        assert 'id="graph-fullscreen-btn"' in html
+
+    async def test_mini_context_card(self) -> None:
+        html = await self._get_html()
+        assert 'id="graph-mini-card"' in html
+        assert "showMiniCard" in html
+        assert "Full Context" in html
+        assert "Open in Browser" in html
+
+    async def test_xss_protection_eschtml(self) -> None:
+        html = await self._get_html()
+        assert "escHtml" in html
+
+    async def test_cdn_crash_guard(self) -> None:
+        html = await self._get_html()
+        # loadGraph must check nodesDS before calling clear()
+        assert "vis CDN failed" in html or "!nodesDS" in html
+
+    async def test_host_css_variables_in_graph(self) -> None:
+        html = await self._get_html()
+        assert "getColors" in html
+        assert "--host-accent" in html
+
+
+# ---------------------------------------------------------------------------
+# Graph data tools
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.usefixtures("_mcp_env")
+class TestGraphDataTools:
+    """Verify graph tools return valid node/edge structures."""
+
+    async def test_neighborhood_returns_graph(self) -> None:
+        server = create_server()
+        async with Client(server) as client:
+            result = await client.call_tool(
+                "_vault_graph_neighborhood", {"path": "simple.md"}
+            )
+            data = _parse_tool_data(result)
+            assert "nodes" in data
+            assert "edges" in data
+            node_ids = [n["id"] for n in data["nodes"]]
+            assert "simple.md" in node_ids
+            for node in data["nodes"]:
+                assert "id" in node
+                assert "label" in node
+                assert "group" in node
+                assert "folder" in node
+
+    async def test_neighborhood_with_depth(self) -> None:
+        server = create_server()
+        async with Client(server) as client:
+            r1 = await client.call_tool(
+                "_vault_graph_neighborhood", {"path": "simple.md", "depth": 1}
+            )
+            d1 = _parse_tool_data(r1)
+            r2 = await client.call_tool(
+                "_vault_graph_neighborhood", {"path": "simple.md", "depth": 2}
+            )
+            d2 = _parse_tool_data(r2)
+            assert "nodes" in d2
+            # depth=2 should return at least as many nodes as depth=1
+            assert len(d2["nodes"]) >= len(d1["nodes"])
+
+    async def test_hubs_returns_graph(self) -> None:
+        server = create_server()
+        async with Client(server) as client:
+            result = await client.call_tool("_vault_graph_hubs", {})
+            data = _parse_tool_data(result)
+            assert "nodes" in data
+            assert "edges" in data
+
+    async def test_edges_have_type(self) -> None:
+        server = create_server()
+        async with Client(server) as client:
+            result = await client.call_tool(
+                "_vault_graph_neighborhood", {"path": "simple.md"}
+            )
+            data = _parse_tool_data(result)
+            for edge in data["edges"]:
+                assert "from" in edge
+                assert "to" in edge
+                assert "type" in edge
+
+    async def test_neighborhood_nodes_have_backlink_count(self) -> None:
+        server = create_server()
+        async with Client(server) as client:
+            result = await client.call_tool(
+                "_vault_graph_neighborhood", {"path": "simple.md"}
+            )
+            data = _parse_tool_data(result)
+            for node in data["nodes"]:
+                assert "backlink_count" in node
+                assert isinstance(node["backlink_count"], int)
+
+    async def test_edges_deduplicated(self) -> None:
+        server = create_server()
+        async with Client(server) as client:
+            result = await client.call_tool(
+                "_vault_graph_neighborhood", {"path": "simple.md"}
+            )
+            data = _parse_tool_data(result)
+            edge_keys = [(e["from"], e["to"]) for e in data["edges"]]
+            assert len(edge_keys) == len(set(edge_keys))
