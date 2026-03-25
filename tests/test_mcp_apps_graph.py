@@ -78,7 +78,7 @@ class TestGraphExplorerHTML:
     async def test_vis_network_cdn_import(self) -> None:
         html = await self._get_html()
         assert "vis-network" in html
-        assert "unpkg.com/vis-network" in html
+        assert "unpkg.com/vis-network@" in html  # pinned version
 
     async def test_graph_container(self) -> None:
         html = await self._get_html()
@@ -137,6 +137,15 @@ class TestGraphExplorerHTML:
         assert "Full Context" in html
         assert "Open in Browser" in html
 
+    async def test_xss_protection_eschtml(self) -> None:
+        html = await self._get_html()
+        assert "escHtml" in html
+
+    async def test_cdn_crash_guard(self) -> None:
+        html = await self._get_html()
+        # loadGraph must check nodesDS before calling clear()
+        assert "vis CDN failed" in html or "!nodesDS" in html
+
     async def test_host_css_variables_in_graph(self) -> None:
         html = await self._get_html()
         assert "getColors" in html
@@ -167,15 +176,22 @@ class TestGraphDataTools:
                 assert "id" in node
                 assert "label" in node
                 assert "group" in node
+                assert "folder" in node
 
     async def test_neighborhood_with_depth(self) -> None:
         server = create_server()
         async with Client(server) as client:
-            result = await client.call_tool(
+            r1 = await client.call_tool(
+                "_vault_graph_neighborhood", {"path": "simple.md", "depth": 1}
+            )
+            d1 = _parse_tool_data(r1)
+            r2 = await client.call_tool(
                 "_vault_graph_neighborhood", {"path": "simple.md", "depth": 2}
             )
-            data = _parse_tool_data(result)
-            assert "nodes" in data
+            d2 = _parse_tool_data(r2)
+            assert "nodes" in d2
+            # depth=2 should return at least as many nodes as depth=1
+            assert len(d2["nodes"]) >= len(d1["nodes"])
 
     async def test_hubs_returns_graph(self) -> None:
         server = create_server()

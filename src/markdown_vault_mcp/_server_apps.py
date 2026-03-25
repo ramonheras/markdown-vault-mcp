@@ -70,7 +70,7 @@ _SPA_SHELL_HTML = """\
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>Vault Explorer</title>
-<script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+<script src="https://unpkg.com/vis-network@10.0.2/standalone/umd/vis-network.min.js"></script>
 <script type="module" src="https://unpkg.com/@anthropic-ai/claude-mcp-ext-apps@latest/dist/index.js"></script>
 <style>
   :root {
@@ -150,6 +150,7 @@ _SPA_SHELL_HTML = """\
     flex: 1;
     overflow: auto;
     padding: 12px;
+    position: relative;
   }
   .tab-panel.active { display: flex; flex-direction: column; }
   .placeholder {
@@ -310,6 +311,13 @@ import { createApp } from 'https://unpkg.com/@anthropic-ai/claude-mcp-ext-apps@l
 const app = createApp();
 let currentTab = 'context';
 let isFullscreen = false;
+
+// ── Utilities ─────────────────────────────────────────────────────────────
+function escHtml(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
 
 // ── Host theming ─────────────────────────────────────────────────────────
 function applyHostTheme(hostContext) {
@@ -627,8 +635,7 @@ app.onDisplayModeChanged((mode) => {
     };
   }
 
-  function edgeColorByType(type) {
-    const c = getColors();
+  function edgeColorByType(type, c) {
     if (type === 'wikilink') return c.accent;
     if (type === 'reference') return c.muted;
     return c.border; // markdown = default
@@ -686,7 +693,7 @@ app.onDisplayModeChanged((mode) => {
         nodesDS.add({
           id: n.id, label: n.label,
           value: Math.max(bc, 1),
-          title: n.label + (n.group === 'hub' ? ' (' + bc + ' backlinks)' : ''),
+          title: n.label + (n.folder ? ' (' + n.folder + ')' : '') + (n.group === 'hub' ? ' \u2014 ' + bc + ' backlinks' : ''),
           color: n.group === 'hub'
             ? { background: c.accent, border: c.fg }
             : { background: c.surface, border: c.border },
@@ -702,7 +709,7 @@ app.onDisplayModeChanged((mode) => {
       if (!edgesDS.get(edgeId)) {
         edgesDS.add({
           id: edgeId, from: e.from, to: e.to,
-          color: { color: edgeColorByType(e.type), highlight: c.accent },
+          color: { color: edgeColorByType(e.type, c), highlight: c.accent },
           title: e.type,
         });
       }
@@ -739,6 +746,7 @@ app.onDisplayModeChanged((mode) => {
 
   async function loadGraph(path) {
     initNetwork();
+    if (!nodesDS || !edgesDS) return;  // vis CDN failed to load
     nodesDS.clear();
     edgesDS.clear();
     graphCenterPath = path || null;
@@ -758,19 +766,19 @@ app.onDisplayModeChanged((mode) => {
       const data = typeof result === 'string' ? JSON.parse(result) : result;
       const bl = (data.backlinks || []).slice(0, 3);
       const ol = (data.outlinks || []).slice(0, 3);
-      let html = '<h4>' + (data.title || nodeId) + '</h4>';
+      let html = '<h4>' + escHtml(data.title || nodeId) + '</h4>';
       if (data.tags && Object.keys(data.tags).length > 0) {
         const allTags = Object.values(data.tags).flat().slice(0, 5);
-        html += '<div>' + allTags.map(t => '<span class="tag-pill" style="font-size:10px">' + t + '</span>').join(' ') + '</div>';
+        html += '<div>' + allTags.map(t => '<span class="tag-pill" style="font-size:10px">' + escHtml(t) + '</span>').join(' ') + '</div>';
       }
       if (bl.length > 0) {
         html += '<div class="mini-links"><strong>Backlinks:</strong>';
-        for (const b of bl) html += '<div class="mini-link" data-path="' + b.source_path + '">' + b.source_path + '</div>';
+        for (const b of bl) html += '<div class="mini-link" data-path="' + escHtml(b.source_path) + '">' + escHtml(b.source_path) + '</div>';
         html += '</div>';
       }
       if (ol.length > 0) {
         html += '<div class="mini-links"><strong>Outlinks:</strong>';
-        for (const o of ol) html += '<div class="mini-link" data-path="' + o.target_path + '">' + o.target_path + '</div>';
+        for (const o of ol) html += '<div class="mini-link" data-path="' + escHtml(o.target_path) + '">' + escHtml(o.target_path) + '</div>';
         html += '</div>';
       }
       html += '<div class="mini-actions">'
@@ -1091,7 +1099,13 @@ def register_apps(mcp: FastMCP) -> None:
             label = (
                 note.title if note else current.rsplit("/", 1)[-1].replace(".md", "")
             )
-            nodes[current] = {"id": current, "label": label, "group": "note"}
+            folder = current.rsplit("/", 1)[0] if "/" in current else ""
+            nodes[current] = {
+                "id": current,
+                "label": label,
+                "group": "note",
+                "folder": folder,
+            }
 
             if d >= depth:
                 continue
@@ -1170,11 +1184,13 @@ def register_apps(mcp: FastMCP) -> None:
         seen_edges: set[tuple[str, str]] = set()
 
         for hub in hubs:
+            hub_folder = hub.path.rsplit("/", 1)[0] if "/" in hub.path else ""
             nodes[hub.path] = {
                 "id": hub.path,
                 "label": hub.title,
                 "group": "hub",
                 "backlink_count": hub.backlink_count,
+                "folder": hub_folder,
             }
 
             # Get immediate connections for each hub
@@ -1190,10 +1206,16 @@ def register_apps(mcp: FastMCP) -> None:
                         if note
                         else bl.source_path.rsplit("/", 1)[-1].replace(".md", "")
                     )
+                    bl_folder = (
+                        bl.source_path.rsplit("/", 1)[0]
+                        if "/" in bl.source_path
+                        else ""
+                    )
                     nodes[bl.source_path] = {
                         "id": bl.source_path,
                         "label": label,
                         "group": "note",
+                        "folder": bl_folder,
                     }
                 edge_key = (bl.source_path, hub.path)
                 if edge_key not in seen_edges:
