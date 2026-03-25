@@ -330,8 +330,7 @@
 
 <script type="module">
 // Static import required for Android webview compatibility (dynamic import()
-// fails there). Trade-off: if the CDN is unreachable, the module loader fails
-// before the try-catch — no friendly error UI. See issue #302 for bundling.
+// fails there).  SDK is vendored inline via import map (see issue #302).
 import { App, applyDocumentTheme, applyHostStyleVariables, applyHostFonts }
   from "https://unpkg.com/@modelcontextprotocol/ext-apps@1.3.1/app-with-deps";
 
