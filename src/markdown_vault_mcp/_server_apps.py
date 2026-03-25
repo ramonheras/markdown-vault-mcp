@@ -598,9 +598,7 @@ def register_apps(mcp: FastMCP) -> None:
 
             # Get backlinks
             try:
-                backlinks = await asyncio.to_thread(
-                    collection.get_backlinks, current
-                )
+                backlinks = await asyncio.to_thread(collection.get_backlinks, current)
             except ValueError:
                 backlinks = []
             for bl in backlinks:
@@ -616,9 +614,7 @@ def register_apps(mcp: FastMCP) -> None:
 
             # Get outlinks
             try:
-                outlinks = await asyncio.to_thread(
-                    collection.get_outlinks, current
-                )
+                outlinks = await asyncio.to_thread(collection.get_outlinks, current)
             except ValueError:
                 outlinks = []
             for ol in outlinks:
@@ -683,9 +679,7 @@ def register_apps(mcp: FastMCP) -> None:
 
             # Get immediate connections for each hub
             try:
-                backlinks = await asyncio.to_thread(
-                    collection.get_backlinks, hub.path
-                )
+                backlinks = await asyncio.to_thread(collection.get_backlinks, hub.path)
             except ValueError:
                 backlinks = []
             for bl in backlinks:
