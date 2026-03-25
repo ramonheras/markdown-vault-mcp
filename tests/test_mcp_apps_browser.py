@@ -200,11 +200,11 @@ class TestBrowserDataTools:
             )
             data = _parse_tool_data(result)
             assert isinstance(data, list)
-            if len(data) > 0:
-                assert "path" in data[0]
-                assert "title" in data[0]
-                assert "snippet" in data[0]
-                assert "score" in data[0]
+            assert len(data) > 0, "Expected at least one result for query 'simple'"
+            assert "path" in data[0]
+            assert "title" in data[0]
+            assert "snippet" in data[0]
+            assert "score" in data[0]
 
     async def test_vault_search_respects_limit(self) -> None:
         server = create_server()

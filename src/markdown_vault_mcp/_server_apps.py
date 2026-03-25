@@ -913,6 +913,14 @@ app.onDisplayModeChanged((mode) => {
 
 // ── Vault Browser View ──────────────────────────────────────────────────
 (function() {
+  function escHtml(s) {
+    return String(s ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
   let currentPreviewPath = null;
   let currentPreviewData = null;
   let treeDataCache = {};
@@ -937,14 +945,14 @@ app.onDisplayModeChanged((mode) => {
     }
   }
 
-  function renderTree(data, parentEl, parentFolder) {
+  function renderTree(data, parentEl) {
     parentEl.innerHTML = '';
     // Folders
     for (const f of data.folders) {
       const name = f.includes('/') ? f.split('/').pop() : f;
       const folderDiv = document.createElement('div');
       folderDiv.className = 'tree-folder';
-      folderDiv.innerHTML = '<span class="arrow">\\u25B6</span> \\uD83D\\uDCC1 ' + name;
+      folderDiv.innerHTML = '<span class="arrow">\\u25B6</span> \\uD83D\\uDCC1 ' + escHtml(name);
       folderDiv.dataset.folder = f;
       parentEl.appendChild(folderDiv);
 
@@ -960,7 +968,7 @@ app.onDisplayModeChanged((mode) => {
           folderDiv.classList.add('expanded');
           if (childrenDiv.children.length === 0) {
             const subData = await loadFolder(f);
-            renderTree(subData, childrenDiv, f);
+            renderTree(subData, childrenDiv);
           }
         }
       });
@@ -980,7 +988,7 @@ app.onDisplayModeChanged((mode) => {
   async function loadRootTree() {
     treeDataCache = {};
     const data = await loadFolder(null);
-    renderTree(data, treeEl, null);
+    renderTree(data, treeEl);
   }
 
   async function loadPreview(path) {
@@ -997,7 +1005,7 @@ app.onDisplayModeChanged((mode) => {
       currentPreviewData = data;
 
       let html = '<div class="preview-header">';
-      html += '<h2>' + (data.title || path) + '</h2>';
+      html += '<h2>' + escHtml(data.title || path) + '</h2>';
       html += '<div class="preview-actions">';
       html += '<button class="action-btn" id="preview-send-btn" title="Send to Claude">\\uD83D\\uDCAC Send</button>';
       html += '<button class="action-btn" id="preview-ctx-btn" title="Show Context" style="background:var(--host-surface,var(--fallback-surface));color:var(--host-fg,var(--fallback-fg));border:1px solid var(--host-border,var(--fallback-border));">\\uD83D\\uDD0D Context</button>';
@@ -1010,7 +1018,7 @@ app.onDisplayModeChanged((mode) => {
         html += '<div class="preview-fm"><table class="fm-table">';
         for (const [k, v] of Object.entries(data.frontmatter)) {
           const val = typeof v === 'object' ? JSON.stringify(v) : String(v);
-          html += '<tr><td>' + k + '</td><td>' + val + '</td></tr>';
+          html += '<tr><td>' + escHtml(k) + '</td><td>' + escHtml(val) + '</td></tr>';
         }
         html += '</table></div>';
       }
@@ -1020,7 +1028,7 @@ app.onDisplayModeChanged((mode) => {
       if (typeof marked !== 'undefined' && data.content) {
         rendered = marked.parse(data.content);
       } else {
-        rendered = '<pre>' + (data.content || '') + '</pre>';
+        rendered = '<pre>' + escHtml(data.content || '') + '</pre>';
       }
       if (typeof DOMPurify !== 'undefined') {
         rendered = DOMPurify.sanitize(rendered);
@@ -1042,7 +1050,11 @@ app.onDisplayModeChanged((mode) => {
 
       window.updateContext('browser', path, data.title);
     } catch (err) {
-      previewEl.innerHTML = '<div class="placeholder">Error: ' + (err.message || err) + '</div>';
+      const errDiv = document.createElement('div');
+      errDiv.className = 'placeholder';
+      errDiv.textContent = 'Error: ' + (err.message || err);
+      previewEl.innerHTML = '';
+      previewEl.appendChild(errDiv);
     }
   }
 
@@ -1067,8 +1079,8 @@ app.onDisplayModeChanged((mode) => {
       for (const r of data) {
         const div = document.createElement('div');
         div.className = 'search-result';
-        div.innerHTML = '<div class="search-result-title">' + (r.title || r.path) + '</div>'
-          + '<div class="search-result-snippet">' + (r.snippet || '') + '</div>';
+        div.innerHTML = '<div class="search-result-title">' + escHtml(r.title || r.path) + '</div>'
+          + '<div class="search-result-snippet">' + escHtml(r.snippet || '') + '</div>';
         div.addEventListener('click', () => loadPreview(r.path));
         treeEl.appendChild(div);
       }
