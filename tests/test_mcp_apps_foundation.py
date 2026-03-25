@@ -188,6 +188,38 @@ class TestSPAShellResource:
             assert "fullscreenBtn" in html
             assert "requestDisplayMode" in html
 
+    async def test_html_contains_ontoolinput(self) -> None:
+        server = create_server()
+        async with Client(server) as client:
+            resource = await client.read_resource("ui://vault/app.html")
+            html = resource[0].text
+            assert "app.ontoolinput" in html
+            assert "processToolInput" in html
+            assert "pendingToolInput" in html
+
+    async def test_html_contains_ontoolcancelled(self) -> None:
+        server = create_server()
+        async with Client(server) as client:
+            resource = await client.read_resource("ui://vault/app.html")
+            html = resource[0].text
+            assert "app.ontoolcancelled" in html
+
+    async def test_html_contains_onteardown(self) -> None:
+        server = create_server()
+        async with Client(server) as client:
+            resource = await client.read_resource("ui://vault/app.html")
+            html = resource[0].text
+            assert "app.onteardown" in html
+
+    async def test_html_static_import(self) -> None:
+        server = create_server()
+        async with Client(server) as client:
+            resource = await client.read_resource("ui://vault/app.html")
+            html = resource[0].text
+            # Static import (not dynamic) for Android webview compatibility
+            assert 'from "https://unpkg.com/@modelcontextprotocol/ext-apps' in html
+            assert "await import(" not in html
+
     async def test_html_contains_error_handler(self) -> None:
         server = create_server()
         async with Client(server) as client:
