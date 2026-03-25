@@ -141,7 +141,7 @@ class TestSPAShellResource:
             html = (
                 resource[0].text if hasattr(resource[0], "text") else str(resource[0])
             )
-            assert "claude-mcp-ext-apps" in html
+            assert "@modelcontextprotocol/ext-apps" in html
 
     async def test_html_contains_tab_navigation(self) -> None:
         server = create_server()
@@ -161,9 +161,10 @@ class TestSPAShellResource:
             html = (
                 resource[0].text if hasattr(resource[0], "text") else str(resource[0])
             )
-            assert "applyHostTheme" in html
-            assert "--host-bg" in html
-            assert "--host-fg" in html
+            assert "handleHostContext" in html
+            assert "applyDocumentTheme" in html
+            assert "--color-background-primary" in html
+            assert "--color-text-primary" in html
 
     async def test_html_handlers_before_connect(self) -> None:
         server = create_server()
@@ -174,7 +175,7 @@ class TestSPAShellResource:
             )
             # Handlers must be registered before app.connect()
             connect_pos = html.index("app.connect()")
-            on_tool_result_pos = html.index("app.onToolResult")
+            on_tool_result_pos = html.index("app.ontoolresult")
             assert on_tool_result_pos < connect_pos
 
     async def test_html_contains_fullscreen_toggle(self) -> None:
@@ -185,16 +186,16 @@ class TestSPAShellResource:
                 resource[0].text if hasattr(resource[0], "text") else str(resource[0])
             )
             assert "fullscreenBtn" in html
-            assert "setDisplayMode" in html
+            assert "requestDisplayMode" in html
 
-    async def test_html_contains_teardown(self) -> None:
+    async def test_html_contains_error_handler(self) -> None:
         server = create_server()
         async with Client(server) as client:
             resource = await client.read_resource("ui://vault/app.html")
             html = (
                 resource[0].text if hasattr(resource[0], "text") else str(resource[0])
             )
-            assert "onTeardown" in html
+            assert "app.onerror" in html
 
     async def test_html_contains_navigate_to(self) -> None:
         server = create_server()

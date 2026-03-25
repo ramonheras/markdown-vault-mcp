@@ -114,9 +114,9 @@ class TestContextCardHTML:
 
     async def test_host_css_variables(self) -> None:
         html = await self._get_html()
-        assert "var(--host-accent" in html
-        assert "var(--host-border" in html
-        assert "var(--host-muted" in html
+        assert "var(--color-text-info" in html
+        assert "var(--color-border-primary" in html
+        assert "var(--color-text-secondary" in html
 
     async def test_update_model_context_on_view(self) -> None:
         html = await self._get_html()
@@ -243,12 +243,12 @@ class TestNoHardcodedColors:
 
     async def test_success_color_is_variable(self) -> None:
         html = await self._get_html()
-        assert "var(--host-success" in html
+        assert "var(--color-text-success" in html
 
     async def test_error_color_is_variable(self) -> None:
         html = await self._get_html()
-        assert "var(--host-error" in html
+        assert "var(--color-text-danger" in html
 
     async def test_accent_fg_color_is_variable(self) -> None:
         html = await self._get_html()
-        assert "var(--host-accent-fg" in html
+        assert "var(--color-text-inverse" in html

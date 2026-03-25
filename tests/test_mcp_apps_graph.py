@@ -149,7 +149,7 @@ class TestGraphExplorerHTML:
     async def test_host_css_variables_in_graph(self) -> None:
         html = await self._get_html()
         assert "getColors" in html
-        assert "--host-accent" in html
+        assert "--color-text-info" in html
 
 
 # ---------------------------------------------------------------------------
