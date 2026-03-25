@@ -217,6 +217,10 @@
           "description": "Verify access token JWT instead of id_token",
           "format": "boolean",
           "default": "false"
+        },
+        {
+          "name": "MARKDOWN_VAULT_MCP_APP_DOMAIN",
+          "description": "Override Claude app domain for MCP Apps iframe sandboxing"
         }
       ]
     },
@@ -447,6 +451,10 @@
           "description": "Verify access token JWT instead of id_token",
           "format": "boolean",
           "default": "false"
+        },
+        {
+          "name": "MARKDOWN_VAULT_MCP_APP_DOMAIN",
+          "description": "Override Claude app domain for MCP Apps iframe sandboxing"
         }
       ]
     }

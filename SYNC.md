@@ -13,6 +13,7 @@ silent divergence.
 | **Auth: oidc-proxy** | `mcp_server.py:_build_oidc_auth()` | `mcp_server.py:_build_oidc_auth()` | Identical (env prefix differs) |
 | **Auth: mode detect** | `mcp_server.py:_resolve_auth_mode()` | `mcp_server.py:_resolve_auth_mode()` | MV logs on explicit+auto-detect; IG logs only warning |
 | **Auth: multi-auth** | `mcp_server.py:create_server()` | `mcp_server.py:create_server()` | Both use `MultiAuth(…, required_scopes=[])` |
+| **MCP Apps: domain** | `_server_apps.py:_compute_claude_app_domain()` | `_server_resources.py:_compute_claude_app_domain()` | Derives Claude app domain from `BASE_URL`; overridden by `APP_DOMAIN` env var |
 | **CI: lint+type+test** | `.github/workflows/ci.yml` | `.github/workflows/ci.yml` | Structure identical; diff-cover approach differs (see below) |
 | **CI: audit** | `ci.yml` audit job | `ci.yml` audit job | MV has `--ignore-vuln CVE-2026-25990` |
 | **CI: secrets** | `ci.yml` gitleaks (SHA-pinned) | `ci.yml` gitleaks (SHA-pinned) | Identical |

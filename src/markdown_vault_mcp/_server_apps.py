@@ -286,7 +286,7 @@ _SPA_SHELL_HTML = """\
     color: var(--host-fg, var(--fallback-fg));
   }
   .tree-note:hover { background: var(--host-surface, var(--fallback-surface)); border-radius: 3px; }
-  .tree-note.active { background: var(--host-accent, var(--fallback-accent)); color: #fff; border-radius: 3px; }
+  .tree-note.active { background: var(--host-accent, var(--fallback-accent)); color: var(--host-accent-fg, #fff); border-radius: 3px; }
   .search-result {
     cursor: pointer; padding: 6px 8px; border-bottom: 1px solid var(--host-border, var(--fallback-border));
   }
@@ -299,7 +299,7 @@ _SPA_SHELL_HTML = """\
     display: flex; align-items: center; justify-content: space-between; gap: 8px;
     margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--host-border, var(--fallback-border));
   }
-  .preview-header h2 { font-size: 18px; margin: 0; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .preview-header h1 { font-size: 18px; margin: 0; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .preview-actions { display: flex; gap: 6px; flex-shrink: 0; }
   .preview-fm { margin-bottom: 12px; }
   .preview-content { font-size: 14px; line-height: 1.6; }
@@ -335,6 +335,8 @@ _SPA_SHELL_HTML = """\
         <div class="context-title-row">
           <h2 id="ctx-title"></h2>
           <div class="context-actions">
+            <button class="action-btn" id="ctx-graph-btn" title="Show in Graph" style="background:var(--host-surface,var(--fallback-surface));color:var(--host-fg,var(--fallback-fg));border:1px solid var(--host-border,var(--fallback-border));">&#x1F517; Graph</button>
+            <button class="action-btn" id="ctx-browse-btn" title="Open in Browser" style="background:var(--host-surface,var(--fallback-surface));color:var(--host-fg,var(--fallback-fg));border:1px solid var(--host-border,var(--fallback-border));">&#x1F4C4; Browse</button>
             <button class="action-btn" id="ctx-send-btn" title="Send to Claude">&#x1F4AC; Send</button>
           </div>
         </div>
@@ -657,6 +659,16 @@ app.onDisplayModeChanged((mode) => {
     if (item) loadContext(item.dataset.path);
   });
 
+  // Show in Graph
+  document.getElementById('ctx-graph-btn').addEventListener('click', () => {
+    if (currentContextPath) window.navigateTo('graph', { path: currentContextPath });
+  });
+
+  // Open in Browser
+  document.getElementById('ctx-browse-btn').addEventListener('click', () => {
+    if (currentContextPath) window.navigateTo('browse', { path: currentContextPath });
+  });
+
   // Send to Claude
   document.getElementById('ctx-send-btn').addEventListener('click', () => {
     if (!currentContextData) return;
@@ -910,6 +922,12 @@ app.onDisplayModeChanged((mode) => {
 
   window.loadGraph = loadGraph;
 })();
+
+// ── Cross-view navigation wiring (#277) ──────────────────────────────────
+// Graph double-click → Context Card
+window.addEventListener('vault-graph-dblclick', (e) => {
+  if (e.detail.path) window.navigateTo('context', { path: e.detail.path });
+});
 
 // ── Vault Browser View ──────────────────────────────────────────────────
 (function() {
@@ -1380,26 +1398,38 @@ def register_apps(mcp: FastMCP) -> None:
             label = (
                 note.title if note else current.rsplit("/", 1)[-1].replace(".md", "")
             )
-            folder = current.rsplit("/", 1)[0] if "/" in current else ""
+            folder = note.folder if note else ""
 
-            # Fetch backlinks before depth guard for backlink_count (AC9)
+            if d >= depth:
+                # Boundary nodes are reachable by definition — skip DB calls
+                nodes[current] = {
+                    "id": current,
+                    "label": label,
+                    "group": "note",
+                    "folder": folder,
+                    "backlink_count": 0,
+                }
+                continue
+
+            # Fetch backlinks/outlinks for interior nodes (orphan detection + edges)
             try:
                 backlinks = await asyncio.to_thread(collection.get_backlinks, current)
             except ValueError:
                 backlinks = []
+            try:
+                outlinks = await asyncio.to_thread(collection.get_outlinks, current)
+            except ValueError:
+                outlinks = []
+            is_orphan = len(backlinks) == 0 and len(outlinks) == 0
 
             nodes[current] = {
                 "id": current,
                 "label": label,
-                "group": "note",
+                "group": "orphan" if is_orphan else "note",
                 "folder": folder,
                 "backlink_count": len(backlinks),
             }
 
-            if d >= depth:
-                continue
-
-            # Process backlinks (already fetched above)
             for bl in backlinks:
                 edges.append(
                     {
@@ -1411,11 +1441,7 @@ def register_apps(mcp: FastMCP) -> None:
                 if bl.source_path not in visited:
                     queue.append((bl.source_path, d + 1))
 
-            # Get outlinks
-            try:
-                outlinks = await asyncio.to_thread(collection.get_outlinks, current)
-            except ValueError:
-                outlinks = []
+            # Process outlinks (already fetched above for orphan detection)
             for ol in outlinks:
                 if ol.exists:
                     edges.append(
@@ -1469,7 +1495,9 @@ def register_apps(mcp: FastMCP) -> None:
         seen_edges: set[tuple[str, str]] = set()
 
         for hub in hubs:
-            hub_folder = hub.path.rsplit("/", 1)[0] if "/" in hub.path else ""
+            # TODO: extend get_most_linked to return folder, eliminating this per-hub read
+            hub_note = await asyncio.to_thread(collection.read, hub.path)
+            hub_folder = hub_note.folder if hub_note else ""
             nodes[hub.path] = {
                 "id": hub.path,
                 "label": hub.title,
@@ -1491,16 +1519,13 @@ def register_apps(mcp: FastMCP) -> None:
                         if note
                         else bl.source_path.rsplit("/", 1)[-1].replace(".md", "")
                     )
-                    bl_folder = (
-                        bl.source_path.rsplit("/", 1)[0]
-                        if "/" in bl.source_path
-                        else ""
-                    )
+                    folder = note.folder if note else ""
                     nodes[bl.source_path] = {
                         "id": bl.source_path,
                         "label": label,
                         "group": "note",
-                        "folder": bl_folder,
+                        "folder": folder,
+                        "backlink_count": 0,
                     }
                 edge_key = (bl.source_path, hub.path)
                 if edge_key not in seen_edges:
