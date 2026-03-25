@@ -978,7 +978,8 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
         Raises:
             ValueError: If old_path does not exist, new_path already exists,
                 or the path fails traversal validation.
-            McpError: If if_match is provided and the file has been modified.
+            McpError: If if_match is provided and the file has been modified
+                (ConcurrentModificationError).
         """
         result = await asyncio.to_thread(
             collection.rename,
