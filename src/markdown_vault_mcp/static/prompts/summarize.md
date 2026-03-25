@@ -1,5 +1,5 @@
 ---
-description: Summarize a document.
+description: Summarize a vault document with structured coverage of main topics and key points.
 arguments:
   - name: path
     description: Path to the document to summarize.

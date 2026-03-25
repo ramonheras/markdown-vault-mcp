@@ -1,5 +1,5 @@
 ---
-description: Analyze a document and suggest improvements.
+description: "Review a vault note and propose targeted edits: factual corrections, clarity, structure, and completeness."
 arguments:
   - name: path
     description: Path to the document to analyze.
