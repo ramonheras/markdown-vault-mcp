@@ -376,7 +376,7 @@ The two primary tools exposed to MCP Apps clients are:
 
 **Domain configuration:** MCP Apps iframes are sandboxed to a specific Claude app domain. The domain is auto-computed from `MARKDOWN_VAULT_MCP_BASE_URL`. Override with `MARKDOWN_VAULT_MCP_APP_DOMAIN` if your deployment is hosted on a custom domain or behind a proxy that changes the apparent hostname.
 
-CDN dependencies loaded by the app: vis-network (graph rendering), marked.js (markdown rendering), DOMPurify (XSS sanitization).
+Vendored dependencies (bundled at build time, no runtime CDN): vis-network (graph rendering), marked.js (markdown rendering), DOMPurify (XSS sanitization), ext-apps SDK (MCP Apps lifecycle).
 
 ## Attachments
 

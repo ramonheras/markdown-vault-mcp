@@ -33,8 +33,9 @@ logger = logging.getLogger(__name__)
 
 _VAULT_APP_URI = "ui://vault/app.html"
 
-# CDN dependencies loaded by the SPA shell.
-_CDN_RESOURCE_DOMAINS = ["https://unpkg.com"]
+# All SPA dependencies are vendored inline (see scripts/vendor_spa.py).
+# No external CDN domains needed at runtime.
+_CDN_RESOURCE_DOMAINS: list[str] = []
 
 
 def _compute_claude_app_domain() -> str | None:
