@@ -26,6 +26,8 @@ def _load_icon(name: str) -> list[Icon]:
     return [Icon(src=f"data:image/svg+xml;base64,{b64}", mimeType="image/svg+xml")]
 
 
+SERVER_ICON: list[Icon] = _load_icon("server")
+
 _TOOL_ICONS: dict[str, list[Icon]] = {
     name: _load_icon(name)
     for name in [
