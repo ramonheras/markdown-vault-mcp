@@ -1406,9 +1406,7 @@ def register_apps(mcp: FastMCP) -> None:
             except ValueError:
                 backlinks = []
             try:
-                outlinks = await asyncio.to_thread(
-                    collection.get_outlinks, current
-                )
+                outlinks = await asyncio.to_thread(collection.get_outlinks, current)
             except ValueError:
                 outlinks = []
             is_orphan = len(backlinks) == 0 and len(outlinks) == 0
