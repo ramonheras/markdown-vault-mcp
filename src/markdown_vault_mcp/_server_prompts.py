@@ -247,7 +247,7 @@ def _register_one_builtin_prompt(mcp: FastMCP, name: str, defn: dict[str, Any]) 
         # Add a pre-compute block for known derivations.
         pre_compute = ""
         if name == "research":
-            pre_compute = "    topic_slug = _re_sub(r'[^\\\\w\\\\-]', '-', topic.lower()).strip('-')\n"
+            pre_compute = "    topic_slug = _re_sub(r'[^\\w\\-]', '-', topic.lower()).strip('-')\n"
 
         all_args = [a["name"] for a in arg_defs]
         if name == "research":

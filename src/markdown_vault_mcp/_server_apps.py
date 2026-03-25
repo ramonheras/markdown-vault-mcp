@@ -68,6 +68,7 @@ _SPA_SHELL_HTML = (
     importlib.resources.files("markdown_vault_mcp")
     .joinpath("static/app.html")
     .read_text(encoding="utf-8")
+    .rstrip("\n")
 )
 
 

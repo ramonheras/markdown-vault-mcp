@@ -16,7 +16,7 @@ _ICONS_DIR = importlib.resources.files("markdown_vault_mcp").joinpath("static/ic
 
 def _load_icon(name: str) -> list[Icon]:
     """Load a single SVG icon from *static/icons/{name}.svg* as a data URI."""
-    svg_bytes = _ICONS_DIR.joinpath(f"{name}.svg").read_bytes()
+    svg_bytes = _ICONS_DIR.joinpath(f"{name}.svg").read_bytes().rstrip(b"\n")
     b64 = base64.b64encode(svg_bytes).decode("ascii")
     return [Icon(src=f"data:image/svg+xml;base64,{b64}", mimeType="image/svg+xml")]
 
