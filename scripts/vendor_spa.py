@@ -77,7 +77,7 @@ def _download(url: str) -> bytes:
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
             return resp.read()
-    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError) as exc:
+    except (urllib.error.URLError, TimeoutError) as exc:
         raise SystemExit(f"ERROR: failed to download {url}: {exc}") from exc
 
 
