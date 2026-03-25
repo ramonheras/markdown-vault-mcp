@@ -1337,10 +1337,11 @@ MCP Apps are browser-based views that MCP clients supporting the protocol can re
 | `_vault_read` | Returns note content, frontmatter, and metadata |
 | `_vault_search` | Returns keyword search results with snippets |
 
-**CDN dependencies** (loaded client-side inside the iframe):
+**Vendored dependencies** (bundled inline at build time via `scripts/vendor_spa.py`):
 - `vis-network` — force-directed graph rendering for Graph Explorer
 - `marked.js` — markdown-to-HTML rendering for note previews
 - `DOMPurify` — XSS sanitization for all rendered HTML
+- `@modelcontextprotocol/ext-apps` — MCP Apps SDK lifecycle and theming
 
 **Domain configuration**: MCP Apps iframes are sandboxed to a specific Claude app domain. The server computes it from `MARKDOWN_VAULT_MCP_BASE_URL` via `_compute_claude_app_domain()`. Override with `MARKDOWN_VAULT_MCP_APP_DOMAIN` when `BASE_URL` does not reflect the actual hostname visible to the Claude client (e.g. behind a proxy, or on a custom domain).
 

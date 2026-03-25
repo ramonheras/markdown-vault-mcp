@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 import re
 import sys
 import urllib.error
@@ -30,21 +31,25 @@ VENDORED_VERSIONS: dict[str, dict[str, str]] = {
     "vis-network": {
         "version": "10.0.2",
         "url": "https://unpkg.com/vis-network@10.0.2/standalone/umd/vis-network.min.js",
+        "sha256": "92a2603c7125a249f1b61f3c3a316b4041ef47b32f4433484e3471f140f91485",
         "type": "script",
     },
     "marked": {
         "version": "17.0.5",
         "url": "https://unpkg.com/marked@17.0.5/lib/marked.umd.js",
+        "sha256": "0db7abc826b5ac76f6ed11951ae34074ba50438ce6ea8d52889203779e5cbbad",
         "type": "script",
     },
     "dompurify": {
         "version": "3.3.3",
         "url": "https://unpkg.com/dompurify@3.3.3/dist/purify.min.js",
+        "sha256": "a95e028e5efd6a7413d1d18d6d9f918fdad19e2be6e962fcbaa10ab1b364725c",
         "type": "script",
     },
     "ext-apps": {
         "version": "1.3.1",
         "url": "https://unpkg.com/@modelcontextprotocol/ext-apps@1.3.1/app-with-deps",
+        "sha256": "36495489aa8939e4eb7421c8a03c220b9f502d79e87895f88599eb6c02377fdd",
         "type": "module",
         "import_specifier": "@modelcontextprotocol/ext-apps",
     },
@@ -77,16 +82,20 @@ def _download(url: str) -> bytes:
 
 
 def _source_hash(src_html: str) -> str:
-    """SHA-256 of source template + vendored version config."""
+    """SHA-256 of source template + all vendored config fields."""
     h = hashlib.sha256(src_html.encode("utf-8"))
     for name in sorted(VENDORED_VERSIONS):
         cfg = VENDORED_VERSIONS[name]
-        h.update(f"{name}={cfg['version']}@{cfg['url']}".encode())
+        h.update(f"{name}={sorted(cfg.items())}".encode())
     return h.hexdigest()
 
 
 def _inline_script(html: str, name: str, cfg: dict[str, str], js: str) -> str:
     """Replace ``<script src="…{name}…"></script>`` with an inline block."""
+    if "</script>" in js.lower():
+        raise ValueError(
+            f"Vendored JS for '{name}' contains '</script>' — cannot safely inline"
+        )
     pattern = re.compile(
         rf"<script\s+src=\"[^\"]*{re.escape(name)}[^\"]*\">\s*</script>",
         re.IGNORECASE,
@@ -104,11 +113,8 @@ def _inline_module(html: str, _name: str, cfg: dict[str, str], js: str) -> str:
     b64 = base64.b64encode(js.encode()).decode("ascii")
     data_uri = f"data:text/javascript;base64,{b64}"
 
-    import_map = (
-        f'<script type="importmap">\n'
-        f'{{"imports": {{"{specifier}": "{data_uri}"}}}}\n'
-        f"</script>\n"
-    )
+    import_map_obj = {"imports": {specifier: data_uri}}
+    import_map = f'<script type="importmap">\n{json.dumps(import_map_obj)}\n</script>\n'
 
     # Insert the import map immediately before <script type="module">
     html = html.replace(
@@ -178,7 +184,7 @@ def main() -> int:
         )
         return 1
 
-    # Generate mode: download and inline
+    # Generate mode: download, verify integrity, and inline
     html = src_text
     for name, cfg in VENDORED_VERSIONS.items():
         print(f"  Downloading {name}@{cfg['version']} …")
@@ -186,24 +192,46 @@ def main() -> int:
         sha = hashlib.sha256(raw).hexdigest()
         print(f"    {len(raw):,} bytes  SHA-256: {sha[:16]}…")
 
-        js = raw.decode("utf-8")
+        expected_sha = cfg["sha256"]
+        if sha != expected_sha:
+            print(
+                f"ERROR: SHA-256 mismatch for {name}@{cfg['version']}\n"
+                f"  expected: {expected_sha}\n"
+                f"  got:      {sha}",
+                file=sys.stderr,
+            )
+            return 1
+
+        try:
+            js = raw.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise SystemExit(
+                f"ERROR: {name} download is not valid UTF-8: {exc}"
+            ) from exc
+
         if cfg["type"] == "script":
             html = _inline_script(html, name, cfg, js)
         elif cfg["type"] == "module":
             html = _inline_module(html, name, cfg, js)
+        else:
+            raise ValueError(f"Unknown dependency type '{cfg['type']}' for '{name}'")
 
     _verify_no_cdn_urls(html)
 
-    # Embed source hash for offline --check validation
+    # Embed source hash for offline --check validation (use rfind to target
+    # the actual HTML </head>, not occurrences inside inlined JS)
     marker = _SOURCE_HASH_MARKER.format(hash=_source_hash(src_text))
-    html = html.replace("</head>", f"{marker}\n</head>", 1)
+    idx = html.rfind("</head>")
+    if idx == -1:
+        raise ValueError("No </head> tag found in generated HTML")
+    html = html[:idx] + marker + "\n" + html[idx:]
 
     # Ensure trailing newline
     if not html.endswith("\n"):
         html += "\n"
 
     _OUT_HTML.write_text(html, encoding="utf-8")
-    print(f"\nWrote {_OUT_HTML.relative_to(Path.cwd())} ({len(html):,} bytes)")
+    print(f"\nWrote {_OUT_HTML} ({len(html):,} bytes)")
     return 0
 
 

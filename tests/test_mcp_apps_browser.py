@@ -77,11 +77,11 @@ class TestBrowserHTML:
 
     async def test_marked_js_vendored(self) -> None:
         html = await self._get_html()
-        assert "marked" in html and "vendored" in html
+        assert "marked@" in html and "(vendored)" in html
 
     async def test_dompurify_vendored(self) -> None:
         html = await self._get_html()
-        assert "dompurify" in html and "vendored" in html
+        assert "dompurify@" in html and "(vendored)" in html
         assert "DOMPurify.sanitize" in html
 
     async def test_browser_layout(self) -> None:
