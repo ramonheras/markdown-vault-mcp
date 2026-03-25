@@ -277,7 +277,7 @@ jobs:
       - name: Create versionless copies for stable download URLs
         run: |
           cp dist/markdown-vault-mcp_*.deb dist/markdown-vault-mcp_latest.deb
-          cp dist/markdown-vault-mcp_*.rpm dist/markdown-vault-mcp_latest.rpm
+          cp dist/markdown-vault-mcp-*.rpm dist/markdown-vault-mcp_latest.rpm
 
       - name: Upload packages to GitHub Release
         run: gh release upload ${{ needs.release.outputs.tag }} dist/*.deb dist/*.rpm --clobber
