@@ -329,10 +329,10 @@
 <div class="toast" id="toast"></div>
 
 <script type="module">
-import { App, applyDocumentTheme, applyHostStyleVariables, applyHostFonts }
-  from "https://unpkg.com/@modelcontextprotocol/ext-apps@1.3.1/app-with-deps";
-
 try {
+
+const { App, applyDocumentTheme, applyHostStyleVariables, applyHostFonts } =
+  await import("https://unpkg.com/@modelcontextprotocol/ext-apps@1.3.1/app-with-deps");
 
 // ── Globals ──────────────────────────────────────────────────────────────
 const app = new App(
@@ -1096,7 +1096,7 @@ try {
   }
   if (hostContext?.toolInput?.path) {
     window.dispatchEvent(new CustomEvent('vault-navigate', {
-      detail: { view: hostContext.toolInput?.view || currentTab, path: hostContext.toolInput.path }
+      detail: { view: hostContext.toolInput.view || currentTab, path: hostContext.toolInput.path }
     }));
   }
 
@@ -1105,10 +1105,15 @@ try {
   console.error('Failed to connect to host:', err);
   const container = document.querySelector('.app-container');
   if (container) {
-    container.innerHTML = '<div style="padding:24px;text-align:center;color:var(--color-text-secondary);">'
-      + '<p>SDK connection failed. This app requires a compatible MCP client.</p>'
-      + '<p style="font-size:12px;margin-top:8px;">Error: ' + escHtml(String(err.message || err)) + '</p>'
-      + '</div>';
+    const el = document.createElement('div');
+    el.style.cssText = 'padding:24px;text-align:center;color:var(--color-text-secondary);';
+    const p1 = document.createElement('p');
+    p1.textContent = 'SDK connection failed. This app requires a compatible MCP client.';
+    const p2 = document.createElement('p');
+    p2.style.cssText = 'font-size:12px;margin-top:8px;';
+    p2.textContent = 'Error: ' + (err.message || err);
+    el.append(p1, p2);
+    container.replaceChildren(el);
   }
 }
 
