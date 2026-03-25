@@ -1400,7 +1400,18 @@ def register_apps(mcp: FastMCP) -> None:
             )
             folder = note.folder if note else ""
 
-            # Fetch backlinks before depth guard for backlink_count (AC9)
+            if d >= depth:
+                # Boundary nodes are reachable by definition — skip DB calls
+                nodes[current] = {
+                    "id": current,
+                    "label": label,
+                    "group": "note",
+                    "folder": folder,
+                    "backlink_count": 0,
+                }
+                continue
+
+            # Fetch backlinks/outlinks for interior nodes (orphan detection + edges)
             try:
                 backlinks = await asyncio.to_thread(collection.get_backlinks, current)
             except ValueError:
@@ -1419,10 +1430,6 @@ def register_apps(mcp: FastMCP) -> None:
                 "backlink_count": len(backlinks),
             }
 
-            if d >= depth:
-                continue
-
-            # Process backlinks (already fetched above)
             for bl in backlinks:
                 edges.append(
                     {
@@ -1488,6 +1495,7 @@ def register_apps(mcp: FastMCP) -> None:
         seen_edges: set[tuple[str, str]] = set()
 
         for hub in hubs:
+            # TODO: extend get_most_linked to return folder, eliminating this per-hub read
             hub_note = await asyncio.to_thread(collection.read, hub.path)
             hub_folder = hub_note.folder if hub_note else ""
             nodes[hub.path] = {
@@ -1512,15 +1520,12 @@ def register_apps(mcp: FastMCP) -> None:
                         else bl.source_path.rsplit("/", 1)[-1].replace(".md", "")
                     )
                     folder = note.folder if note else ""
-                    sat_backlinks = await asyncio.to_thread(
-                        collection.get_backlinks, bl.source_path
-                    )
                     nodes[bl.source_path] = {
                         "id": bl.source_path,
                         "label": label,
                         "group": "note",
                         "folder": folder,
-                        "backlink_count": len(sat_backlinks),
+                        "backlink_count": 0,
                     }
                 edge_key = (bl.source_path, hub.path)
                 if edge_key not in seen_edges:
