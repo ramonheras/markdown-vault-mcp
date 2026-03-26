@@ -32,6 +32,7 @@ classifiers = [
 ]
 dependencies = [
     "python-frontmatter>=1.0",
+    "requests>=2.33.0",
 ]
 
 [project.optional-dependencies]
