@@ -129,7 +129,7 @@ The `[all]` extra includes FastEmbed as well.
 
 ```bash
 EMBEDDING_PROVIDER=fastembed
-MARKDOWN_VAULT_MCP_FASTEMBED_MODEL=nomic-ai/nomic-embed-text-v1.5
+MARKDOWN_VAULT_MCP_FASTEMBED_MODEL=BAAI/bge-small-en-v1.5
 MARKDOWN_VAULT_MCP_FASTEMBED_CACHE_DIR=/path/to/store/fastembed-cache
 MARKDOWN_VAULT_MCP_EMBEDDINGS_PATH=/path/to/store/embeddings
 ```
@@ -140,7 +140,7 @@ That's it — no host URL or API key needed. The model downloads automatically o
     Set `MARKDOWN_VAULT_MCP_FASTEMBED_CACHE_DIR` to a persistent location. In Docker, the default compose layout stores this under `/data/state/fastembed` on the `state-data` named volume to avoid re-downloading on container recreation.
 
 !!! info "Memory usage — in-process vs out-of-process"
-    FastEmbed runs the ONNX model **inside the Python process**, so the container itself bears the full inference memory cost. To keep this bounded, the server limits the ONNX-level batch size to 4 chunks per inference call (tunable via the `_FASTEMBED_ONNX_BATCH_SIZE` constant in `providers.py`).
+    FastEmbed runs the ONNX model **inside the Python process**, so the container itself bears the full inference memory cost. The default model (`BAAI/bge-small-en-v1.5`, 512-token context) keeps this manageable. If you switch to a long-context model such as `nomic-ai/nomic-embed-text-v1.5` (8192-token context), you should reduce `_FASTEMBED_ONNX_BATCH_SIZE` in `providers.py` significantly — see issue [#306](https://github.com/pvliesdonk/markdown-vault-mcp/issues/306).
 
     By contrast, Ollama runs inference in a **separate server process** — the Python container only sends HTTP requests and receives float vectors, so its own memory footprint stays low. If memory is tight (e.g., a small VPS), Ollama may be a better fit since its memory is isolated from the MCP server.
 
@@ -216,8 +216,8 @@ Regardless of which provider you choose:
     The initial embedding build uses two levels of batching to keep memory bounded:
 
     1. **Collection level** — 64 chunks per provider call (`_EMBEDDING_BATCH_SIZE` in `collection.py`)
-    2. **ONNX level** (FastEmbed only) — 4 chunks per inference call (`_FASTEMBED_ONNX_BATCH_SIZE` in `providers.py`)
+    2. **ONNX level** (FastEmbed only) — 32 chunks per inference call (`_FASTEMBED_ONNX_BATCH_SIZE` in `providers.py`)
 
-    The current ONNX batch size of 4 was chosen to prevent OOM on long-context models (e.g., `nomic-embed-text-v1.5` with 8192-token context). Larger batch sizes improve throughput but increase peak memory proportionally; smaller values have negligible impact on build time since the model computation dominates.
+    The ONNX batch size is tuned for the default `BAAI/bge-small-en-v1.5` model (512-token context). ONNX self-attention scales as O(batch × seq_len²) in RAM; long-context models require a much smaller batch size to avoid OOM — see issue [#306](https://github.com/pvliesdonk/markdown-vault-mcp/issues/306).
 
     For very large vaults (thousands of notes), the first startup may take several minutes. If the process is interrupted mid-build, it will rebuild from scratch on the next startup — partial indices are never persisted.
