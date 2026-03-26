@@ -1172,7 +1172,7 @@ For MCP server deployment:
 | `OLLAMA_HOST` | Ollama server URL | `http://localhost:11434` |
 | `MARKDOWN_VAULT_MCP_OLLAMA_MODEL` | Ollama embedding model | `nomic-embed-text` |
 | `MARKDOWN_VAULT_MCP_OLLAMA_CPU_ONLY` | Force CPU-only inference | `false` |
-| `MARKDOWN_VAULT_MCP_FASTEMBED_MODEL` | FastEmbed model | `nomic-ai/nomic-embed-text-v1.5` |
+| `MARKDOWN_VAULT_MCP_FASTEMBED_MODEL` | FastEmbed model | `BAAI/bge-small-en-v1.5` |
 | `MARKDOWN_VAULT_MCP_FASTEMBED_CACHE_DIR` | FastEmbed model cache directory | FastEmbed default |
 | `OPENAI_API_KEY` | OpenAI API key | none |
 

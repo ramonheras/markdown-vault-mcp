@@ -20,10 +20,12 @@ from markdown_vault_mcp.config import _ENV_PREFIX
 
 logger = logging.getLogger(__name__)
 
-# Maximum texts per ONNX inference call inside FastEmbed.  The default (256)
-# creates attention matrices that can require >192 GB with long chunks from
-# models like nomic-embed-text-v1.5 (8192-token context).
-_FASTEMBED_ONNX_BATCH_SIZE = 4
+# Maximum texts per ONNX inference call inside FastEmbed.
+# BAAI/bge-small-en-v1.5 (512-token context, the default model) has a
+# manageable attention footprint even at batch_size=32.  If you switch to a
+# long-context model such as nomic-embed-text-v1.5 (8192-token context) you
+# may need to reduce this value significantly — see issue #306.
+_FASTEMBED_ONNX_BATCH_SIZE = 32
 
 
 class EmbeddingProvider(ABC):
@@ -307,7 +309,7 @@ class FastEmbedProvider(EmbeddingProvider):
             ) from exc
 
         self._model_name = model_name or os.environ.get(
-            f"{_ENV_PREFIX}_FASTEMBED_MODEL", "nomic-ai/nomic-embed-text-v1.5"
+            f"{_ENV_PREFIX}_FASTEMBED_MODEL", "BAAI/bge-small-en-v1.5"
         )
         self._cache_dir = cache_dir or os.environ.get(
             f"{_ENV_PREFIX}_FASTEMBED_CACHE_DIR"
