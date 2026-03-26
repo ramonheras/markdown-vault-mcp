@@ -379,7 +379,7 @@ if(__exports != exports)module.exports = exports;return module.exports}));
     font-size: 12px; cursor: not-allowed; opacity: 0.6; font-family: inherit;
   }
 </style>
-<!-- vendor-spa-source-sha256:6c49e00b0638874b76df25bd5a17e448a5d83682f393eb381a20757ea92043c3 -->
+<!-- vendor-spa-source-sha256:dd628665d6aee8180a020c8d1a516a007e7432b2cbdc9f18daca8f2a78c99c58 -->
 </head>
 <body>
 <div class="app-container">
@@ -468,6 +468,26 @@ function escHtml(s) {
   const d = document.createElement('div');
   d.textContent = s;
   return d.innerHTML;
+}
+
+/** Extract parsed JSON from a CallToolResult ({content: [{type:'text', text:'...'}]}).
+ *  Returns the parsed object, or null if no text content found.
+ *  Throws Error with descriptive message on malformed JSON. */
+function parseToolResult(result) {
+  if (!result) return null;
+  if (result.content && Array.isArray(result.content)) {
+    const tb = result.content.find(c => c.type === 'text');
+    if (tb) {
+      try { return JSON.parse(tb.text); }
+      catch (e) { throw new Error('Invalid JSON in tool result: ' + e.message); }
+    }
+    return null;
+  }
+  if (typeof result === 'string') {
+    try { return JSON.parse(result); }
+    catch (e) { throw new Error('Invalid JSON in tool result: ' + e.message); }
+  }
+  return null;
 }
 
 // ── Host theming ─────────────────────────────────────────────────────────
@@ -626,26 +646,6 @@ app.onteardown = () => {
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;')
       .replace(/'/g, '&#39;');
-  }
-
-  /** Extract parsed JSON from a CallToolResult ({content: [{type:'text', text:'...'}]}).
-   *  Returns the parsed object, or null if no text content found.
-   *  Throws Error with descriptive message on malformed JSON. */
-  function parseToolResult(result) {
-    if (!result) return null;
-    if (result.content && Array.isArray(result.content)) {
-      const tb = result.content.find(c => c.type === 'text');
-      if (tb) {
-        try { return JSON.parse(tb.text); }
-        catch (e) { throw new Error('Invalid JSON in tool result: ' + e.message); }
-      }
-      return null;
-    }
-    if (typeof result === 'string') {
-      try { return JSON.parse(result); }
-      catch (e) { throw new Error('Invalid JSON in tool result: ' + e.message); }
-    }
-    return null;
   }
 
   function makeSection(id, title, count, bodyHtml) {
