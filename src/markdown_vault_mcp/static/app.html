@@ -379,7 +379,7 @@ if(__exports != exports)module.exports = exports;return module.exports}));
     font-size: 12px; cursor: not-allowed; opacity: 0.6; font-family: inherit;
   }
 </style>
-<!-- vendor-spa-source-sha256:db993e702f4ce7fd080f6d2694662312bc6299a12751de86d070e7febabeade1 -->
+<!-- vendor-spa-source-sha256:6c49e00b0638874b76df25bd5a17e448a5d83682f393eb381a20757ea92043c3 -->
 </head>
 <body>
 <div class="app-container">
@@ -645,7 +645,7 @@ app.onteardown = () => {
       try { return JSON.parse(result); }
       catch (e) { throw new Error('Invalid JSON in tool result: ' + e.message); }
     }
-    return result;
+    return null;
   }
 
   function makeSection(id, title, count, bodyHtml) {

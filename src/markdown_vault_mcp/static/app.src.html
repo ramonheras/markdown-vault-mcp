@@ -527,7 +527,7 @@ app.onteardown = () => {
       try { return JSON.parse(result); }
       catch (e) { throw new Error('Invalid JSON in tool result: ' + e.message); }
     }
-    return result;
+    return null;
   }
 
   function makeSection(id, title, count, bodyHtml) {
