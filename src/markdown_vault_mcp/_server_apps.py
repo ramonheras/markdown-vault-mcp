@@ -466,6 +466,7 @@ def register_apps(mcp: FastMCP) -> None:
         Returns:
             ``{folders: [str], notes: [{path, title, kind}]}``
         """
+        logger.info("_vault_list called: folder=%r", folder)
         docs = await asyncio.to_thread(
             collection.list, folder=folder, include_attachments=True
         )
@@ -496,7 +497,13 @@ def register_apps(mcp: FastMCP) -> None:
             if (getattr(d, "folder", None) or "") == target_folder
         ]
 
-        return {"folders": child_folders, "notes": notes}
+        result = {"folders": child_folders, "notes": notes}
+        logger.info(
+            "_vault_list returning: %d folders, %d notes",
+            len(child_folders),
+            len(notes),
+        )
+        return result
 
     @mcp.tool(
         annotations={
