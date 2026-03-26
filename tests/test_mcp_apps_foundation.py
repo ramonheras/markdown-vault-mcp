@@ -431,7 +431,7 @@ class TestAppOnlyTools:
                     f"Subfolder note has wrong prefix: {note['path']}"
                 )
                 # Must be a direct child: subfolder/foo.md (no further slash)
-                rest = note["path"][len("subfolder/"):]
+                rest = note["path"][len("subfolder/") :]
                 assert "/" not in rest, (
                     f"Subfolder listing returned deeply nested note: {note['path']}"
                 )
