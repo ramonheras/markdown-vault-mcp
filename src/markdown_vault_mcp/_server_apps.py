@@ -371,7 +371,7 @@ def register_apps(mcp: FastMCP) -> None:
 
         # Semantic similarity edges (optional, requires embeddings)
         if include_semantic:
-            sem_seen: set[frozenset] = set()
+            sem_seen: set[frozenset[str]] = set()
             for node_path in list(nodes.keys()):
                 try:
                     similar = await asyncio.to_thread(
@@ -384,7 +384,7 @@ def register_apps(mcp: FastMCP) -> None:
                     if sr.path == node_path or sr.path in seen_sr:
                         continue
                     seen_sr.add(sr.path)
-                    pair: frozenset = frozenset({node_path, sr.path})
+                    pair: frozenset[str] = frozenset({node_path, sr.path})
                     if pair in sem_seen:
                         continue
                     sem_seen.add(pair)

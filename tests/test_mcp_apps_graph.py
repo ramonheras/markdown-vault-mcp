@@ -234,3 +234,76 @@ class TestGraphDataTools:
             data = _parse_tool_data(result)
             edge_keys = [(e["from"], e["to"]) for e in data["edges"]]
             assert len(edge_keys) == len(set(edge_keys))
+
+    async def test_include_semantic_false_by_default(self) -> None:
+        """Default call returns no semantic edges."""
+        server = create_server()
+        async with Client(server) as client:
+            result = await client.call_tool(
+                "_vault_graph_neighborhood", {"path": "simple.md"}
+            )
+            data = _parse_tool_data(result)
+            semantic_edges = [e for e in data["edges"] if e.get("type") == "semantic"]
+            assert semantic_edges == []
+
+    async def test_include_semantic_true_no_embeddings(self) -> None:
+        """include_semantic=True without embeddings returns graph without semantic edges."""
+        server = create_server()
+        async with Client(server) as client:
+            result = await client.call_tool(
+                "_vault_graph_neighborhood",
+                {"path": "simple.md", "include_semantic": True},
+            )
+            data = _parse_tool_data(result)
+            # Without embeddings configured, get_similar returns [] — no crash
+            assert "nodes" in data
+            assert "edges" in data
+            # All edge types are explicit link types, not semantic
+            for edge in data["edges"]:
+                assert edge.get("type") != "semantic"
+
+
+# ---------------------------------------------------------------------------
+# Semantic graph HTML checks
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.usefixtures("_mcp_env")
+class TestSemanticGraphHTML:
+    """Verify semantic similarity graph features in the SPA HTML."""
+
+    async def _get_html(self) -> str:
+        server = create_server()
+        async with Client(server) as client:
+            resource = await client.read_resource("ui://vault/app.html")
+            return (
+                resource[0].text if hasattr(resource[0], "text") else str(resource[0])
+            )
+
+    async def test_semantic_toggle_button(self) -> None:
+        html = await self._get_html()
+        assert 'id="graph-semantic-btn"' in html
+
+    async def test_include_semantic_passed_to_tool(self) -> None:
+        html = await self._get_html()
+        assert "include_semantic" in html
+        assert "semanticEnabled" in html
+
+    async def test_semantic_edge_color_constant(self) -> None:
+        html = await self._get_html()
+        assert "_SEMANTIC_EDGE_COLOR" in html
+
+    async def test_semantic_edge_dashed(self) -> None:
+        html = await self._get_html()
+        # Semantic edges rendered as dashed lines
+        assert "isSemantic" in html
+        assert "dashes" in html
+
+    async def test_folder_color_palette(self) -> None:
+        html = await self._get_html()
+        assert "_FOLDER_COLORS" in html
+        assert "_folderColor" in html
+
+    async def test_cross_view_currentpath(self) -> None:
+        html = await self._get_html()
+        assert "currentPath" in html
