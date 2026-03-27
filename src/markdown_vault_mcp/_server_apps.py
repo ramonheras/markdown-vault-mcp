@@ -471,16 +471,21 @@ def register_apps(mcp: FastMCP) -> None:
         )
         folders = await asyncio.to_thread(collection.list_folders)
 
-        # Filter folders to direct children of the requested folder
+        # Build direct children: extract the first path component after the
+        # prefix from every folder that lives under it.  This handles vaults
+        # where list_folders() returns only leaf paths (e.g. "AI/LLM Tooling"
+        # not "AI"), so top-level directories like "AI" still appear.
         prefix = (folder.rstrip("/") + "/") if folder else ""
         child_folders = sorted(
             {
-                f
+                prefix + f[len(prefix) :].split("/")[0]
                 for f in folders
-                if f.startswith(prefix) and "/" not in f[len(prefix) :] and f != folder
+                if f and f.startswith(prefix) and f != (folder or "")
             }
         )
 
+        # Only return notes directly inside this folder (not nested ones)
+        target_folder = folder or ""
         notes = [
             {
                 "path": d.path,
@@ -488,6 +493,7 @@ def register_apps(mcp: FastMCP) -> None:
                 "kind": d.kind,
             }
             for d in docs
+            if d.folder == target_folder
         ]
 
         return {"folders": child_folders, "notes": notes}

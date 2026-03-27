@@ -379,7 +379,7 @@ if(__exports != exports)module.exports = exports;return module.exports}));
     font-size: 12px; cursor: not-allowed; opacity: 0.6; font-family: inherit;
   }
 </style>
-<!-- vendor-spa-source-sha256:c8b7db4585945478a8f2c69ac7e0af1faebd059bd2392efb5c21766b8c8bd5b6 -->
+<!-- vendor-spa-source-sha256:dd628665d6aee8180a020c8d1a516a007e7432b2cbdc9f18daca8f2a78c99c58 -->
 </head>
 <body>
 <div class="app-container">
@@ -468,6 +468,26 @@ function escHtml(s) {
   const d = document.createElement('div');
   d.textContent = s;
   return d.innerHTML;
+}
+
+/** Extract parsed JSON from a CallToolResult ({content: [{type:'text', text:'...'}]}).
+ *  Returns the parsed object, or null if no text content found.
+ *  Throws Error with descriptive message on malformed JSON. */
+function parseToolResult(result) {
+  if (!result) return null;
+  if (result.content && Array.isArray(result.content)) {
+    const tb = result.content.find(c => c.type === 'text');
+    if (tb) {
+      try { return JSON.parse(tb.text); }
+      catch (e) { throw new Error('Invalid JSON in tool result: ' + e.message); }
+    }
+    return null;
+  }
+  if (typeof result === 'string') {
+    try { return JSON.parse(result); }
+    catch (e) { throw new Error('Invalid JSON in tool result: ' + e.message); }
+  }
+  return null;
 }
 
 // ── Host theming ─────────────────────────────────────────────────────────
@@ -713,7 +733,8 @@ app.onteardown = () => {
 
     try {
       const result = await app.callServerTool({ name: '_vault_context', arguments: { path } });
-      const data = typeof result === 'string' ? JSON.parse(result) : result;
+      const data = parseToolResult(result);
+      if (!data) { placeholder.style.display = ''; card.style.display = 'none'; return; }
       currentContextPath = path;
       currentContextData = data;
 
@@ -905,7 +926,8 @@ app.onteardown = () => {
       const result = await app.callServerTool({
         name: '_vault_graph_neighborhood', arguments: { path, depth: 1 }
       });
-      const data = typeof result === 'string' ? JSON.parse(result) : result;
+      const data = parseToolResult(result);
+      if (!data) return;
       addGraphData(data);
       window.updateContext('graph explorer', path, nodesDS.get(path)?.label,
         'Visible: ' + nodesDS.length + ' notes, ' + edgesDS.length + ' links');
@@ -917,7 +939,8 @@ app.onteardown = () => {
   async function loadHubs() {
     try {
       const result = await app.callServerTool({ name: '_vault_graph_hubs', arguments: {} });
-      const data = typeof result === 'string' ? JSON.parse(result) : result;
+      const data = parseToolResult(result);
+      if (!data) return;
       addGraphData(data);
       if (data.nodes.length > 0) {
         window.updateContext('graph explorer', '(hub view)', null,
@@ -947,7 +970,8 @@ app.onteardown = () => {
   function showMiniCard(nodeId) {
     const card = document.getElementById('graph-mini-card');
     app.callServerTool({ name: '_vault_context', arguments: { path: nodeId } }).then(result => {
-      const data = typeof result === 'string' ? JSON.parse(result) : result;
+      const data = parseToolResult(result);
+      if (!data) { card.style.display = 'none'; return; }
       const bl = (data.backlinks || []).slice(0, 3);
       const ol = (data.outlinks || []).slice(0, 3);
       let html = '<h4>' + escHtml(data.title || nodeId) + '</h4>';
@@ -1053,7 +1077,8 @@ window.addEventListener('vault-graph-dblclick', (e) => {
     if (treeDataCache[key]) return treeDataCache[key];
     try {
       const result = await app.callServerTool({ name: '_vault_list', arguments: { folder: folder || null } });
-      const data = typeof result === 'string' ? JSON.parse(result) : result;
+      const data = parseToolResult(result);
+      if (!data) return { folders: [], notes: [] };
       treeDataCache[key] = data;
       return data;
     } catch (err) {
@@ -1117,7 +1142,7 @@ window.addEventListener('vault-graph-dblclick', (e) => {
 
     try {
       const result = await app.callServerTool({ name: '_vault_read', arguments: { path } });
-      const data = typeof result === 'string' ? JSON.parse(result) : result;
+      const data = parseToolResult(result);
       if (!data) { previewEl.innerHTML = '<div class="placeholder">Note not found</div>'; return; }
       currentPreviewData = data;
 
@@ -1191,7 +1216,7 @@ window.addEventListener('vault-graph-dblclick', (e) => {
       const result = await app.callServerTool({
         name: '_vault_search', arguments: { query, mode: 'keyword', limit: 20 }
       });
-      const data = typeof result === 'string' ? JSON.parse(result) : result;
+      const data = parseToolResult(result) || [];
       treeEl.innerHTML = '';
       for (const r of data) {
         const div = document.createElement('div');
@@ -1244,10 +1269,15 @@ if (hostContext) handleHostContext(hostContext);
 
 updateFullscreenButton(hostContext?.availableDisplayModes?.includes('fullscreen') === true);
 
-// Process any tool input received during connection handshake
+// Process any tool input received during connection handshake.
+// If none arrived (host did not send ontoolinput), default to browse view so
+// the app shows data without requiring the LLM to pass explicit arguments.
 if (pendingToolInput) {
   processToolInput(pendingToolInput);
   pendingToolInput = null;
+} else {
+  switchTab('browse');
+  if (typeof window.loadBrowser === 'function') window.loadBrowser();
 }
 
 console.log('Vault Explorer connected');
