@@ -377,7 +377,13 @@ def register_apps(mcp: FastMCP) -> None:
                     similar = await asyncio.to_thread(
                         collection.get_similar, node_path, limit=5
                     )
-                except (ValueError, Exception):
+                except ValueError:
+                    # Expected when embeddings are not configured for this collection
+                    continue
+                except Exception:
+                    logger.warning(
+                        "get_similar failed for %s", node_path, exc_info=True
+                    )
                     continue
                 seen_sr: set[str] = set()
                 for sr in similar:

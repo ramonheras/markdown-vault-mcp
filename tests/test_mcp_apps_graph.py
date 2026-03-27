@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 from typing import TYPE_CHECKING, Any
+from unittest.mock import patch
 
 import pytest
 from fastmcp import Client
@@ -307,3 +308,177 @@ class TestSemanticGraphHTML:
     async def test_cross_view_currentpath(self) -> None:
         html = await self._get_html()
         assert "currentPath" in html
+
+
+# ---------------------------------------------------------------------------
+# Semantic edges with embeddings enabled
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.usefixtures("_mcp_env")
+class TestIncludeSemanticEdges:
+    """Verify _vault_graph_neighborhood semantic edges with embeddings configured."""
+
+    async def test_semantic_edges_returned_with_embeddings(
+        self,
+        vault_path: "Path",
+        tmp_path: "Path",
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """include_semantic=True with embeddings configured adds semantic edges."""
+        from .conftest import MockEmbeddingProvider
+
+        embeddings_path = str(tmp_path / "embeddings")
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_EMBEDDINGS_PATH", embeddings_path)
+
+        mock_prov = MockEmbeddingProvider()
+        with patch(
+            "markdown_vault_mcp.providers.get_embedding_provider",
+            return_value=mock_prov,
+        ):
+            server = create_server()
+            async with Client(server) as client:
+                result = await client.call_tool(
+                    "_vault_graph_neighborhood",
+                    {"path": "simple.md", "include_semantic": True},
+                )
+        data = _parse_tool_data(result)
+        assert "nodes" in data
+        assert "edges" in data
+        semantic_edges = [e for e in data["edges"] if e.get("type") == "semantic"]
+        # With embeddings configured the vault has similar notes — at least one
+        # semantic edge should appear
+        assert len(semantic_edges) > 0
+        for edge in semantic_edges:
+            assert "from" in edge
+            assert "to" in edge
+            assert edge["from"] != edge["to"]
+
+    async def test_semantic_edges_no_duplicate_pairs(
+        self,
+        vault_path: "Path",
+        tmp_path: "Path",
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Semantic edges are deduplicated — A↔B appears only once."""
+        from .conftest import MockEmbeddingProvider
+
+        embeddings_path = str(tmp_path / "embeddings")
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_EMBEDDINGS_PATH", embeddings_path)
+
+        mock_prov = MockEmbeddingProvider()
+        with patch(
+            "markdown_vault_mcp.providers.get_embedding_provider",
+            return_value=mock_prov,
+        ):
+            server = create_server()
+            async with Client(server) as client:
+                result = await client.call_tool(
+                    "_vault_graph_neighborhood",
+                    {"path": "simple.md", "include_semantic": True},
+                )
+        data = _parse_tool_data(result)
+        sem_pairs = [
+            frozenset({e["from"], e["to"]})
+            for e in data["edges"]
+            if e.get("type") == "semantic"
+        ]
+        assert len(sem_pairs) == len(set(sem_pairs))
+
+    async def test_semantic_adds_nodes_outside_neighborhood(
+        self,
+        vault_path: "Path",
+        tmp_path: "Path",
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """With depth=0 only the center node is in the graph; similar notes are
+        added as new nodes (exercises the `if sr.path not in nodes` branch)."""
+        from .conftest import MockEmbeddingProvider
+
+        embeddings_path = str(tmp_path / "embeddings")
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_EMBEDDINGS_PATH", embeddings_path)
+
+        mock_prov = MockEmbeddingProvider()
+        with patch(
+            "markdown_vault_mcp.providers.get_embedding_provider",
+            return_value=mock_prov,
+        ):
+            server = create_server()
+            async with Client(server) as client:
+                result = await client.call_tool(
+                    "_vault_graph_neighborhood",
+                    {"path": "simple.md", "depth": 0, "include_semantic": True},
+                )
+        data = _parse_tool_data(result)
+        node_ids = {n["id"] for n in data["nodes"]}
+        # Semantic similar notes must have been added beyond the center node
+        assert len(node_ids) > 1
+        semantic_edges = [e for e in data["edges"] if e.get("type") == "semantic"]
+        assert len(semantic_edges) > 0
+
+    async def test_semantic_handles_value_error(
+        self,
+        vault_path: "Path",
+        tmp_path: "Path",
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """ValueError from get_similar is silently ignored (exercises except ValueError branch)."""
+        from .conftest import MockEmbeddingProvider
+
+        embeddings_path = str(tmp_path / "embeddings")
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_EMBEDDINGS_PATH", embeddings_path)
+
+        mock_prov = MockEmbeddingProvider()
+        with patch(
+            "markdown_vault_mcp.providers.get_embedding_provider",
+            return_value=mock_prov,
+        ):
+            with patch(
+                "markdown_vault_mcp.collection.Collection.get_similar",
+                side_effect=ValueError("not found"),
+            ):
+                server = create_server()
+                async with Client(server) as client:
+                    result = await client.call_tool(
+                        "_vault_graph_neighborhood",
+                        {"path": "simple.md", "include_semantic": True},
+                    )
+        data = _parse_tool_data(result)
+        assert "nodes" in data
+        assert "edges" in data
+        semantic_edges = [e for e in data["edges"] if e.get("type") == "semantic"]
+        assert semantic_edges == []
+
+    async def test_semantic_handles_unexpected_exception(
+        self,
+        vault_path: "Path",
+        tmp_path: "Path",
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Unexpected exceptions from get_similar are logged and skipped
+        (exercises except Exception branch)."""
+        from .conftest import MockEmbeddingProvider
+
+        embeddings_path = str(tmp_path / "embeddings")
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_EMBEDDINGS_PATH", embeddings_path)
+
+        mock_prov = MockEmbeddingProvider()
+        with patch(
+            "markdown_vault_mcp.providers.get_embedding_provider",
+            return_value=mock_prov,
+        ):
+            with patch(
+                "markdown_vault_mcp.collection.Collection.get_similar",
+                side_effect=RuntimeError("embedding backend unavailable"),
+            ):
+                server = create_server()
+                async with Client(server) as client:
+                    result = await client.call_tool(
+                        "_vault_graph_neighborhood",
+                        {"path": "simple.md", "include_semantic": True},
+                    )
+        data = _parse_tool_data(result)
+        assert "nodes" in data
+        assert "edges" in data
+        semantic_edges = [e for e in data["edges"] if e.get("type") == "semantic"]
+        assert semantic_edges == []
