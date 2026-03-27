@@ -425,12 +425,15 @@ class TestIncludeSemanticEdges:
         monkeypatch.setenv("MARKDOWN_VAULT_MCP_EMBEDDINGS_PATH", embeddings_path)
 
         mock_prov = MockEmbeddingProvider()
-        with patch(
-            "markdown_vault_mcp.providers.get_embedding_provider",
-            return_value=mock_prov,
-        ), patch(
-            "markdown_vault_mcp.collection.Collection.get_similar",
-            side_effect=ValueError("not found"),
+        with (
+            patch(
+                "markdown_vault_mcp.providers.get_embedding_provider",
+                return_value=mock_prov,
+            ),
+            patch(
+                "markdown_vault_mcp.collection.Collection.get_similar",
+                side_effect=ValueError("not found"),
+            ),
         ):
             server = create_server()
             async with Client(server) as client:
@@ -457,12 +460,15 @@ class TestIncludeSemanticEdges:
         monkeypatch.setenv("MARKDOWN_VAULT_MCP_EMBEDDINGS_PATH", embeddings_path)
 
         mock_prov = MockEmbeddingProvider()
-        with patch(
-            "markdown_vault_mcp.providers.get_embedding_provider",
-            return_value=mock_prov,
-        ), patch(
-            "markdown_vault_mcp.collection.Collection.get_similar",
-            side_effect=RuntimeError("embedding backend unavailable"),
+        with (
+            patch(
+                "markdown_vault_mcp.providers.get_embedding_provider",
+                return_value=mock_prov,
+            ),
+            patch(
+                "markdown_vault_mcp.collection.Collection.get_similar",
+                side_effect=RuntimeError("embedding backend unavailable"),
+            ),
         ):
             server = create_server()
             async with Client(server) as client:
