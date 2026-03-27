@@ -228,7 +228,16 @@ class TestSPAShellResource:
             html = resource[0].text
             # parseToolResult extracts JSON from CallToolResult.content[0].text
             assert "parseToolResult" in html
-            assert "result.content" in html
+            assert "content.find(c => c.type === 'text')" in html
+            # Must be at module scope — before any IIFE — so Browse/Graph views
+            # can access it (regression guard for d9962d7).
+            parse_pos = html.find("function parseToolResult")
+            iife_pos = html.find("app.ontoolinput")
+            assert parse_pos != -1, "parseToolResult not found in app.html"
+            assert iife_pos != -1, "app.ontoolinput not found in app.html"
+            assert parse_pos < iife_pos, (
+                "parseToolResult must be defined at module scope before app.ontoolinput"
+            )
 
     async def test_html_browse_fallback_when_no_tool_input(self) -> None:
         """After connect, app defaults to browse view when ontoolinput never fires."""
@@ -435,6 +444,32 @@ class TestAppOnlyTools:
                 assert "/" not in rest, (
                     f"Subfolder listing returned deeply nested note: {note['path']}"
                 )
+
+    async def test_vault_list_folders_intermediate_only_paths(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Root listing must surface intermediate folders even when list_folders()
+        only returns leaf paths (e.g. 'ai/llm/note.md' with no file directly
+        in 'ai/').  Regression guard for the split('/')[0] fix."""
+        # Create a vault with a note only at a deeply nested path — no file
+        # directly in 'ai/', so list_folders() returns only 'ai/llm'.
+        ai_llm = tmp_path / "ai" / "llm"
+        ai_llm.mkdir(parents=True)
+        (ai_llm / "note.md").write_text("# Note\n\nContent.\n")
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", str(tmp_path))
+        for var in _CLEAR_VARS:
+            monkeypatch.delenv(var, raising=False)
+        server = create_server()
+        async with Client(server) as client:
+            result = await client.call_tool("_vault_list", {})
+            data = _parse_tool_data(result)
+            # 'ai' must appear even though list_folders() only returns 'ai/llm'
+            assert "ai" in data["folders"], (
+                f"Intermediate folder 'ai' missing from root listing: {data['folders']}"
+            )
+            assert "ai/llm" not in data["folders"], (
+                f"Leaf path 'ai/llm' must not appear in root listing: {data['folders']}"
+            )
 
     async def test_vault_read(self) -> None:
         server = create_server()

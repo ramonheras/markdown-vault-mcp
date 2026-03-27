@@ -493,7 +493,7 @@ def register_apps(mcp: FastMCP) -> None:
                 "kind": d.kind,
             }
             for d in docs
-            if (getattr(d, "folder", None) or "") == target_folder
+            if d.folder == target_folder
         ]
 
         return {"folders": child_folders, "notes": notes}
