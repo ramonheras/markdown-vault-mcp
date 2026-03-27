@@ -68,11 +68,13 @@ class TestCrossViewNavigation:
         assert "function navigateTo" in html
         assert "switchTab" in html
 
-    # AC #2: Graph → Context (double-click)
+    # AC #2: Graph double-click → focus mode (clear + reload for this node)
     async def test_graph_to_context_on_dblclick(self) -> None:
         html = await _fetch_app_html()
-        assert "vault-graph-dblclick" in html
-        # Listener wires dblclick to navigateTo('context')
+        assert "doubleClick" in html
+        # Double-click now triggers focus mode via loadGraph(nodeId)
+        assert "loadGraph(nodeId)" in html
+        # Context navigation still available via mini-card "Full Context" button
         assert "navigateTo('context'" in html
 
     # AC #3: Graph → Browser (mini card button)
