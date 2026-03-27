@@ -270,6 +270,7 @@ def register_apps(mcp: FastMCP) -> None:
     async def _vault_graph_neighborhood(
         path: str,
         depth: int = 1,
+        include_semantic: bool = False,
         collection: Collection = Depends(get_collection),
     ) -> dict[str, Any]:
         """Return the link neighborhood of a note as a node/edge graph (app-only).
@@ -280,6 +281,9 @@ def register_apps(mcp: FastMCP) -> None:
         Args:
             path: Center note path.
             depth: How many hops to traverse (default 1).
+            include_semantic: When True, add dashed semantic-similarity edges
+                for each interior node (requires embeddings to be configured;
+                silently omitted when unavailable).
 
         Returns:
             ``{nodes: [{id, label, group, folder, backlink_count}], edges: [{from, to, type}]}``
@@ -356,7 +360,7 @@ def register_apps(mcp: FastMCP) -> None:
                     if ol.target_path not in visited:
                         queue.append((ol.target_path, d + 1))
 
-        # Deduplicate edges
+        # Deduplicate explicit edges
         seen_edges: set[tuple[str, str]] = set()
         unique_edges: list[dict[str, Any]] = []
         for e in edges:
@@ -364,6 +368,44 @@ def register_apps(mcp: FastMCP) -> None:
             if key not in seen_edges:
                 seen_edges.add(key)
                 unique_edges.append(e)
+
+        # Semantic similarity edges (optional, requires embeddings)
+        if include_semantic:
+            sem_seen: set[frozenset] = set()
+            for node_path in list(nodes.keys()):
+                try:
+                    similar = await asyncio.to_thread(
+                        collection.get_similar, node_path, limit=5
+                    )
+                except (ValueError, Exception):
+                    continue
+                seen_sr: set[str] = set()
+                for sr in similar:
+                    if sr.path == node_path or sr.path in seen_sr:
+                        continue
+                    seen_sr.add(sr.path)
+                    pair: frozenset = frozenset({node_path, sr.path})
+                    if pair in sem_seen:
+                        continue
+                    sem_seen.add(pair)
+                    if sr.path not in nodes:
+                        sim_note = await asyncio.to_thread(collection.read, sr.path)
+                        sim_label = (
+                            sim_note.title
+                            if sim_note
+                            else sr.path.rsplit("/", 1)[-1].replace(".md", "")
+                        )
+                        sim_folder = sim_note.folder if sim_note else ""
+                        nodes[sr.path] = {
+                            "id": sr.path,
+                            "label": sim_label,
+                            "group": "note",
+                            "folder": sim_folder,
+                            "backlink_count": 0,
+                        }
+                    unique_edges.append(
+                        {"from": node_path, "to": sr.path, "type": "semantic"}
+                    )
 
         return {"nodes": list(nodes.values()), "edges": unique_edges}
 

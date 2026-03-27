@@ -101,7 +101,8 @@ class TestGraphExplorerHTML:
     async def test_double_click_handler(self) -> None:
         html = await self._get_html()
         assert "doubleClick" in html
-        assert "vault-graph-dblclick" in html
+        # Double-click triggers focus mode (clear + reload for this node only)
+        assert "loadGraph(nodeId)" in html
 
     async def test_dynamic_expansion(self) -> None:
         html = await self._get_html()

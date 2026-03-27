@@ -265,7 +265,7 @@ if(__exports != exports)module.exports = exports;return module.exports}));
   .section-header .badge { background: var(--color-text-info); color: var(--color-text-inverse); padding: 1px 6px; border-radius: 10px; font-size: 11px; font-weight: 500; }
   .section-body { padding: 8px 12px; font-size: 13px; display: none; }
   .context-section:not(.collapsed-section) .section-body { display: block; }
-  .section-header::after { content: '\\25B6'; font-size: 10px; transition: transform 0.15s; }
+  .section-header::after { content: '\25B6'; font-size: 10px; transition: transform 0.15s; }
   .context-section:not(.collapsed-section) .section-header::after { transform: rotate(90deg); }
   /* Tag pills */
   .tag-group { margin-bottom: 6px; }
@@ -379,7 +379,7 @@ if(__exports != exports)module.exports = exports;return module.exports}));
     font-size: 12px; cursor: not-allowed; opacity: 0.6; font-family: inherit;
   }
 </style>
-<!-- vendor-spa-source-sha256:dd628665d6aee8180a020c8d1a516a007e7432b2cbdc9f18daca8f2a78c99c58 -->
+<!-- vendor-spa-source-sha256:41cb48b2e93e422db74370c3395fd80512abf7250efdd6d40c74c6ea6fbb9374 -->
 </head>
 <body>
 <div class="app-container">
@@ -421,10 +421,12 @@ if(__exports != exports)module.exports = exports;return module.exports}));
   <div class="tab-panel" id="panel-graph" data-tab="graph">
     <div class="graph-toolbar" id="graph-toolbar">
       <button class="action-btn" id="graph-send-btn" title="Send graph summary to Claude">&#x1F4AC; Send</button>
+      <button class="action-btn" id="graph-semantic-btn" title="Toggle semantic similarity edges" style="background:var(--color-background-secondary);color:var(--color-text-primary);border:1px solid var(--color-border-primary);">&#x223C; Semantic</button>
       <button class="action-btn" id="graph-fullscreen-btn" title="Request fullscreen for graph" style="background:var(--color-background-secondary);color:var(--color-text-primary);border:1px solid var(--color-border-primary);">&#x26F6; Expand</button>
     </div>
-    <div id="graph-container" style="flex:1;min-height:300px;"></div>
-    <div id="graph-mini-card" class="graph-mini-card" style="display:none;"></div>
+    <div id="graph-container" style="flex:1;min-height:0;position:relative;">
+      <div id="graph-mini-card" class="graph-mini-card" style="display:none;"></div>
+    </div>
   </div>
   <div class="tab-panel" id="panel-browse" data-tab="browse">
     <div class="browser-layout">
@@ -462,6 +464,7 @@ const app = new App(
 );
 let currentTab = 'context';
 let isFullscreen = false;
+let currentPath = null; // shared active-note state across views
 
 // ── Utilities ─────────────────────────────────────────────────────────────
 function escHtml(s) {
@@ -557,12 +560,12 @@ window.sendToLLM = async function sendToLLM(path, content) {
   const MAX_LEN = 4000;
   let body = content;
   if (body.length > MAX_LEN) {
-    body = body.slice(0, MAX_LEN) + "\\n... [truncated \\u2014 use read('" + path + "') for full content]";
+    body = body.slice(0, MAX_LEN) + "\n... [truncated \u2014 use read('" + path + "') for full content]";
   }
   try {
     await app.sendMessage({
       role: 'user',
-      content: { type: 'text', text: '[From Vault App] Note: ' + path + '\\n\\n' + body }
+      content: { type: 'text', text: '[From Vault App] Note: ' + path + '\n\n' + body }
     });
     window.showToast('Sent to Claude');
   } catch (err) {
@@ -577,7 +580,7 @@ window.updateContext = async function updateContext(viewName, path, title, extra
   if (extras) lines.push(extras);
   try {
     await app.updateModelContext({
-      content: [{ type: 'text', text: lines.join('\\n') }]
+      content: [{ type: 'text', text: lines.join('\n') }]
     });
   } catch (err) {
     console.warn('updateModelContext failed:', err);
@@ -595,6 +598,7 @@ function processToolInput(args) {
   const validViews = ['context', 'graph', 'browse'];
   const view = (validViews.includes(args.view) ? args.view
     : (args.path ? 'context' : 'browse'));
+  if (args.path) currentPath = args.path;
   switchTab(view);
   if (args.path) {
     window.dispatchEvent(new CustomEvent('vault-navigate', {
@@ -698,7 +702,7 @@ app.onteardown = () => {
     return outlinks.map(ol =>
       '<div class="link-item" data-path="' + escapeHtml(ol.target_path) + '">'
       + '<span class="link-path">' + escapeHtml(ol.target_path) + '</span>'
-      + '<span class="' + (ol.exists ? 'link-exists-yes' : 'link-exists-no') + '">' + (ol.exists ? '\\u2713' : '\\u2717') + '</span>'
+      + '<span class="' + (ol.exists ? 'link-exists-yes' : 'link-exists-no') + '">' + (ol.exists ? '\u2713' : '\u2717') + '</span>'
       + '<span class="link-type-badge">' + escapeHtml(ol.link_type) + '</span>'
       + '</div>'
     ).join('');
@@ -737,10 +741,11 @@ app.onteardown = () => {
       if (!data) { placeholder.style.display = ''; card.style.display = 'none'; return; }
       currentContextPath = path;
       currentContextData = data;
+      currentPath = path; // sync shared state
 
       document.getElementById('ctx-title').textContent = data.title || path;
       document.getElementById('ctx-path').textContent = data.path;
-      document.getElementById('ctx-folder').textContent = data.folder ? '\\uD83D\\uDCC1 ' + data.folder : '';
+      document.getElementById('ctx-folder').textContent = data.folder ? '\uD83D\uDCC1 ' + data.folder : '';
       document.getElementById('ctx-modified').textContent = '';
       if (data.modified_at) {
         const d = new Date(data.modified_at * 1000);
@@ -805,13 +810,20 @@ app.onteardown = () => {
     if (d.similar && d.similar.length > 0) {
       lines.push('Top similar: ' + d.similar.slice(0, 3).map(s => s.title || s.path).join(', '));
     }
-    window.sendToLLM(d.path, lines.join('\\n'));
+    window.sendToLLM(d.path, lines.join('\n'));
   });
 
   // Listen for navigation events
   window.addEventListener('vault-navigate', (e) => {
     if (e.detail.view === 'context' && e.detail.path) {
       loadContext(e.detail.path);
+    }
+  });
+
+  // Sync to shared currentPath when switching to this tab
+  window.addEventListener('vault-tab-changed', (e) => {
+    if (e.detail.tab === 'context' && currentPath && currentPath !== currentContextPath) {
+      loadContext(currentPath);
     }
   });
 
@@ -826,21 +838,41 @@ app.onteardown = () => {
   let edgesDS = null;
   let graphCenterPath = null;
   let selectedNodeId = null;
+  let semanticEnabled = false;
 
-  // Color scheme derived from CSS variables at init time
+  // Folder-based node colors — chosen to stand out on both light and dark backgrounds
+  const _FOLDER_COLORS = [
+    '#6366f1', // indigo
+    '#0ea5e9', // sky
+    '#10b981', // emerald
+    '#f59e0b', // amber
+    '#ef4444', // red
+    '#8b5cf6', // violet
+    '#06b6d4', // cyan
+    '#f97316', // orange
+  ];
+  function _folderColor(folder) {
+    if (!folder) return _FOLDER_COLORS[0];
+    let h = 0;
+    for (let i = 0; i < folder.length; i++) h = (h * 31 + folder.charCodeAt(i)) & 0x7fffffff;
+    return _FOLDER_COLORS[h % _FOLDER_COLORS.length];
+  }
+
+  // Color scheme for edges and UI chrome
   function getColors() {
     const s = getComputedStyle(document.documentElement);
     return {
-      bg: s.getPropertyValue('--color-background-primary').trim() || '#ffffff',
       fg: s.getPropertyValue('--color-text-primary').trim() || '#1a1a1a',
       accent: s.getPropertyValue('--color-text-info').trim() || '#6366f1',
       muted: s.getPropertyValue('--color-text-secondary').trim() || '#6b7280',
       border: s.getPropertyValue('--color-border-primary').trim() || '#e0e0e0',
-      surface: s.getPropertyValue('--color-background-secondary').trim() || '#f5f5f5',
     };
   }
 
+  const _SEMANTIC_EDGE_COLOR = '#a855f7'; // purple — distinct from folder node colors
+
   function edgeColorByType(type, c) {
+    if (type === 'semantic') return _SEMANTIC_EDGE_COLOR;
     if (type === 'wikilink') return c.accent;
     if (type === 'reference') return c.muted;
     return c.border; // markdown = default
@@ -856,7 +888,7 @@ app.onteardown = () => {
     const options = {
       physics: { enabled: true, solver: 'forceAtlas2Based', forceAtlas2Based: { gravitationalConstant: -40 } },
       nodes: {
-        shape: 'dot', font: { size: 12, color: c.fg }, color: { background: c.accent, border: c.border, highlight: { background: c.accent, border: c.fg } },
+        shape: 'dot',
         scaling: { min: 8, max: 30, label: { enabled: true, min: 10, max: 16 } },
       },
       edges: {
@@ -866,12 +898,14 @@ app.onteardown = () => {
     };
     network = new vis.Network(container, { nodes: nodesDS, edges: edgesDS }, options);
 
-    // Click: expand neighbors
+    // Click: expand neighbors + center on clicked node
     network.on('click', async (params) => {
       if (params.nodes.length > 0) {
         const nodeId = params.nodes[0];
         selectedNodeId = nodeId;
+        currentPath = nodeId; // sync shared state
         await expandNode(nodeId);
+        network.focus(nodeId, { scale: 1.2, animation: { duration: 400, easingFunction: 'easeInOutQuad' } });
         showMiniCard(nodeId);
       } else {
         hideMiniCard();
@@ -880,11 +914,12 @@ app.onteardown = () => {
     });
 
     // Hover: tooltip is built-in via node.title
-    // Double-click: emit event for cross-navigation (#277)
+    // Double-click: focus mode — clear graph and reload only this node's neighborhood
     network.on('doubleClick', (params) => {
       if (params.nodes.length > 0) {
         const nodeId = params.nodes[0];
-        window.dispatchEvent(new CustomEvent('vault-graph-dblclick', { detail: { path: nodeId } }));
+        currentPath = nodeId;
+        loadGraph(nodeId);
       }
     });
   }
@@ -895,27 +930,38 @@ app.onteardown = () => {
     for (const n of data.nodes) {
       if (!nodesDS.get(n.id)) {
         const bc = n.backlink_count || 0;
+        const baseColor = n.group === 'orphan' ? '#94a3b8' : _folderColor(n.folder);
         nodesDS.add({
           id: n.id, label: n.label,
           value: Math.max(bc, 1),
           title: n.label + (n.folder ? ' (' + n.folder + ')' : '') + (bc > 0 ? ' \u2014 ' + bc + ' backlinks' : ''),
-          color: n.group === 'hub'
-            ? { background: c.accent, border: c.fg }
-            : { background: c.surface, border: c.border },
-          font: { color: c.fg },
-          borderWidth: n.group === 'orphan' ? 1 : 2,
-          borderWidthSelected: 3,
+          color: {
+            background: baseColor,
+            border: n.group === 'hub' ? '#ffffff' : baseColor,
+            highlight: { background: baseColor, border: '#ffffff' },
+            hover: { background: baseColor, border: '#ffffff' },
+          },
+          font: { color: '#ffffff', size: 12 },
+          borderWidth: n.group === 'hub' ? 3 : (n.group === 'orphan' ? 1 : 2),
+          borderWidthSelected: 4,
           shapeProperties: n.group === 'orphan' ? { borderDashes: [5, 5] } : {},
         });
       }
     }
     for (const e of data.edges) {
-      const edgeId = e.from + '->' + e.to;
+      const isSemantic = e.type === 'semantic';
+      // Semantic edges are undirected — use canonical key to avoid duplicates
+      const edgeId = isSemantic
+        ? 'sem:' + [e.from, e.to].sort().join('<>')
+        : e.from + '->' + e.to;
       if (!edgesDS.get(edgeId)) {
         edgesDS.add({
           id: edgeId, from: e.from, to: e.to,
-          color: { color: edgeColorByType(e.type, c), highlight: c.accent },
+          color: { color: edgeColorByType(e.type, c), highlight: _SEMANTIC_EDGE_COLOR },
           title: e.type,
+          dashes: isSemantic,
+          width: isSemantic ? 1 : 1.5,
+          arrows: isSemantic ? '' : { to: { enabled: true, scaleFactor: 0.5 } },
         });
       }
     }
@@ -924,7 +970,8 @@ app.onteardown = () => {
   async function expandNode(path) {
     try {
       const result = await app.callServerTool({
-        name: '_vault_graph_neighborhood', arguments: { path, depth: 1 }
+        name: '_vault_graph_neighborhood',
+        arguments: { path, depth: 1, include_semantic: semanticEnabled },
       });
       const data = parseToolResult(result);
       if (!data) return;
@@ -1020,13 +1067,30 @@ app.onteardown = () => {
     const center = graphCenterPath || 'hub view';
     const nodeLabels = nodesDS.get().map(n => n.label).slice(0, 20).join(', ');
     const summary = 'Graph around ' + center + ': ' + nodesDS.length + ' notes, '
-      + edgesDS.length + ' links\\nNotes: ' + nodeLabels;
+      + edgesDS.length + ' links\nNotes: ' + nodeLabels;
     window.sendToLLM(center, summary);
   });
 
   // Fullscreen for graph
   document.getElementById('graph-fullscreen-btn').addEventListener('click', async () => {
     try { await app.requestDisplayMode({ mode: 'fullscreen' }); } catch (e) { console.warn(e); }
+  });
+
+  // Semantic toggle: reload graph with/without semantic edges
+  document.getElementById('graph-semantic-btn').addEventListener('click', () => {
+    semanticEnabled = !semanticEnabled;
+    const btn = document.getElementById('graph-semantic-btn');
+    if (semanticEnabled) {
+      btn.style.background = _SEMANTIC_EDGE_COLOR;
+      btn.style.color = '#ffffff';
+      btn.style.border = 'none';
+    } else {
+      btn.style.background = 'var(--color-background-secondary)';
+      btn.style.color = 'var(--color-text-primary)';
+      btn.style.border = '1px solid var(--color-border-primary)';
+    }
+    // Reload current graph with updated setting
+    if (graphCenterPath) loadGraph(graphCenterPath);
   });
 
   // Listen for navigation events
@@ -1036,21 +1100,19 @@ app.onteardown = () => {
     }
   });
 
-  // Auto-load when graph tab is selected
+  // Sync to shared currentPath when switching to this tab
   window.addEventListener('vault-tab-changed', (e) => {
-    if (e.detail.tab === 'graph' && (!nodesDS || nodesDS.length === 0)) {
-      loadGraph(graphCenterPath);
+    if (e.detail.tab === 'graph') {
+      if (currentPath && currentPath !== graphCenterPath) {
+        loadGraph(currentPath);
+      } else if (!nodesDS || nodesDS.length === 0) {
+        loadGraph(graphCenterPath);
+      }
     }
   });
 
   window.loadGraph = loadGraph;
 })();
-
-// ── Cross-view navigation wiring (#277) ──────────────────────────────────
-// Graph double-click → Context Card
-window.addEventListener('vault-graph-dblclick', (e) => {
-  if (e.detail.path) window.navigateTo('context', { path: e.detail.path });
-});
 
 // ── Vault Browser View ──────────────────────────────────────────────────
 (function() {
@@ -1094,7 +1156,7 @@ window.addEventListener('vault-graph-dblclick', (e) => {
       const name = f.includes('/') ? f.split('/').pop() : f;
       const folderDiv = document.createElement('div');
       folderDiv.className = 'tree-folder';
-      folderDiv.innerHTML = '<span class="arrow">\\u25B6</span> \\uD83D\\uDCC1 ' + escHtml(name);
+      folderDiv.innerHTML = '<span class="arrow">\u25B6</span> \uD83D\uDCC1 ' + escHtml(name);
       folderDiv.dataset.folder = f;
       parentEl.appendChild(folderDiv);
 
@@ -1135,6 +1197,7 @@ window.addEventListener('vault-graph-dblclick', (e) => {
 
   async function loadPreview(path) {
     currentPreviewPath = path;
+    currentPath = path; // sync shared state
     // Highlight active note in tree
     treeEl.querySelectorAll('.tree-note').forEach(el => {
       el.classList.toggle('active', el.dataset.path === path);
@@ -1149,10 +1212,10 @@ window.addEventListener('vault-graph-dblclick', (e) => {
       let html = '<div class="preview-header">';
       html += '<h2>' + escHtml(data.title || path) + '</h2>';
       html += '<div class="preview-actions">';
-      html += '<button class="action-btn" id="preview-send-btn" title="Send to Claude">\\uD83D\\uDCAC Send</button>';
-      html += '<button class="action-btn" id="preview-ctx-btn" title="Show Context" style="background:var(--color-background-secondary);color:var(--color-text-primary);border:1px solid var(--color-border-primary);">\\uD83D\\uDD0D Context</button>';
-      html += '<button class="action-btn" id="preview-graph-btn" title="Show in Graph" style="background:var(--color-background-secondary);color:var(--color-text-primary);border:1px solid var(--color-border-primary);">\\uD83D\\uDD17 Graph</button>';
-      html += '<button class="edit-btn-disabled" title="Coming soon" disabled>\\u270F Edit</button>';
+      html += '<button class="action-btn" id="preview-send-btn" title="Send to Claude">\uD83D\uDCAC Send</button>';
+      html += '<button class="action-btn" id="preview-ctx-btn" title="Show Context" style="background:var(--color-background-secondary);color:var(--color-text-primary);border:1px solid var(--color-border-primary);">\uD83D\uDD0D Context</button>';
+      html += '<button class="action-btn" id="preview-graph-btn" title="Show in Graph" style="background:var(--color-background-secondary);color:var(--color-text-primary);border:1px solid var(--color-border-primary);">\uD83D\uDD17 Graph</button>';
+      html += '<button class="edit-btn-disabled" title="Coming soon" disabled>\u270F Edit</button>';
       html += '</div></div>';
 
       // Frontmatter
@@ -1267,7 +1330,12 @@ connected = true;
 const hostContext = app.getHostContext();
 if (hostContext) handleHostContext(hostContext);
 
-updateFullscreenButton(hostContext?.availableDisplayModes?.includes('fullscreen') === true);
+const fullscreenAvailable = hostContext?.availableDisplayModes?.includes('fullscreen') === true;
+updateFullscreenButton(fullscreenAvailable);
+// Auto-expand on first load — complex multi-view app benefits from more space
+if (fullscreenAvailable && !isFullscreen) {
+  app.requestDisplayMode({ mode: 'fullscreen' }).catch(() => {});
+}
 
 // Process any tool input received during connection handshake.
 // If none arrived (host did not send ontoolinput), default to browse view so
