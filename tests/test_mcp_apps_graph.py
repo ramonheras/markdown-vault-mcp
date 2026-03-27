@@ -321,8 +321,7 @@ class TestIncludeSemanticEdges:
 
     async def test_semantic_edges_returned_with_embeddings(
         self,
-        vault_path: "Path",
-        tmp_path: "Path",
+        tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """include_semantic=True with embeddings configured adds semantic edges."""
@@ -356,8 +355,7 @@ class TestIncludeSemanticEdges:
 
     async def test_semantic_edges_no_duplicate_pairs(
         self,
-        vault_path: "Path",
-        tmp_path: "Path",
+        tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Semantic edges are deduplicated — A↔B appears only once."""
@@ -387,8 +385,7 @@ class TestIncludeSemanticEdges:
 
     async def test_semantic_adds_nodes_outside_neighborhood(
         self,
-        vault_path: "Path",
-        tmp_path: "Path",
+        tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """With depth=0 only the center node is in the graph; similar notes are
@@ -418,8 +415,7 @@ class TestIncludeSemanticEdges:
 
     async def test_semantic_handles_value_error(
         self,
-        vault_path: "Path",
-        tmp_path: "Path",
+        tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """ValueError from get_similar is silently ignored (exercises except ValueError branch)."""
@@ -432,17 +428,16 @@ class TestIncludeSemanticEdges:
         with patch(
             "markdown_vault_mcp.providers.get_embedding_provider",
             return_value=mock_prov,
+        ), patch(
+            "markdown_vault_mcp.collection.Collection.get_similar",
+            side_effect=ValueError("not found"),
         ):
-            with patch(
-                "markdown_vault_mcp.collection.Collection.get_similar",
-                side_effect=ValueError("not found"),
-            ):
-                server = create_server()
-                async with Client(server) as client:
-                    result = await client.call_tool(
-                        "_vault_graph_neighborhood",
-                        {"path": "simple.md", "include_semantic": True},
-                    )
+            server = create_server()
+            async with Client(server) as client:
+                result = await client.call_tool(
+                    "_vault_graph_neighborhood",
+                    {"path": "simple.md", "include_semantic": True},
+                )
         data = _parse_tool_data(result)
         assert "nodes" in data
         assert "edges" in data
@@ -451,8 +446,7 @@ class TestIncludeSemanticEdges:
 
     async def test_semantic_handles_unexpected_exception(
         self,
-        vault_path: "Path",
-        tmp_path: "Path",
+        tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Unexpected exceptions from get_similar are logged and skipped
@@ -466,17 +460,16 @@ class TestIncludeSemanticEdges:
         with patch(
             "markdown_vault_mcp.providers.get_embedding_provider",
             return_value=mock_prov,
+        ), patch(
+            "markdown_vault_mcp.collection.Collection.get_similar",
+            side_effect=RuntimeError("embedding backend unavailable"),
         ):
-            with patch(
-                "markdown_vault_mcp.collection.Collection.get_similar",
-                side_effect=RuntimeError("embedding backend unavailable"),
-            ):
-                server = create_server()
-                async with Client(server) as client:
-                    result = await client.call_tool(
-                        "_vault_graph_neighborhood",
-                        {"path": "simple.md", "include_semantic": True},
-                    )
+            server = create_server()
+            async with Client(server) as client:
+                result = await client.call_tool(
+                    "_vault_graph_neighborhood",
+                    {"path": "simple.md", "include_semantic": True},
+                )
         data = _parse_tool_data(result)
         assert "nodes" in data
         assert "edges" in data
