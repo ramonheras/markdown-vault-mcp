@@ -319,10 +319,10 @@ if(__exports != exports)module.exports = exports;return module.exports}));
   }
   .graph-mini-card .mini-actions button:hover { background: var(--color-border-primary); }
   /* Browser styles */
-  .browser-layout { display: flex; flex: 1; min-height: 0; gap: 0; }
+  .browser-layout { display: flex; flex-direction: column; flex: 1; min-height: 0; gap: 0; }
   .browser-sidebar {
-    width: 240px; min-width: 180px; flex-shrink: 0; display: flex; flex-direction: column;
-    border-right: 1px solid var(--color-border-primary); overflow: hidden;
+    flex: 1; display: flex; flex-direction: column;
+    overflow: hidden;
   }
   .browser-search {
     display: flex; padding: 6px; gap: 4px; border-bottom: 1px solid var(--color-border-primary); flex-shrink: 0;
@@ -356,7 +356,10 @@ if(__exports != exports)module.exports = exports;return module.exports}));
   .search-result:hover { background: var(--color-background-secondary); }
   .search-result-title { font-weight: 600; font-size: 13px; }
   .search-result-snippet { font-size: 11px; color: var(--color-text-secondary); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  /* Preview pane */
+  /* Note tab styles */
+  .note-tab-btn { display: none !important; }
+  .note-tab-btn.visible { display: flex !important; }
+  /* Preview pane (now in Note tab) */
   .browser-preview { flex: 1; overflow-y: auto; padding: 16px; min-width: 0; }
   .preview-header {
     display: flex; align-items: center; justify-content: space-between; gap: 8px;
@@ -379,7 +382,7 @@ if(__exports != exports)module.exports = exports;return module.exports}));
     font-size: 12px; cursor: not-allowed; opacity: 0.6; font-family: inherit;
   }
 </style>
-<!-- vendor-spa-source-sha256:6ee30512d583701488c531fb64b8688dd1312a07ba541b776908c2428d519695 -->
+<!-- vendor-spa-source-sha256:412f35c981ea4d42d41d21e041badd759aeedc3578760567947d3f58974070cb -->
 </head>
 <body>
 <div class="app-container">
@@ -391,6 +394,7 @@ if(__exports != exports)module.exports = exports;return module.exports}));
     <button data-tab="context" class="active">Context</button>
     <button data-tab="graph">Graph</button>
     <button data-tab="browse">Browse</button>
+    <button data-tab="note" id="note-tab-btn" class="note-tab-btn">Note</button>
   </div>
   <div class="tab-panel active" id="panel-context" data-tab="context">
     <div class="placeholder" id="context-placeholder">Select a note to view its context</div>
@@ -437,9 +441,11 @@ if(__exports != exports)module.exports = exports;return module.exports}));
         </div>
         <div id="browser-tree" class="browser-tree"></div>
       </div>
-      <div class="browser-preview" id="browser-preview">
-        <div class="placeholder">Select a note to preview</div>
-      </div>
+    </div>
+  </div>
+  <div class="tab-panel" id="panel-note" data-tab="note">
+    <div class="browser-preview" id="browser-preview">
+      <div class="placeholder">Select a note from Browse to view it</div>
     </div>
   </div>
 </div>
@@ -595,7 +601,7 @@ let connected = false;
 let pendingToolInput = null;
 
 function processToolInput(args) {
-  const validViews = ['context', 'graph', 'browse'];
+  const validViews = ['context', 'graph', 'browse', 'note'];
   const view = (validViews.includes(args.view) ? args.view
     : (args.path ? 'context' : 'browse'));
   if (args.path) currentPath = args.path;
@@ -1198,6 +1204,9 @@ app.onteardown = () => {
   async function loadPreview(path) {
     currentPreviewPath = path;
     currentPath = path; // sync shared state
+    // Show the Note tab and switch to it
+    document.getElementById('note-tab-btn').classList.add('visible');
+    switchTab('note');
     // Highlight active note in tree
     treeEl.querySelectorAll('.tree-note').forEach(el => {
       el.classList.toggle('active', el.dataset.path === path);
@@ -1212,6 +1221,7 @@ app.onteardown = () => {
       let html = '<div class="preview-header">';
       html += '<h2>' + escHtml(data.title || path) + '</h2>';
       html += '<div class="preview-actions">';
+      html += '<button class="action-btn" id="preview-browse-btn" title="Back to Browse" style="background:var(--color-background-secondary);color:var(--color-text-primary);border:1px solid var(--color-border-primary);">\u2190 Browse</button>';
       html += '<button class="action-btn" id="preview-send-btn" title="Send to Claude">\uD83D\uDCAC Send</button>';
       html += '<button class="action-btn" id="preview-ctx-btn" title="Show Context" style="background:var(--color-background-secondary);color:var(--color-text-primary);border:1px solid var(--color-border-primary);">\uD83D\uDD0D Context</button>';
       html += '<button class="action-btn" id="preview-graph-btn" title="Show in Graph" style="background:var(--color-background-secondary);color:var(--color-text-primary);border:1px solid var(--color-border-primary);">\uD83D\uDD17 Graph</button>';
@@ -1243,6 +1253,9 @@ app.onteardown = () => {
       previewEl.innerHTML = html;
 
       // Wire action buttons
+      document.getElementById('preview-browse-btn')?.addEventListener('click', () => {
+        switchTab('browse');
+      });
       document.getElementById('preview-send-btn')?.addEventListener('click', () => {
         window.sendToLLM(data.path, data.content || '');
       });
@@ -1308,7 +1321,7 @@ app.onteardown = () => {
 
   // Listen for navigation events
   window.addEventListener('vault-navigate', (e) => {
-    if (e.detail.view === 'browse' && e.detail.path) {
+    if ((e.detail.view === 'browse' || e.detail.view === 'note') && e.detail.path) {
       loadPreview(e.detail.path);
     }
   });
