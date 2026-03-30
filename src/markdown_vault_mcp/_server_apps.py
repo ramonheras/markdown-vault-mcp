@@ -127,7 +127,7 @@ def register_apps(mcp: FastMCP) -> None:
     )
     async def browse_vault(
         path: str | None = None,
-        view: Literal["context", "graph", "browse"] | None = None,
+        view: Literal["context", "graph", "browse", "note"] | None = None,
         collection: Collection = Depends(get_collection),
     ) -> dict[str, Any]:
         """Open the vault explorer to browse notes, view context, or explore the link graph.
@@ -138,7 +138,8 @@ def register_apps(mcp: FastMCP) -> None:
         Args:
             path: Optional note path to focus on (e.g. ``"Journal/2024-01-15.md"``).
             view: Which view to open: ``"context"`` (note relationships),
-                ``"graph"`` (link visualization), or ``"browse"`` (tree + preview).
+                ``"graph"`` (link visualization), ``"browse"`` (file tree),
+                or ``"note"`` (full note preview).
                 Defaults to ``"context"`` if a path is given, ``"browse"`` otherwise.
 
         Returns:
