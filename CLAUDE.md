@@ -42,11 +42,19 @@ Every issue, PR, and code change must consider documentation impact. Before clos
 
 - **`docs/design.md`** — the authoritative spec. Any new feature, changed behavior, or architectural decision must be reflected here. If the code diverges from the spec, update the spec.
 - **`README.md`** — user-facing documentation. New env vars, tools, resources, prompts, CLI flags, or configuration options must be documented here.
+- **`docs/` site pages** — the published documentation site. These pages must stay in sync with the codebase:
+    - `docs/tools/index.md` — new or changed MCP tools
+    - `docs/resources.md` — new or changed MCP resources
+    - `docs/prompts.md` — new or changed MCP prompts
+    - `docs/configuration.md` — new or changed env vars
+    - `docs/installation.md` — new installation methods or dependencies
+    - `docs/guides/*.md` — new features that affect user workflows (e.g., new views, auth modes, deployment options)
+    - `docs/index.md` — feature list and architecture overview
 - **`examples/`** — example env files. New env vars or changed defaults should be reflected in relevant examples.
 - **`CHANGELOG.md`** — managed by semantic-release from conventional commits, but verify entries are meaningful.
 - **Inline docstrings** — new or changed public API methods need accurate docstrings.
 
-When writing issues, include a "Documentation" section listing which docs need updating. When reviewing PRs, verify documentation is included — code without matching docs is incomplete.
+**Rule: code without matching docs is incomplete.** When writing issues, include a "Documentation" section listing which docs need updating. When reviewing PRs, verify documentation is included. A PR that adds a tool, env var, resource, or user-facing feature without updating the corresponding docs/ page and README section should not be merged.
 
 ## Cross-Repo Sync
 
