@@ -15,9 +15,10 @@ Point it at a directory of Markdown files — an Obsidian vault, a docs folder, 
 - **Attachment support** — read, write, delete, and list non-markdown files (PDFs, images, etc.)
 - **Git integration** — optional auto-commit and push on every write via `GIT_ASKPASS`
 - **OIDC authentication** — optional token-based auth for HTTP deployments
-- **13 MCP tools** — search, read, write, edit, delete, rename, and admin operations
-- **6 MCP resources** — vault configuration, statistics, tags, folders, and document outlines
-- **6 MCP prompts** — summarize, research, discuss, create from template, compare, and find related notes
+- **MCP tools** — search, read, write, edit, delete, rename, link graph analysis, and admin operations
+- **MCP resources** — vault configuration, statistics, tags, folders, document outlines, similar notes, and recent notes
+- **MCP prompts** — summarize, research, discuss, create from template, compare, and find related notes
+- **MCP Apps** — four browser-based views (Context Card, Graph Explorer, Vault Browser, Note Preview) for clients supporting the MCP Apps protocol
 
 ## Quick Start
 

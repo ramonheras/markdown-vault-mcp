@@ -359,13 +359,14 @@ For a complete example — including Zettelkasten capture, development, and revi
 
 ## MCP Apps
 
-The server ships three browser-based views that MCP clients supporting the MCP Apps protocol can render inline or in fullscreen. They are delivered as a single HTML resource at `ui://vault/app.html` and registered using `visibility="app"` so they appear only in supporting clients and do not clutter the standard tool list.
+The server ships four browser-based views that MCP clients supporting the MCP Apps protocol can render inline or in fullscreen. They are delivered as a single HTML resource at `ui://vault/app.html` and registered using `visibility="app"` so they appear only in supporting clients and do not clutter the standard tool list. See the [MCP Apps guide](https://pvliesdonk.github.io/markdown-vault-mcp/guides/mcp-apps/) for details.
 
 | View | Description |
 |------|-------------|
 | **Context Card** | Displays a note dossier (backlinks, outlinks, similar notes, tags) for the note currently in focus |
 | **Graph Explorer** | Interactive force-directed link graph of the vault, powered by vis-network |
 | **Vault Browser** | Searchable, filterable file tree for navigating the vault without issuing tool calls |
+| **Note Preview** | Full-width markdown preview with frontmatter table and "Send to Claude" button |
 
 The two primary tools exposed to MCP Apps clients are:
 

@@ -60,6 +60,42 @@ The Docker image uses `[all]` (MCP + FastEmbed + API embeddings). Semantic searc
 
 See [Docker deployment](deployment/docker.md) for compose setup and volume configuration.
 
+## Linux Packages (.deb / .rpm)
+
+Download `.deb` or `.rpm` packages from the [GitHub Releases](https://github.com/pvliesdonk/markdown-vault-mcp/releases) page.
+
+=== "Debian / Ubuntu"
+
+    ```bash
+    sudo dpkg -i markdown-vault-mcp_*.deb
+    sudo apt-get install -f   # resolve dependencies if needed
+    ```
+
+=== "Fedora / RHEL"
+
+    ```bash
+    sudo rpm -i markdown-vault-mcp-*.rpm
+    ```
+
+The packages install:
+
+| Path | Purpose |
+|------|---------|
+| `/opt/markdown-vault-mcp/venv/` | Python virtualenv (created by post-install) |
+| `/etc/markdown-vault-mcp/env` | Configuration file (created from template on first install) |
+| `/var/lib/markdown-vault-mcp/` | State directory (index, embeddings, vault data) |
+| `/usr/lib/systemd/system/markdown-vault-mcp.service` | Systemd unit file with security hardening |
+
+A `markdown-vault-mcp` system user and group are created automatically.
+
+After installing, edit `/etc/markdown-vault-mcp/env` to set at least `MARKDOWN_VAULT_MCP_SOURCE_DIR`, then:
+
+```bash
+sudo systemctl enable --now markdown-vault-mcp
+```
+
+See the [systemd deployment guide](deployment/systemd.md) for full configuration and troubleshooting.
+
 ## Verify Installation
 
 ```bash

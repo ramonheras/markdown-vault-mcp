@@ -12,6 +12,9 @@ MCP resources expose vault metadata as structured JSON that clients can read dir
 | [`tags://vault/{field}`](#tagsvaultfield) | Tags for a specific field |
 | [`folders://vault`](#foldersvault) | All folder paths |
 | [`toc://vault/{path}`](#tocvaultpath) | Table of contents for a document |
+| [`similar://vault/{path}`](#similarvaultpath) | Semantically similar notes for a document |
+| [`recent://vault`](#recentvault) | Most recently modified notes |
+| [`ui://vault/app.html`](#uivaultapphtml) | Interactive vault explorer SPA (MCP Apps) |
 
 ---
 
@@ -106,3 +109,35 @@ Table of contents (heading outline) for a specific document. This is a URI templ
 ```
 
 The TOC prepends a synthetic H1 from the document title and deduplicates if the first real heading matches the title.
+
+## `similar://vault/{path}`
+
+Top 10 semantically similar notes for a document. Requires embeddings to be built. This is a URI template — replace `{path}` with the document's relative path.
+
+**Example:** `similar://vault/Journal/note.md`
+
+**Response:**
+
+```json
+[
+  {"path": "Journal/related-note.md", "title": "Related Note", "score": 0.87},
+  {"path": "Research/topic.md", "title": "Topic Overview", "score": 0.82}
+]
+```
+
+## `recent://vault`
+
+The 20 most recently modified notes with ISO timestamps.
+
+**Response:**
+
+```json
+[
+  {"path": "Journal/2024-01-15.md", "title": "Daily Note", "modified_at": "2024-01-15T10:30:00"},
+  {"path": "Projects/roadmap.md", "title": "Roadmap", "modified_at": "2024-01-14T16:45:00"}
+]
+```
+
+## `ui://vault/app.html`
+
+Interactive vault explorer delivered as a single self-contained HTML resource. This is an [MCP Apps](https://modelcontextprotocol.io/specification/2025-06-18/server/apps) resource — clients that support the MCP Apps protocol render it as an interactive iframe. See the [MCP Apps guide](guides/mcp-apps.md) for details on the four views (Context Card, Graph Explorer, Vault Browser, Note Preview).
