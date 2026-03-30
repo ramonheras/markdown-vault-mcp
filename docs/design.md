@@ -1311,19 +1311,20 @@ MCP Apps are browser-based views that MCP clients supporting the protocol can re
 - **Inline**: rendered in a client sidebar or panel alongside the conversation
 - **Fullscreen**: rendered in a dedicated tab or window
 
-**Three views** are bundled in the single resource:
+**Four views** are bundled in the single resource:
 
-| View | Description |
-|------|-------------|
-| Context Card | Note dossier — backlinks, outlinks, similar notes, tags, and last-modified time for the note in focus |
-| Graph Explorer | Interactive force-directed link graph of the entire vault; nodes are notes, edges are links |
-| Vault Browser | Searchable, filterable file tree for direct vault navigation without issuing tool calls |
+| View | `view` value | Description |
+|------|-------------|-------------|
+| Context Card | `context` | Note dossier — backlinks, outlinks, similar notes, tags, and last-modified time for the note in focus |
+| Graph Explorer | `graph` | Interactive force-directed link graph of the entire vault; nodes are notes, edges are links |
+| Vault Browser | `browse` | Searchable, filterable file tree for direct vault navigation without issuing tool calls |
+| Note Preview | `note` | Full-width rendered markdown preview with frontmatter table and action buttons |
 
 **Primary tools** (visible to LLM, launch apps):
 
 | Tool | Description |
 |------|-------------|
-| `browse_vault` | Opens the SPA with optional path/view; returns text summary for non-Apps clients |
+| `browse_vault` | Opens the SPA with optional `path` and `view` (`context`, `graph`, `browse`, `note`); returns text summary for non-Apps clients |
 | `show_context` | Opens the Context Card for a path; returns text summary for non-Apps clients |
 
 **App-only tools** (`visibility="app"`): registered but hidden from the standard MCP tool list, serving MCP Apps clients only:
