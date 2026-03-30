@@ -126,6 +126,9 @@ If login fails:
 
 Use Keycloak directly as your OIDC provider for username/password (or federated) authentication.
 
+!!! tip "Remote mode (simpler alternative)"
+    If your reverse proxy already handles OIDC authentication (e.g., Traefik with ForwardAuth), you can use **remote mode** instead. Set only `BASE_URL` and `OIDC_CONFIG_URL` — omit `OIDC_CLIENT_ID` and `OIDC_CLIENT_SECRET`. The server auto-detects remote mode and trusts the proxy's authentication. See [Authentication — Remote mode](authentication.md#remote-mode) for details.
+
 ### 1. Create a realm
 
 1. Open the Keycloak admin console
@@ -188,6 +191,9 @@ If login fails:
 ## Google
 
 Use Google as your OIDC identity provider to authenticate users with their Google accounts.
+
+!!! tip "Remote mode (simpler alternative)"
+    If your reverse proxy already handles Google OIDC authentication, you can use **remote mode** instead — set only `BASE_URL` and `OIDC_CONFIG_URL`, omitting client credentials. See [Authentication — Remote mode](authentication.md#remote-mode).
 
 ### 1. Create OAuth credentials
 
@@ -253,6 +259,9 @@ Use GitHub as an authentication backend through an OIDC-compliant broker.
 
 !!! warning "GitHub OAuth is not standard OIDC"
     GitHub OAuth Apps implement OAuth 2.0 but do **not** provide a standard OIDC discovery endpoint (`.well-known/openid-configuration`). GitHub cannot be used directly with markdown-vault-mcp's OIDC integration.
+
+!!! tip "Remote mode also works"
+    If you use Keycloak (or another broker) with GitHub social login, the remote mode alternative described in the [Keycloak section](#keycloak) above also applies here.
 
 ### Recommended approach
 

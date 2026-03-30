@@ -74,6 +74,20 @@ Behavior:
 - GitLab: `oauth2`
 - Bitbucket: account username
 
+## Git LFS
+
+If your vault tracks large files (PDFs, images) with [Git LFS](https://git-lfs.com), the server runs `git lfs pull` on startup to resolve LFS pointers into actual file content. This is enabled by default.
+
+Set `MARKDOWN_VAULT_MCP_GIT_LFS=false` to skip the LFS pull — use this when:
+
+- Your vault does not use Git LFS
+- `git-lfs` is not installed in your environment
+- You want faster startup and don't need LFS-tracked attachments
+
+```bash
+MARKDOWN_VAULT_MCP_GIT_LFS=false
+```
+
 ## Legacy Compatibility
 
 `GIT_TOKEN` without `GIT_REPO_URL` still works for backward compatibility and logs a deprecation warning.

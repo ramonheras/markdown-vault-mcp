@@ -1,10 +1,11 @@
 # Claude Desktop
 
-This guide walks through three progressive setups for using markdown-vault-mcp with [Claude Desktop](https://claude.ai/download):
+This guide walks through four progressive setups for using markdown-vault-mcp with [Claude Desktop](https://claude.ai/download):
 
 1. **Basic** — read-only keyword search, no external services
 2. **Git write support** — enable write/edit/delete with auto-commit
 3. **Semantic search** — add embedding-based search for better results
+4. **MCP Apps views** — browse your vault visually with Context Card, Graph Explorer, and more
 
 Each step builds on the previous one. Start with Step 1 and add features as needed.
 
@@ -218,3 +219,37 @@ Compare with keyword-only:
 > Search my vault for "project planning" using keyword mode
 
 Hybrid mode should return more conceptually related notes, even if they don't contain the exact phrase.
+
+---
+
+## Step 4: Use MCP Apps views
+
+**Goal:** Browse your vault visually with the Context Card, Graph Explorer, Vault Browser, and Note Preview views.
+
+**Prerequisites:** Step 1 complete. A Claude client that supports the [MCP Apps protocol](https://modelcontextprotocol.io/specification/2025-06-18/server/apps) (e.g., Claude on claude.ai).
+
+MCP Apps views are automatically available — no extra configuration needed for stdio transport. The server registers two tools (`browse_vault` and `show_context`) that open interactive views in supporting clients.
+
+### Try it
+
+In a Claude conversation, ask:
+
+> Browse my vault
+
+Claude should use the `browse_vault` tool. In an Apps-capable client, this opens an interactive SPA with four tabs:
+
+- **Context Card** — note dossier with backlinks, outlinks, similar notes, and tags
+- **Graph Explorer** — interactive force-directed link graph
+- **Vault Browser** — searchable file tree
+- **Note Preview** — rendered markdown with a "Send to Claude" button
+
+You can also ask for a specific note's context:
+
+> Show me the context for "Projects/roadmap.md"
+
+Claude uses the `show_context` tool to open the Context Card for that note.
+
+!!! note "Non-Apps clients"
+    Clients that don't support MCP Apps (e.g., Claude Code) receive a text-only summary instead of the interactive view. All the underlying data is still accessible via the `get_context`, `get_backlinks`, and other link graph tools.
+
+For full details on views, configuration, and architecture, see the [MCP Apps guide](mcp-apps.md).
