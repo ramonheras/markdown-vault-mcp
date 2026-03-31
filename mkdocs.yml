@@ -62,6 +62,7 @@ plugins:
           - guides/oidc-providers.md: OIDC provider setup (Authelia, Keycloak, Google, GitHub via broker)
           - guides/obsidian-everywhere.md: Reference architecture for desktop + mobile + Claude on one vault
           - guides/zettelkasten.md: Zettelkasten workflow (fleeting → literature → permanent notes, MOCs, graph navigation)
+          - guides/mcp-apps.md: MCP Apps — Context Card, Graph Explorer, Vault Browser, and Note Preview views
         MCP Interface:
           - tools/index.md: All 13 MCP tools with parameters and examples
           - resources.md: All 6 MCP resources with URI patterns
@@ -82,7 +83,7 @@ plugins:
         python:
           paths: [src]
           options:
-            show_source: true
+            show_source: false
             show_bases: true
             show_root_heading: true
             show_root_full_path: false
@@ -123,6 +124,7 @@ nav:
       - OIDC Providers: guides/oidc-providers.md
       - Obsidian Everywhere: guides/obsidian-everywhere.md
       - Zettelkasten: guides/zettelkasten.md
+      - MCP Apps: guides/mcp-apps.md
   - MCP Interface:
       - Tools: tools/index.md
       - Resources: resources.md
