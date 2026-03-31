@@ -38,6 +38,9 @@ exclude_docs: |
   design.md
   deployment.md
 
+hooks:
+  - docs/hooks.py
+
 plugins:
   - search
   - llmstxt:
