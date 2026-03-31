@@ -114,14 +114,16 @@ The TOC prepends a synthetic H1 from the document title and deduplicates if the 
 
 Top 10 semantically similar notes for a document. Requires embeddings to be built. This is a URI template — replace `{path}` with the document's relative path.
 
+Results are at **chunk granularity** — the same document may appear multiple times if it has many chunks. Each entry is a full `SearchResult` object.
+
 **Example:** `similar://vault/Journal/note.md`
 
 **Response:**
 
 ```json
 [
-  {"path": "Journal/related-note.md", "title": "Related Note", "score": 0.87},
-  {"path": "Research/topic.md", "title": "Topic Overview", "score": 0.82}
+  {"path": "Journal/related-note.md", "title": "Related Note", "folder": "Journal", "heading": null, "content": "...", "score": 0.87, "search_type": "semantic", "frontmatter": {}},
+  {"path": "Research/topic.md", "title": "Topic Overview", "folder": "Research", "heading": null, "content": "...", "score": 0.82, "search_type": "semantic", "frontmatter": {}}
 ]
 ```
 
