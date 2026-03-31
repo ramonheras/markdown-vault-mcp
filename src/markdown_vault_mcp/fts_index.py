@@ -82,6 +82,17 @@ CREATE TABLE IF NOT EXISTS links (
 CREATE INDEX IF NOT EXISTS idx_links_target ON links(target_path);
 CREATE INDEX IF NOT EXISTS idx_links_source ON links(source_id);
 
+CREATE TABLE IF NOT EXISTS document_aliases (
+    id INTEGER PRIMARY KEY,
+    document_id INTEGER NOT NULL,
+    alias TEXT NOT NULL,
+    UNIQUE(document_id, alias),
+    FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_aliases_alias ON document_aliases(alias);
+CREATE INDEX IF NOT EXISTS idx_aliases_docid ON document_aliases(document_id);
+
 CREATE INDEX IF NOT EXISTS idx_documents_modified_at
     ON documents(modified_at DESC);
 
@@ -152,6 +163,21 @@ def _open_connection(db_path: Path | str) -> sqlite3.Connection:
     except sqlite3.OperationalError as e:
         if "duplicate column name" not in str(e).lower():
             raise  # Unexpected error — re-raise.
+    # Migrate: create document_aliases table if it does not exist (added for
+    # Obsidian-style alias resolution in wikilinks).
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS document_aliases (
+            id INTEGER PRIMARY KEY,
+            document_id INTEGER NOT NULL,
+            alias TEXT NOT NULL,
+            UNIQUE(document_id, alias),
+            FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_aliases_alias ON document_aliases(alias);
+        CREATE INDEX IF NOT EXISTS idx_aliases_docid ON document_aliases(document_id);
+        """
+    )
     # Ensure foreign_keys stays ON for subsequent statements (executescript
     # does not guarantee this survives across statement boundaries in all
     # SQLite versions).
@@ -353,6 +379,53 @@ class FTSIndex:
                     (document_id, key, str(value)),
                 )
 
+    def _insert_aliases(
+        self,
+        cur: sqlite3.Cursor,
+        document_id: int,
+        note: ParsedNote,
+    ) -> None:
+        """Index frontmatter ``aliases`` into ``document_aliases``.
+
+        Obsidian allows documents to declare alternative names via a YAML
+        ``aliases`` field (list of strings).  These are stored so that
+        :meth:`resolve_vault_wikilinks` can resolve ``[[Alias]]`` to the
+        document that declares it.
+
+        Both ``aliases`` (list) and ``alias`` (single string) frontmatter
+        keys are supported, matching Obsidian's behaviour.
+
+        Args:
+            cur: Active cursor inside the current transaction.
+            document_id: The ``id`` of the parent document row.
+            note: Parsed document whose aliases are to be indexed.
+        """
+        raw = note.frontmatter.get("aliases") or note.frontmatter.get("alias")
+        if raw is None:
+            return
+
+        values: list[str] = []
+        if isinstance(raw, str):
+            values = [raw]
+        elif isinstance(raw, list):
+            values = [str(item) for item in raw if isinstance(item, (str, int, float))]
+        else:
+            return
+
+        seen: set[str] = set()
+        for alias in values:
+            alias = alias.strip()
+            if alias and alias not in seen:
+                seen.add(alias)
+                cur.execute(
+                    """
+                    INSERT OR IGNORE INTO document_aliases
+                        (document_id, alias)
+                    VALUES (?, ?)
+                    """,
+                    (document_id, alias),
+                )
+
     def _insert_links(
         self,
         cur: sqlite3.Cursor,
@@ -430,6 +503,7 @@ class FTSIndex:
                 doc_id = self._insert_document(cur, note, folder)
                 self._insert_sections(cur, doc_id, note)
                 self._insert_tags(cur, doc_id, note)
+                self._insert_aliases(cur, doc_id, note)
                 self._insert_links(cur, doc_id, note)
                 total_chunks += len(note.chunks)
                 logger.debug(
@@ -459,6 +533,7 @@ class FTSIndex:
             doc_id = self._insert_document(cur, note, folder)
             self._insert_sections(cur, doc_id, note)
             self._insert_tags(cur, doc_id, note)
+            self._insert_aliases(cur, doc_id, note)
             self._insert_links(cur, doc_id, note)
         logger.debug(
             "upsert_note: indexed %d chunks for %s", len(note.chunks), note.path
@@ -793,6 +868,12 @@ class FTSIndex:
         renamed — the original stem is always available regardless of how many
         times the index has been rebuilt.
 
+        When no path match is found, the method also checks the
+        ``document_aliases`` table — if a document declares an ``aliases``
+        frontmatter field containing the wikilink stem, the link resolves to
+        that document.  This mirrors Obsidian's alias resolution behaviour
+        (e.g. ``[[AI]]`` resolves to a document with ``aliases: [AI]``).
+
         Wikilinks with an explicit relative prefix (``./`` or ``../``) are
         skipped; they are resolved relative to the source document at scan time
         and do not participate in vault-wide resolution.
@@ -815,6 +896,21 @@ class FTSIndex:
             r["path"]
             for r in self._conn.execute("SELECT path FROM documents").fetchall()
         ]
+
+        # Build alias → document path mapping for fallback resolution.
+        # Case-insensitive: Obsidian alias matching is case-insensitive.
+        alias_rows = self._conn.execute(
+            """
+            SELECT da.alias, d.path
+            FROM document_aliases da
+            JOIN documents d ON d.id = da.document_id
+            """
+        ).fetchall()
+        # Map lowercased alias to list of document paths (multiple docs could
+        # share an alias; pick shortest path like the path-based resolution).
+        alias_map: dict[str, list[str]] = {}
+        for ar in alias_rows:
+            alias_map.setdefault(ar["alias"].lower(), []).append(ar["path"])
 
         # Fetch all wikilinks eligible for vault-wide resolution.
         # Explicit relative prefixes (./  ../) are excluded — those were
@@ -848,6 +944,12 @@ class FTSIndex:
                 for p in doc_paths
                 if p == search_target or p.endswith("/" + search_target)
             ]
+            if not candidates:
+                # Fallback: check if the stem matches a document alias.
+                # Use the raw stem (without .md) for alias matching.
+                alias_candidates = alias_map.get(stem.lower(), [])
+                if alias_candidates:
+                    candidates = alias_candidates
             if not candidates:
                 continue  # Genuinely broken — no document matches.
             new_path = min(candidates, key=len)

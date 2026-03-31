@@ -706,6 +706,14 @@ vault-wide resolution rules rather than relative path resolution:
 
 - `[[Note Title]]` appends `.md` → `Note Title.md` before resolution.
 
+- **Alias resolution**: When no path match is found,
+  `resolve_vault_wikilinks()` also checks the `document_aliases` table.
+  Documents can declare alternative names via a YAML `aliases` (list) or
+  `alias` (string) frontmatter field. For example, `[[AI]]` resolves to a
+  document with `aliases: [AI, A.I.]` in its frontmatter. Alias matching
+  is case-insensitive. When multiple documents share the same alias, the
+  shortest path wins. Path matches always take priority over alias matches.
+
 `resolve_vault_wikilinks()` is called automatically at the end of
 `Collection.build_index()` and `Collection.reindex()` so that the `links`
 table always reflects the fully resolved vault state.
