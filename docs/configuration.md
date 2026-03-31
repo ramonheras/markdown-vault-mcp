@@ -15,6 +15,7 @@ All configuration is via environment variables. Most use the `MARKDOWN_VAULT_MCP
 | `MARKDOWN_VAULT_MCP_REQUIRED_FIELDS` | csv | — | No | Comma-separated frontmatter fields required on every document; documents missing any are excluded from the index |
 | `MARKDOWN_VAULT_MCP_EXCLUDE` | csv | — | No | Comma-separated glob patterns to exclude from scanning (e.g. `.obsidian/**,.trash/**`) |
 | `MARKDOWN_VAULT_MCP_TEMPLATES_FOLDER` | string | `_templates` | No | Relative folder path used by the `create_from_template` prompt to discover/read template files |
+| `MARKDOWN_VAULT_MCP_PROMPTS_FOLDER` | path | — | No | Path to a directory of `.md` prompt files that extend or override built-in prompts |
 
 ## Server Identity
 
@@ -23,7 +24,10 @@ All configuration is via environment variables. Most use the `MARKDOWN_VAULT_MCP
 | `MARKDOWN_VAULT_MCP_SERVER_NAME` | string | `markdown-vault-mcp` | MCP server name shown to clients; useful for multi-instance setups |
 | `MARKDOWN_VAULT_MCP_INSTRUCTIONS` | string | (auto) | System-level instructions injected into LLM context; defaults to a description that reflects read-only vs read-write state |
 | `MARKDOWN_VAULT_MCP_HTTP_PATH` | path | `/mcp` | HTTP endpoint path for streamable HTTP transport (`serve --transport http`) |
-| `MARKDOWN_VAULT_MCP_BASE_URL` | url | — | Public base URL of the server (e.g. `https://mcp.example.com`). Required for OIDC auth and `create_download_link` tool |
+| `MARKDOWN_VAULT_MCP_BASE_URL` | url | — | Public base URL of the server (e.g. `https://mcp.example.com`). Required for OIDC auth, `create_download_link` tool, and MCP Apps domain computation |
+| `MARKDOWN_VAULT_MCP_EVENT_STORE_URL` | url | `file:///data/state/events` | Event store backend for HTTP session persistence. `file:///path` survives restarts; `memory://` for dev (lost on restart) |
+| `MARKDOWN_VAULT_MCP_APP_DOMAIN` | string | (auto) | Override the Claude app domain used for MCP Apps iframe sandboxing. Auto-computed from `BASE_URL` when not set |
+| `FASTMCP_LOG_LEVEL` | string | `INFO` | Log level for FastMCP internals (`DEBUG`, `INFO`, `WARNING`, `ERROR`). `-v` CLI flag overrides both app and FastMCP loggers to `DEBUG` |
 
 ## Search and Embeddings
 
@@ -84,6 +88,17 @@ Non-markdown file support for PDFs, images, spreadsheets, and more.
 
 !!! warning "Hidden directories"
     Attachments inside hidden directories (`.git/`, `.obsidian/`, `.markdown_vault_mcp/`, etc.) are never listed, regardless of extension settings. `MARKDOWN_VAULT_MCP_EXCLUDE` patterns are also applied to attachments.
+
+## Bearer Token Authentication
+
+Simple static token auth for HTTP deployments. Set a single env var — clients must send `Authorization: Bearer <token>`.
+
+| Variable | Type | Required | Description |
+|----------|------|----------|-------------|
+| `MARKDOWN_VAULT_MCP_BEARER_TOKEN` | string | Yes | Static bearer token; any non-empty string enables auth |
+
+!!! tip "Multi-auth"
+    If both `BEARER_TOKEN` and all OIDC variables are set, the server accepts **either** credential. Useful when different clients use different auth flows (e.g. Claude web via OIDC + Claude Code via bearer token).
 
 ## OIDC Authentication
 

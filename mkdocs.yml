@@ -38,6 +38,9 @@ exclude_docs: |
   design.md
   deployment.md
 
+hooks:
+  - docs/hooks.py
+
 plugins:
   - search
   - llmstxt:
@@ -62,9 +65,10 @@ plugins:
           - guides/oidc-providers.md: OIDC provider setup (Authelia, Keycloak, Google, GitHub via broker)
           - guides/obsidian-everywhere.md: Reference architecture for desktop + mobile + Claude on one vault
           - guides/zettelkasten.md: Zettelkasten workflow (fleeting → literature → permanent notes, MOCs, graph navigation)
+          - guides/mcp-apps.md: MCP Apps — Context Card, Graph Explorer, Vault Browser, and Note Preview views
         MCP Interface:
-          - tools/index.md: All 13 MCP tools with parameters and examples
-          - resources.md: All 6 MCP resources with URI patterns
+          - tools/index.md: MCP tools with parameters and examples (search, read, write, link graph, MCP Apps)
+          - resources.md: MCP resources with URI patterns (config, stats, tags, folders, toc, similar, recent, ui)
           - prompts.md: All 6 MCP prompts with workflow descriptions
         Deployment:
           - deployment/index.md: Deployment overview
@@ -82,7 +86,7 @@ plugins:
         python:
           paths: [src]
           options:
-            show_source: true
+            show_source: false
             show_bases: true
             show_root_heading: true
             show_root_full_path: false
@@ -97,7 +101,7 @@ markdown_extensions:
   - pymdownx.details
   - pymdownx.superfences
   - pymdownx.highlight:
-      anchor_linenums: true
+      anchor_linenums: false
   - pymdownx.inlinehilite
   - pymdownx.tabbed:
       alternate_style: true
@@ -123,6 +127,7 @@ nav:
       - OIDC Providers: guides/oidc-providers.md
       - Obsidian Everywhere: guides/obsidian-everywhere.md
       - Zettelkasten: guides/zettelkasten.md
+      - MCP Apps: guides/mcp-apps.md
   - MCP Interface:
       - Tools: tools/index.md
       - Resources: resources.md

@@ -1,6 +1,6 @@
 # MCP Tools
 
-markdown-vault-mcp exposes 13 MCP tools. Write tools (`write`, `edit`, `delete`, `rename`) are only available when `MARKDOWN_VAULT_MCP_READ_ONLY=false`.
+markdown-vault-mcp exposes MCP tools across several categories. Write tools are only available when `MARKDOWN_VAULT_MCP_READ_ONLY=false`.
 
 ## Quick Reference
 
@@ -13,12 +13,25 @@ markdown-vault-mcp exposes 13 MCP tools. Write tools (`write`, `edit`, `delete`,
 | [`list_tags`](#list_tags) | Read | List all unique frontmatter tag values |
 | [`stats`](#stats) | Read | Get collection statistics and capabilities |
 | [`embeddings_status`](#embeddings_status) | Read | Check embedding provider and vector index status |
+| [`get_backlinks`](#get_backlinks) | Read | Find all documents that link to a given document |
+| [`get_outlinks`](#get_outlinks) | Read | Find all links from a document, with existence check |
+| [`get_broken_links`](#get_broken_links) | Read | Find all links pointing to non-existent documents |
+| [`get_similar`](#get_similar) | Read | Find semantically similar notes by document path |
+| [`get_recent`](#get_recent) | Read | Get the most recently modified notes |
+| [`get_context`](#get_context) | Read | Get a consolidated context dossier for a note |
+| [`get_orphan_notes`](#get_orphan_notes) | Read | Find notes with no inbound or outbound links |
+| [`get_most_linked`](#get_most_linked) | Read | Find the most-linked-to notes ranked by backlink count |
+| [`get_connection_path`](#get_connection_path) | Read | Find the shortest path between two notes via link graph |
 | [`reindex`](#reindex) | Admin | Force a full reindex of the vault |
 | [`build_embeddings`](#build_embeddings) | Admin | Build or rebuild vector embeddings |
 | [`write`](#write) | Write | Create or overwrite a document or attachment |
 | [`edit`](#edit) | Write | Replace a unique text span in a document |
 | [`delete`](#delete) | Write | Delete a document or attachment |
 | [`rename`](#rename) | Write | Rename/move a document or attachment |
+| [`fetch`](#fetch) | Write | Download from URL and save to vault |
+| [`create_download_link`](#create_download_link) | Write | Generate a one-time download URL for a vault file |
+| [`browse_vault`](#browse_vault) | Apps | Open the vault explorer SPA |
+| [`show_context`](#show_context) | Apps | Open the Context Card for a note |
 
 ---
 
@@ -254,3 +267,181 @@ Rename a document or attachment, or move it to a different folder. Parent direct
 | `new_path` | string | Target relative path. Fails if `new_path` already exists |
 
 **Returns:** `{"old_path": "drafts/idea.md", "new_path": "projects/idea.md"}`
+
+### `fetch`
+
+Download a file from a URL and save it to the vault as a note or attachment. Designed for MCP-to-MCP file transfer when content is too large for the LLM context window.
+
+**Parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `url` | string | required | Source URL to download. Only `http`/`https` schemes allowed; private/loopback IPs are blocked; redirects are not followed (SSRF protection) |
+| `path` | string | required | Destination path in vault. Extension determines handling: `.md` for notes, anything else for attachments |
+| `frontmatter` | object | `null` | Optional YAML frontmatter dict for `.md` files. Ignored for attachments |
+| `if_match` | string | `null` | Optional etag from a previous `read` call for optimistic concurrency |
+| `timeout_s` | float | `30.0` | Download timeout in seconds |
+
+**Returns:** `{"path": "notes/report.md", "created": true, "content_length": 4096, "content_type": "text/markdown"}`
+
+!!! note "Dependency"
+    Requires `httpx`. Install with `pip install 'markdown-vault-mcp[all]'`.
+
+### `create_download_link`
+
+Generate a one-time download URL for a vault file. The link expires after a single use. Useful for MCP-to-MCP file transfer where the receiving server can fetch the file directly.
+
+**Parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `path` | string | required | Relative path to the vault file to share |
+| `ttl_seconds` | int | `300` | Link lifetime in seconds |
+
+**Returns:** `{"download_url": "https://mcp.example.com/artifacts/abc123", "expires_in_seconds": 300, "path": "notes/report.md", "content_type": "text/markdown"}`
+
+!!! note "Requirements"
+    Only available with HTTP or SSE transport. Requires `MARKDOWN_VAULT_MCP_BASE_URL` to be set.
+
+---
+
+## Link Graph
+
+### `get_backlinks`
+
+Find all documents that link to a given document.
+
+**Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `path` | string | Relative path to the target document |
+
+**Returns:** List of documents containing links to the given path.
+
+### `get_outlinks`
+
+Find all links from a document, with existence check.
+
+**Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `path` | string | Relative path to the source document |
+
+**Returns:** List of link targets with an `exists` field indicating whether the target document is in the vault.
+
+### `get_broken_links`
+
+Find all links across the vault pointing to non-existent documents.
+
+**Parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `folder` | string | `null` | Optional folder filter; only checks links from documents in this folder |
+
+**Returns:** List of entries with `source_path`, `source_title`, `target_path`, `link_text`, `link_type`, `fragment`, and `raw_target` fields.
+
+### `get_similar`
+
+Find semantically similar notes by document path. Requires embeddings to be built.
+
+**Parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `path` | string | required | Relative path to the document |
+| `limit` | int | `10` | Maximum results to return |
+
+**Returns:** List of similar documents ranked by cosine similarity.
+
+### `get_recent`
+
+Get the most recently modified notes.
+
+**Parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `limit` | int | `20` | Maximum results to return |
+| `folder` | string | `null` | Optional folder filter; only returns notes from this folder (e.g. `"Journal"`) |
+
+**Returns:** List of notes with Unix timestamps (`modified_at` as float), sorted by modification time (newest first).
+
+### `get_context`
+
+Get a consolidated context dossier for a note. Combines backlinks, outlinks, similar notes, folder peers, tags, and modification time into a single response.
+
+**Parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `path` | string | required | Relative path to the document |
+| `similar_limit` | int | `5` | Max similar notes to include. Pass `0` to skip the similarity lookup (e.g. when `stats` shows `semantic_search_available=false`) |
+| `link_limit` | int | `10` | Max backlinks and outlinks to include each |
+
+**Returns:** Object with `path`, `title`, `folder`, `frontmatter`, `modified_at`, `backlinks`, `outlinks`, `similar`, `folder_notes`, and `tags` fields.
+
+### `get_orphan_notes`
+
+Find all notes with no inbound or outbound links — isolated documents that may need cross-referencing.
+
+**Returns:** List of `NoteInfo` objects (`path`, `title`, `folder`, `frontmatter`, `modified_at`, `kind`), ordered by path. Returns ALL orphans with no limit — check `stats.orphan_count` before calling on large vaults.
+
+### `get_most_linked`
+
+Find the most-linked-to notes in the vault, ranked by backlink count.
+
+**Parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `limit` | int | `10` | Maximum results to return |
+
+**Returns:** List of `{"path": "...", "backlink_count": N}` entries.
+
+### `get_connection_path`
+
+Find the shortest path between two notes via BFS on the undirected link graph (max 10 hops).
+
+**Parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `source` | string | required | Relative path to the starting document |
+| `target` | string | required | Relative path to the target document |
+| `max_depth` | int | `10` | Maximum hops to search (clamped to [1, 10]) |
+
+**Returns:** Object with `found` (bool), `path` (ordered list of note paths from source to target), and `hops` (number of edges, or `-1` if not found).
+
+---
+
+## MCP Apps
+
+These tools power the browser-based vault explorer views. See the [MCP Apps guide](../guides/mcp-apps.md) for details.
+
+### `browse_vault`
+
+Open the vault explorer SPA. Optionally focus on a specific note and view.
+
+**Parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `path` | string | `null` | Note path to focus on |
+| `view` | string | `null` | View to open: `context`, `graph`, `browse`, or `note` |
+
+**Returns:** For Apps-capable clients, opens the interactive SPA. For other clients, returns a text summary.
+
+### `show_context`
+
+Open the Context Card view for a specific note, showing backlinks, outlinks, similar notes, tags, and folder peers.
+
+**Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `path` | string | Relative path to the document |
+
+**Returns:** For Apps-capable clients, opens the Context Card. For other clients, returns the context dossier as text.

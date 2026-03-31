@@ -1,11 +1,12 @@
 # Docker
 
-This guide walks through four progressive Docker deployments:
+This guide walks through five progressive Docker deployments:
 
 1. **Basic** — read-only container with keyword search via HTTP
 2. **Git write support** — enable write operations with auto-commit and push
 3. **Bearer token authentication** — simple static token auth
 4. **OIDC authentication** — protect HTTP access with an OIDC provider
+5. **MCP Apps** — enable browser-based vault views for Apps-capable clients
 
 Each step builds on the previous one.
 
@@ -200,3 +201,41 @@ docker compose logs markdown-vault-mcp --tail 20
 ```
 
 You should see no OIDC-related errors. Navigate to your server URL in a browser — you should be redirected to your OIDC provider's login page.
+
+---
+
+## Step 5: Enable MCP Apps views
+
+**Goal:** Allow Apps-capable MCP clients (e.g., Claude on claude.ai) to render the interactive vault explorer (Context Card, Graph Explorer, Vault Browser, Note Preview).
+
+**Prerequisites:** Step 1 complete. The server must be reachable via HTTP (which Docker deployments already use).
+
+### Configure the app domain
+
+MCP Apps views are served as an HTML resource sandboxed to a specific domain. The domain is auto-computed from `BASE_URL`, but you can override it if needed.
+
+Add to your `.env`:
+
+```bash hl_lines="2-3"
+# .env (add to your existing config)
+MARKDOWN_VAULT_MCP_BASE_URL=https://mcp.example.com
+# MARKDOWN_VAULT_MCP_APP_DOMAIN=  # override only if auto-computed domain doesn't work
+```
+
+If `BASE_URL` is already set (e.g., for OIDC), no additional configuration is needed — the app domain is auto-computed.
+
+### Configure session persistence
+
+For long-running HTTP sessions (especially with MCP Apps), configure the event store so sessions survive container restarts:
+
+```bash
+MARKDOWN_VAULT_MCP_EVENT_STORE_URL=file:///data/state/events
+```
+
+This is the default when using the Docker image with the `state-data` volume. For development, use `memory://` (sessions lost on restart).
+
+### Verify
+
+Restart the container and connect from an Apps-capable MCP client. Ask Claude to "browse my vault" — you should see the interactive SPA with four tabs.
+
+For full details on the views and architecture, see the [MCP Apps guide](mcp-apps.md).
