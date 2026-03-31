@@ -1188,6 +1188,7 @@ docs = [
     { name = "mkdocs-llmstxt" },
     { name = "mkdocs-material" },
     { name = "mkdocstrings", extra = ["python"] },
+    { name = "pygments" },
 ]
 embeddings = [
     { name = "fastembed" },
@@ -1219,6 +1220,7 @@ requires-dist = [
     { name = "numpy", marker = "extra == 'embeddings-api'", specifier = ">=1.20" },
     { name = "pip-audit", marker = "extra == 'dev'", specifier = ">=2.7" },
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=3.0" },
+    { name = "pygments", marker = "extra == 'docs'", specifier = ">=2,<2.20" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.21" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0" },
