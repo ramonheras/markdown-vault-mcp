@@ -1715,9 +1715,7 @@ class TestAliasResolution:
         """A wikilink resolved via alias is not reported as broken."""
         vault = tmp_path / "vault"
         vault.mkdir()
-        (vault / "source.md").write_text(
-            "# Source\n\nSee [[AI]].\n", encoding="utf-8"
-        )
+        (vault / "source.md").write_text("# Source\n\nSee [[AI]].\n", encoding="utf-8")
         (vault / "artificial-intelligence.md").write_text(
             "---\naliases:\n  - AI\n  - A.I.\n---\n# Artificial Intelligence\n",
             encoding="utf-8",
