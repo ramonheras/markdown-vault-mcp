@@ -386,7 +386,7 @@ Get a consolidated context dossier for a note. Combines backlinks, outlinks, sim
 
 Find all notes with no inbound or outbound links — isolated documents that may need cross-referencing.
 
-**Returns:** List of orphan document paths.
+**Returns:** List of `NoteInfo` objects (`path`, `title`, `folder`, `frontmatter`, `modified_at`, `kind`), ordered by path. Returns ALL orphans with no limit — check `stats.orphan_count` before calling on large vaults.
 
 ### `get_most_linked`
 
