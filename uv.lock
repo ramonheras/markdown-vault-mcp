@@ -8,6 +8,9 @@ resolution-markers = [
     "python_full_version < '3.12'",
 ]
 
+[manifest]
+overrides = [{ name = "pygments", specifier = ">=2,<2.20" }]
+
 [[package]]
 name = "aiofile"
 version = "3.9.0"

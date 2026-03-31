@@ -70,6 +70,11 @@ Changelog = "https://github.com/pvliesdonk/markdown-vault-mcp/blob/main/CHANGELO
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[tool.uv]
+# Pygments 2.20.0 crashes on filename=None in HtmlFormatter (introduced in 2.20.0,
+# tracked upstream as Pygments PR #3078). Pin globally until the fix ships.
+override-dependencies = ["pygments>=2,<2.20"]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/markdown_vault_mcp"]
 exclude = ["src/markdown_vault_mcp/static/app.src.html"]
