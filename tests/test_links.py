@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from unittest.mock import patch
 
 import pytest
@@ -36,6 +36,7 @@ def make_note(
     chunks: list[Chunk] | None = None,
     content_hash: str = "abc123",
     modified_at: float = 1000.0,
+    frontmatter: dict[str, Any] | None = None,
 ) -> ParsedNote:
     """Create a minimal ParsedNote for testing.
 
@@ -46,6 +47,7 @@ def make_note(
         chunks: Chunk list. Defaults to a single generic chunk.
         content_hash: Content hash string.
         modified_at: Modification timestamp.
+        frontmatter: Optional frontmatter dict.
 
     Returns:
         A :class:`ParsedNote` suitable for indexing.
@@ -56,7 +58,7 @@ def make_note(
         ]
     return ParsedNote(
         path=path,
-        frontmatter={},
+        frontmatter=frontmatter or {},
         title=title,
         chunks=chunks,
         content_hash=content_hash,
@@ -1588,3 +1590,203 @@ class TestResolveVaultWikilinks:
         assert len(outlinks) == 1
         # Note.md (length 7) is shorter than sub/Note.md (length 11).
         assert outlinks[0].target_path == "Note.md"
+
+
+# ---------------------------------------------------------------------------
+# Alias resolution in wikilinks
+# ---------------------------------------------------------------------------
+
+
+class TestAliasResolution:
+    """Wikilinks can resolve via frontmatter aliases (Obsidian behaviour)."""
+
+    def test_wikilink_resolves_via_alias(self) -> None:
+        """[[AI]] resolves to a document with aliases: [AI]."""
+        idx = FTSIndex(":memory:")
+        notes = [
+            make_note(
+                path="source.md",
+                links=[
+                    LinkInfo(
+                        target_path="AI.md",
+                        link_text="AI",
+                        link_type="wikilink",
+                        raw_target="AI",
+                    )
+                ],
+            ),
+            make_note(
+                path="artificial-intelligence.md",
+                title="Artificial Intelligence",
+                frontmatter={"aliases": ["AI", "A.I."]},
+            ),
+        ]
+        idx.build_from_notes(notes)
+        assert idx.resolve_vault_wikilinks() == 1
+
+        outlinks = idx.get_outlinks("source.md")
+        assert outlinks[0]["target_path"] == "artificial-intelligence.md"
+
+    def test_alias_resolution_case_insensitive(self) -> None:
+        """Alias matching is case-insensitive."""
+        idx = FTSIndex(":memory:")
+        notes = [
+            make_note(
+                path="source.md",
+                links=[
+                    LinkInfo(
+                        target_path="ai.md",
+                        link_text="ai",
+                        link_type="wikilink",
+                        raw_target="ai",
+                    )
+                ],
+            ),
+            make_note(
+                path="artificial-intelligence.md",
+                title="Artificial Intelligence",
+                frontmatter={"aliases": ["AI"]},
+            ),
+        ]
+        idx.build_from_notes(notes)
+        assert idx.resolve_vault_wikilinks() == 1
+
+        outlinks = idx.get_outlinks("source.md")
+        assert outlinks[0]["target_path"] == "artificial-intelligence.md"
+
+    def test_path_match_takes_priority_over_alias(self) -> None:
+        """If a path matches, alias is not used (path wins)."""
+        idx = FTSIndex(":memory:")
+        notes = [
+            make_note(
+                path="source.md",
+                links=[
+                    LinkInfo(
+                        target_path="AI.md",
+                        link_text="AI",
+                        link_type="wikilink",
+                        raw_target="AI",
+                    )
+                ],
+            ),
+            # This document matches by path.
+            make_note(path="AI.md", title="AI Page"),
+            # This document matches by alias.
+            make_note(
+                path="artificial-intelligence.md",
+                title="Artificial Intelligence",
+                frontmatter={"aliases": ["AI"]},
+            ),
+        ]
+        idx.build_from_notes(notes)
+        idx.resolve_vault_wikilinks()
+
+        outlinks = idx.get_outlinks("source.md")
+        assert outlinks[0]["target_path"] == "AI.md"
+
+    def test_alias_singular_key(self) -> None:
+        """Frontmatter ``alias`` (singular) is also supported."""
+        idx = FTSIndex(":memory:")
+        notes = [
+            make_note(
+                path="source.md",
+                links=[
+                    LinkInfo(
+                        target_path="ML.md",
+                        link_text="ML",
+                        link_type="wikilink",
+                        raw_target="ML",
+                    )
+                ],
+            ),
+            make_note(
+                path="machine-learning.md",
+                title="Machine Learning",
+                frontmatter={"alias": "ML"},
+            ),
+        ]
+        idx.build_from_notes(notes)
+        assert idx.resolve_vault_wikilinks() == 1
+
+        outlinks = idx.get_outlinks("source.md")
+        assert outlinks[0]["target_path"] == "machine-learning.md"
+
+    def test_alias_not_broken_link(self, tmp_path: Path) -> None:
+        """A wikilink resolved via alias is not reported as broken."""
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        (vault / "source.md").write_text(
+            "# Source\n\nSee [[AI]].\n", encoding="utf-8"
+        )
+        (vault / "artificial-intelligence.md").write_text(
+            "---\naliases:\n  - AI\n  - A.I.\n---\n# Artificial Intelligence\n",
+            encoding="utf-8",
+        )
+
+        col = Collection(source_dir=vault)
+        col.build_index()
+
+        broken = col.get_broken_links()
+        assert broken == []
+        assert col.stats().broken_link_count == 0
+
+    def test_alias_resolution_shortest_path_wins(self) -> None:
+        """When multiple documents share an alias, shortest path wins."""
+        idx = FTSIndex(":memory:")
+        notes = [
+            make_note(
+                path="source.md",
+                links=[
+                    LinkInfo(
+                        target_path="JS.md",
+                        link_text="JS",
+                        link_type="wikilink",
+                        raw_target="JS",
+                    )
+                ],
+            ),
+            make_note(
+                path="deep/nested/javascript.md",
+                title="JavaScript (nested)",
+                frontmatter={"aliases": ["JS"]},
+            ),
+            make_note(
+                path="javascript.md",
+                title="JavaScript",
+                frontmatter={"aliases": ["JS"]},
+            ),
+        ]
+        idx.build_from_notes(notes)
+        idx.resolve_vault_wikilinks()
+
+        outlinks = idx.get_outlinks("source.md")
+        assert outlinks[0]["target_path"] == "javascript.md"
+
+    def test_alias_with_fragment(self) -> None:
+        """[[AI#history]] resolves via alias and preserves fragment."""
+        idx = FTSIndex(":memory:")
+        notes = [
+            make_note(
+                path="source.md",
+                links=[
+                    LinkInfo(
+                        target_path="AI.md",
+                        link_text="AI",
+                        link_type="wikilink",
+                        fragment="history",
+                        raw_target="AI#history",
+                    )
+                ],
+            ),
+            make_note(
+                path="artificial-intelligence.md",
+                title="Artificial Intelligence",
+                frontmatter={"aliases": ["AI"]},
+            ),
+        ]
+        idx.build_from_notes(notes)
+        assert idx.resolve_vault_wikilinks() == 1
+
+        outlinks = idx.get_outlinks("source.md")
+        assert outlinks[0]["target_path"] == "artificial-intelligence.md"
+        assert outlinks[0]["fragment"] == "history"
