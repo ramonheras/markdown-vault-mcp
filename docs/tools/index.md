@@ -293,11 +293,12 @@ Generate a one-time download URL for a vault file. The link expires after a sing
 
 **Parameters:**
 
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `path` | string | Relative path to the vault file to share |
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `path` | string | required | Relative path to the vault file to share |
+| `ttl_seconds` | int | `300` | Link lifetime in seconds |
 
-**Returns:** `{"url": "https://mcp.example.com/artifacts/abc123", "expires_after": "single use"}`
+**Returns:** `{"download_url": "https://mcp.example.com/artifacts/abc123", "expires_in_seconds": 300, "path": "notes/report.md", "content_type": "text/markdown"}`
 
 !!! note "Requirements"
     Only available with HTTP or SSE transport. Requires `MARKDOWN_VAULT_MCP_BASE_URL` to be set.
@@ -359,7 +360,7 @@ Get the most recently modified notes.
 |-----------|------|---------|-------------|
 | `limit` | int | `20` | Maximum results to return |
 
-**Returns:** List of notes with ISO timestamps, sorted by modification time (newest first).
+**Returns:** List of notes with Unix timestamps (`modified_at` as float), sorted by modification time (newest first).
 
 ### `get_context`
 
@@ -367,11 +368,13 @@ Get a consolidated context dossier for a note. Combines backlinks, outlinks, sim
 
 **Parameters:**
 
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `path` | string | Relative path to the document |
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `path` | string | required | Relative path to the document |
+| `similar_limit` | int | `5` | Max similar notes to include. Pass `0` to skip the similarity lookup (e.g. when `stats` shows `semantic_search_available=false`) |
+| `link_limit` | int | `10` | Max backlinks and outlinks to include each |
 
-**Returns:** Object with `backlinks`, `outlinks`, `similar`, `folder_peers`, `tags`, and `modified_at` fields.
+**Returns:** Object with `path`, `title`, `folder`, `frontmatter`, `modified_at`, `backlinks`, `outlinks`, `similar`, `folder_notes`, and `tags` fields.
 
 ### `get_orphan_notes`
 
@@ -387,7 +390,7 @@ Find the most-linked-to notes in the vault, ranked by backlink count.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `limit` | int | `20` | Maximum results to return |
+| `limit` | int | `10` | Maximum results to return |
 
 **Returns:** List of `{"path": "...", "backlink_count": N}` entries.
 

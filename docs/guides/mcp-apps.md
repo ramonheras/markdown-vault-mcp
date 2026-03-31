@@ -52,7 +52,7 @@ Two primary tools are exposed to MCP clients:
 | `browse_vault` | Opens the vault explorer SPA; optionally focuses a specific note and view. Returns a text summary for non-Apps clients. |
 | `show_context` | Opens the Context Card for a given note path. |
 
-Both tools accept an optional `path` parameter to focus on a specific note. `browse_vault` also accepts a `view` parameter (`context`, `graph`, `browse`, or `note`).
+`browse_vault` accepts an optional `path` parameter to focus on a specific note, and a `view` parameter (`context`, `graph`, `browse`, or `note`). `show_context` requires a `path` parameter.
 
 Six additional app-only tools (prefixed with `_vault_`) handle data fetching for the SPA views. These are hidden from the LLM and only callable from within the app itself.
 

@@ -127,14 +127,14 @@ Top 10 semantically similar notes for a document. Requires embeddings to be buil
 
 ## `recent://vault`
 
-The 20 most recently modified notes with ISO timestamps.
+The 20 most recently modified notes. Each entry is a full `NoteInfo` object with an added `modified_at_iso` field. The original `modified_at` is preserved as a Unix timestamp float.
 
 **Response:**
 
 ```json
 [
-  {"path": "Journal/2024-01-15.md", "title": "Daily Note", "modified_at": "2024-01-15T10:30:00"},
-  {"path": "Projects/roadmap.md", "title": "Roadmap", "modified_at": "2024-01-14T16:45:00"}
+  {"path": "Journal/2024-01-15.md", "title": "Daily Note", "folder": "Journal", "frontmatter": {}, "kind": "note", "modified_at": 1705314600.0, "modified_at_iso": "2024-01-15T10:30:00+00:00"},
+  {"path": "Projects/roadmap.md", "title": "Roadmap", "folder": "Projects", "frontmatter": {}, "kind": "note", "modified_at": 1705250700.0, "modified_at_iso": "2024-01-14T16:45:00+00:00"}
 ]
 ```
 
