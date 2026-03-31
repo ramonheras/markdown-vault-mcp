@@ -365,6 +365,7 @@ Get the most recently modified notes.
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `limit` | int | `20` | Maximum results to return |
+| `folder` | string | `null` | Optional folder filter; only returns notes from this folder (e.g. `"Journal"`) |
 
 **Returns:** List of notes with Unix timestamps (`modified_at` as float), sorted by modification time (newest first).
 
