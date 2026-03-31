@@ -335,7 +335,13 @@ Find all links from a document, with existence check.
 
 Find all links across the vault pointing to non-existent documents.
 
-**Returns:** List of `{"source": "...", "target": "..."}` entries where the target does not exist.
+**Parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `folder` | string | `null` | Optional folder filter; only checks links from documents in this folder |
+
+**Returns:** List of entries with `source_path`, `source_title`, `target_path`, `link_text`, `link_type`, `fragment`, and `raw_target` fields.
 
 ### `get_similar`
 
@@ -400,12 +406,13 @@ Find the shortest path between two notes via BFS on the undirected link graph (m
 
 **Parameters:**
 
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `source` | string | Relative path to the starting document |
-| `target` | string | Relative path to the target document |
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `source` | string | required | Relative path to the starting document |
+| `target` | string | required | Relative path to the target document |
+| `max_depth` | int | `10` | Maximum hops to search (clamped to [1, 10]) |
 
-**Returns:** Ordered list of document paths forming the shortest connection, or an empty list if no path exists within 10 hops.
+**Returns:** Object with `found` (bool), `path` (ordered list of note paths from source to target), and `hops` (number of edges, or `-1` if not found).
 
 ---
 

@@ -1,6 +1,6 @@
 # MCP Resources
 
-MCP resources expose vault metadata as structured JSON that clients can read directly without invoking tools. All resources return `application/json`.
+MCP resources expose vault metadata that clients can read directly without invoking tools. Most resources return `application/json`; `ui://vault/app.html` is an exception — it returns a self-contained HTML SPA for MCP Apps clients.
 
 ## Quick Reference
 
