@@ -21,7 +21,7 @@ from typing import Any, Literal
 
 from fastmcp import FastMCP
 from fastmcp.dependencies import Depends
-from fastmcp.server.apps import AppConfig, ResourceCSP
+from fastmcp.apps import AppConfig, ResourceCSP
 
 from markdown_vault_mcp.collection import Collection
 from markdown_vault_mcp.config import _ENV_PREFIX
