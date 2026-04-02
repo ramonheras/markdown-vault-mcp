@@ -167,7 +167,9 @@ class TestBrowserDataTools:
     async def test_vault_list_subfolder(self) -> None:
         server = create_server()
         async with Client(server) as client:
-            result = await client.call_tool("vault___vault_list", {"folder": "subfolder"})
+            result = await client.call_tool(
+                "vault___vault_list", {"folder": "subfolder"}
+            )
             data = _parse_tool_data(result)
             assert "folders" in data
             assert "notes" in data
@@ -212,7 +214,8 @@ class TestBrowserDataTools:
         server = create_server()
         async with Client(server) as client:
             result = await client.call_tool(
-                "vault___vault_search", {"query": "document", "mode": "keyword", "limit": 2}
+                "vault___vault_search",
+                {"query": "document", "mode": "keyword", "limit": 2},
             )
             data = _parse_tool_data(result)
             assert len(data) <= 2

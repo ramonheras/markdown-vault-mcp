@@ -152,7 +152,9 @@ class TestVaultContextToolData:
     async def test_all_context_fields_present(self) -> None:
         server = create_server()
         async with Client(server) as client:
-            result = await client.call_tool("vault___vault_context", {"path": "simple.md"})
+            result = await client.call_tool(
+                "vault___vault_context", {"path": "simple.md"}
+            )
             data = _parse_tool_data(result)
             assert data["path"] == "simple.md"
             assert "title" in data

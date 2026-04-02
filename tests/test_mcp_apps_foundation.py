@@ -377,7 +377,9 @@ class TestAppOnlyTools:
     async def test_vault_context_returns_note_context(self) -> None:
         server = create_server()
         async with Client(server) as client:
-            result = await client.call_tool("vault___vault_context", {"path": "simple.md"})
+            result = await client.call_tool(
+                "vault___vault_context", {"path": "simple.md"}
+            )
             data = _parse_tool_data(result)
             assert data["path"] == "simple.md"
             assert "backlinks" in data
@@ -433,7 +435,9 @@ class TestAppOnlyTools:
         """Subfolder listing must only include direct children, not deeper nesting."""
         server = create_server()
         async with Client(server) as client:
-            result = await client.call_tool("vault___vault_list", {"folder": "subfolder"})
+            result = await client.call_tool(
+                "vault___vault_list", {"folder": "subfolder"}
+            )
             data = _parse_tool_data(result)
             for note in data["notes"]:
                 assert note["path"].startswith("subfolder/"), (
@@ -706,7 +710,9 @@ class TestAppToolLinkedData:
     async def test_vault_context_with_links(self) -> None:
         server = create_server()
         async with Client(server) as client:
-            result = await client.call_tool("vault___vault_context", {"path": "linked_a.md"})
+            result = await client.call_tool(
+                "vault___vault_context", {"path": "linked_a.md"}
+            )
             data = _parse_tool_data(result)
             assert data["path"] == "linked_a.md"
             assert "backlinks" in data
