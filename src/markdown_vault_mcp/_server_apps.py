@@ -20,8 +20,8 @@ from dataclasses import asdict
 from typing import Any, Literal
 
 from fastmcp import FastMCP
+from fastmcp.apps import AppConfig, ResourceCSP
 from fastmcp.dependencies import Depends
-from fastmcp.server.apps import AppConfig, ResourceCSP
 
 from markdown_vault_mcp.collection import Collection
 from markdown_vault_mcp.config import _ENV_PREFIX
@@ -189,9 +189,10 @@ def register_apps(mcp: FastMCP) -> None:
             "idempotentHint": True,
             "openWorldHint": False,
         },
+        meta={"fastmcp": {"app": "vault"}},
         app=AppConfig(resourceUri=_VAULT_APP_URI, visibility=["app"]),
     )
-    async def _vault_context(
+    async def vault_context(
         path: str,
         collection: Collection = Depends(get_collection),
     ) -> dict[str, Any]:
@@ -276,9 +277,10 @@ def register_apps(mcp: FastMCP) -> None:
             "idempotentHint": True,
             "openWorldHint": False,
         },
+        meta={"fastmcp": {"app": "vault"}},
         app=AppConfig(resourceUri=_VAULT_APP_URI, visibility=["app"]),
     )
-    async def _vault_graph_neighborhood(
+    async def vault_graph_neighborhood(
         path: str,
         depth: int = 1,
         include_semantic: bool = False,
@@ -433,9 +435,10 @@ def register_apps(mcp: FastMCP) -> None:
             "idempotentHint": True,
             "openWorldHint": False,
         },
+        meta={"fastmcp": {"app": "vault"}},
         app=AppConfig(resourceUri=_VAULT_APP_URI, visibility=["app"]),
     )
-    async def _vault_graph_hubs(
+    async def vault_graph_hubs(
         limit: int = 20,
         collection: Collection = Depends(get_collection),
     ) -> dict[str, Any]:
@@ -508,9 +511,10 @@ def register_apps(mcp: FastMCP) -> None:
             "idempotentHint": True,
             "openWorldHint": False,
         },
+        meta={"fastmcp": {"app": "vault"}},
         app=AppConfig(resourceUri=_VAULT_APP_URI, visibility=["app"]),
     )
-    async def _vault_list(
+    async def vault_list(
         folder: str | None = None,
         collection: Collection = Depends(get_collection),
     ) -> dict[str, Any]:
@@ -564,9 +568,10 @@ def register_apps(mcp: FastMCP) -> None:
             "idempotentHint": True,
             "openWorldHint": False,
         },
+        meta={"fastmcp": {"app": "vault"}},
         app=AppConfig(resourceUri=_VAULT_APP_URI, visibility=["app"]),
     )
-    async def _vault_read(
+    async def vault_read(
         path: str,
         collection: Collection = Depends(get_collection),
     ) -> dict[str, Any] | None:
@@ -599,9 +604,10 @@ def register_apps(mcp: FastMCP) -> None:
             "idempotentHint": True,
             "openWorldHint": False,
         },
+        meta={"fastmcp": {"app": "vault"}},
         app=AppConfig(resourceUri=_VAULT_APP_URI, visibility=["app"]),
     )
-    async def _vault_search(
+    async def vault_search(
         query: str,
         mode: Literal["keyword", "semantic", "hybrid"] = "hybrid",
         limit: int = 20,

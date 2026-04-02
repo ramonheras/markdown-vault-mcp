@@ -108,11 +108,11 @@ class TestGraphExplorerHTML:
     async def test_dynamic_expansion(self) -> None:
         html = await self._get_html()
         assert "expandNode" in html
-        assert "_vault_graph_neighborhood" in html
+        assert "vault___vault_graph_neighborhood" in html
 
     async def test_hub_view(self) -> None:
         html = await self._get_html()
-        assert "_vault_graph_hubs" in html
+        assert "vault___vault_graph_hubs" in html
         assert "loadHubs" in html
 
     async def test_node_visual_encoding(self) -> None:
@@ -167,7 +167,7 @@ class TestGraphDataTools:
         server = create_server()
         async with Client(server) as client:
             result = await client.call_tool(
-                "_vault_graph_neighborhood", {"path": "simple.md"}
+                "vault___vault_graph_neighborhood", {"path": "simple.md"}
             )
             data = _parse_tool_data(result)
             assert "nodes" in data
@@ -184,11 +184,11 @@ class TestGraphDataTools:
         server = create_server()
         async with Client(server) as client:
             r1 = await client.call_tool(
-                "_vault_graph_neighborhood", {"path": "simple.md", "depth": 1}
+                "vault___vault_graph_neighborhood", {"path": "simple.md", "depth": 1}
             )
             d1 = _parse_tool_data(r1)
             r2 = await client.call_tool(
-                "_vault_graph_neighborhood", {"path": "simple.md", "depth": 2}
+                "vault___vault_graph_neighborhood", {"path": "simple.md", "depth": 2}
             )
             d2 = _parse_tool_data(r2)
             assert "nodes" in d2
@@ -198,7 +198,7 @@ class TestGraphDataTools:
     async def test_hubs_returns_graph(self) -> None:
         server = create_server()
         async with Client(server) as client:
-            result = await client.call_tool("_vault_graph_hubs", {})
+            result = await client.call_tool("vault___vault_graph_hubs", {})
             data = _parse_tool_data(result)
             assert "nodes" in data
             assert "edges" in data
@@ -207,7 +207,7 @@ class TestGraphDataTools:
         server = create_server()
         async with Client(server) as client:
             result = await client.call_tool(
-                "_vault_graph_neighborhood", {"path": "simple.md"}
+                "vault___vault_graph_neighborhood", {"path": "simple.md"}
             )
             data = _parse_tool_data(result)
             for edge in data["edges"]:
@@ -219,7 +219,7 @@ class TestGraphDataTools:
         server = create_server()
         async with Client(server) as client:
             result = await client.call_tool(
-                "_vault_graph_neighborhood", {"path": "simple.md"}
+                "vault___vault_graph_neighborhood", {"path": "simple.md"}
             )
             data = _parse_tool_data(result)
             for node in data["nodes"]:
@@ -230,7 +230,7 @@ class TestGraphDataTools:
         server = create_server()
         async with Client(server) as client:
             result = await client.call_tool(
-                "_vault_graph_neighborhood", {"path": "simple.md"}
+                "vault___vault_graph_neighborhood", {"path": "simple.md"}
             )
             data = _parse_tool_data(result)
             edge_keys = [(e["from"], e["to"]) for e in data["edges"]]
@@ -241,7 +241,7 @@ class TestGraphDataTools:
         server = create_server()
         async with Client(server) as client:
             result = await client.call_tool(
-                "_vault_graph_neighborhood", {"path": "simple.md"}
+                "vault___vault_graph_neighborhood", {"path": "simple.md"}
             )
             data = _parse_tool_data(result)
             semantic_edges = [e for e in data["edges"] if e.get("type") == "semantic"]
@@ -252,7 +252,7 @@ class TestGraphDataTools:
         server = create_server()
         async with Client(server) as client:
             result = await client.call_tool(
-                "_vault_graph_neighborhood",
+                "vault___vault_graph_neighborhood",
                 {"path": "simple.md", "include_semantic": True},
             )
             data = _parse_tool_data(result)
@@ -338,7 +338,7 @@ class TestIncludeSemanticEdges:
             server = create_server()
             async with Client(server) as client:
                 result = await client.call_tool(
-                    "_vault_graph_neighborhood",
+                    "vault___vault_graph_neighborhood",
                     {"path": "simple.md", "include_semantic": True},
                 )
         data = _parse_tool_data(result)
@@ -372,7 +372,7 @@ class TestIncludeSemanticEdges:
             server = create_server()
             async with Client(server) as client:
                 result = await client.call_tool(
-                    "_vault_graph_neighborhood",
+                    "vault___vault_graph_neighborhood",
                     {"path": "simple.md", "include_semantic": True},
                 )
         data = _parse_tool_data(result)
@@ -403,7 +403,7 @@ class TestIncludeSemanticEdges:
             server = create_server()
             async with Client(server) as client:
                 result = await client.call_tool(
-                    "_vault_graph_neighborhood",
+                    "vault___vault_graph_neighborhood",
                     {"path": "simple.md", "depth": 0, "include_semantic": True},
                 )
         data = _parse_tool_data(result)
@@ -438,7 +438,7 @@ class TestIncludeSemanticEdges:
             server = create_server()
             async with Client(server) as client:
                 result = await client.call_tool(
-                    "_vault_graph_neighborhood",
+                    "vault___vault_graph_neighborhood",
                     {"path": "simple.md", "include_semantic": True},
                 )
         data = _parse_tool_data(result)
@@ -473,7 +473,7 @@ class TestIncludeSemanticEdges:
             server = create_server()
             async with Client(server) as client:
                 result = await client.call_tool(
-                    "_vault_graph_neighborhood",
+                    "vault___vault_graph_neighborhood",
                     {"path": "simple.md", "include_semantic": True},
                 )
         data = _parse_tool_data(result)
