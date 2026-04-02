@@ -126,7 +126,10 @@ def _build_default_instructions(*, read_only: bool) -> str:
         f"{write_line} "
         "Use 'search' (mode='hybrid' preferred when available) to find documents, "
         "'read' for full content, 'list_documents' to enumerate, 'stats' to check "
-        "capabilities."
+        "capabilities. "
+        "'browse_vault' and 'show_context' open a visual UI for the user — do not "
+        "call them to retrieve vault content; use 'search', 'read', 'list_documents', "
+        "or 'get_context' instead."
     )
 
 
