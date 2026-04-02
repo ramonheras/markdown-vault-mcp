@@ -130,10 +130,16 @@ def register_apps(mcp: FastMCP) -> None:
         view: Literal["context", "graph", "browse", "note"] | None = None,
         collection: Collection = Depends(get_collection),
     ) -> dict[str, Any]:
-        """Open the vault explorer to browse notes, view context, or explore the link graph.
+        """Open a visual vault explorer UI for the user — not for reading vault content.
 
-        Opens an interactive visual explorer in MCP Apps-capable clients.
-        For non-MCP-Apps clients, returns a text summary of the vault or note.
+        Displays an interactive visual panel (MCP Apps) to the **user** so they can
+        browse the file tree, explore the link graph, or view a note's relationships.
+        Do NOT call this to retrieve or inspect vault content programmatically — use
+        ``search`` to find notes, ``read`` for note content, ``list_documents`` to
+        enumerate files, and ``get_context`` for a note's relationships instead.
+
+        Only call this when the user explicitly asks to open the visual vault browser
+        or explorer (e.g. "show me the vault browser", "open the graph view").
 
         Args:
             path: Optional note path to focus on (e.g. ``"Journal/2024-01-15.md"``).
@@ -219,11 +225,15 @@ def register_apps(mcp: FastMCP) -> None:
         path: str,
         collection: Collection = Depends(get_collection),
     ) -> dict[str, Any]:
-        """Show a visual context card for a note in the vault explorer.
+        """Open a visual context card UI for the user — not for reading note relationships.
 
-        Opens the context card view in MCP Apps-capable clients, showing
-        backlinks, outlinks, similar notes, tags, and frontmatter.
-        For non-Apps clients, returns a text summary.
+        Displays an interactive context panel (MCP Apps) to the **user** showing a
+        note's backlinks, outlinks, similar notes, tags, and frontmatter visually.
+        Do NOT call this to retrieve note relationship data programmatically — use
+        ``get_context`` instead, which returns the full structured data.
+
+        Only call this when the user explicitly asks to open the visual context card
+        or explorer (e.g. "show me the context card for this note").
 
         Args:
             path: Relative note path (e.g. ``"Journal/2024-01-15.md"``).
