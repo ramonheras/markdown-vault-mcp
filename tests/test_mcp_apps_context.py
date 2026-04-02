@@ -105,7 +105,7 @@ class TestContextCardHTML:
     async def test_call_server_tool_for_context(self) -> None:
         html = await self._get_html()
         assert "callServerTool" in html
-        assert "_vault_context" in html
+        assert "vault___vault_context" in html
 
     async def test_clickable_link_items(self) -> None:
         html = await self._get_html()
@@ -152,7 +152,7 @@ class TestVaultContextToolData:
     async def test_all_context_fields_present(self) -> None:
         server = create_server()
         async with Client(server) as client:
-            result = await client.call_tool("_vault_context", {"path": "simple.md"})
+            result = await client.call_tool("vault___vault_context", {"path": "simple.md"})
             data = _parse_tool_data(result)
             assert data["path"] == "simple.md"
             assert "title" in data
@@ -169,7 +169,7 @@ class TestVaultContextToolData:
         server = create_server()
         async with Client(server) as client:
             result = await client.call_tool(
-                "_vault_context", {"path": "full_frontmatter.md"}
+                "vault___vault_context", {"path": "full_frontmatter.md"}
             )
             data = _parse_tool_data(result)
             assert data["path"] == "full_frontmatter.md"
@@ -210,10 +210,8 @@ class TestShowContextTool:
             tools = await client.list_tools()
             names = [t.name for t in tools]
             assert "show_context" in names
-            # _vault_context has visibility=["app"] — filtering is protocol-level,
-            # not enforced by the test Client, so we verify it's registered
-            # with AppConfig instead of asserting absence.
-            assert "_vault_context" in names
+            # vault_context has visibility=["app"] — hidden from LLM tool list
+            assert "vault_context" not in names
 
     async def test_missing_note_returns_error_summary(self) -> None:
         server = create_server()
