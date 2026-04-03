@@ -608,7 +608,7 @@ class TestEditTool:
             )
         assert result.isError is True
         error_text = cast("mcp_types.TextContent", result.content[0]).text
-        assert "closest_match_line" in error_text or "line 1" in error_text.lower()
+        assert "closest_match_line" in error_text
 
 
 class TestDeleteTool:

@@ -1384,6 +1384,19 @@ class TestBuildPositionMap:
         assert pos_map[0] == 0
         assert pos_map[1] == 1
 
+    def test_nfc_multichar_mapping(self) -> None:
+        """NFC decomposed sequence (2 chars) maps to original start index."""
+        # 'e' + combining acute accent (U+0301) → 'é' (U+00E9) after NFC.
+        original = "caf\u0065\u0301"  # 5 chars: c a f e ́
+        normalized = _normalize_text(original)  # "café" — 4 chars
+        assert normalized == "caf\u00e9"
+        pos_map = _build_position_map(original, normalized)
+        assert len(pos_map) == 4
+        assert pos_map[0] == 0  # 'c'
+        assert pos_map[1] == 1  # 'a'
+        assert pos_map[2] == 2  # 'f'
+        assert pos_map[3] == 3  # 'e' (start of the 2-char decomposed sequence)
+
 
 class TestFindClosestMatch:
     def test_close_match_found(self) -> None:

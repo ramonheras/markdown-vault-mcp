@@ -83,6 +83,19 @@ _CONTEXT_FOLDER_PEERS_LIMIT = 20
 # Edit helpers
 # ---------------------------------------------------------------------------
 
+# Direct single-character substitutions applied during normalization.
+# Used by _build_position_map to avoid calling _normalize_text() per
+# character, which would (a) be O(n²) and (b) incorrectly strip a lone
+# space/tab as "trailing whitespace" of a one-char string.
+_CHAR_SUBS: dict[str, str] = {
+    "\u2013": "-",  # en-dash
+    "\u2014": "-",  # em-dash
+    "\u201c": '"',  # left double quotation mark
+    "\u201d": '"',  # right double quotation mark
+    "\u2018": "'",  # left single quotation mark
+    "\u2019": "'",  # right single quotation mark
+}
+
 
 def _normalize_text(text: str) -> str:
     """Normalize text for fuzzy edit matching.
@@ -154,22 +167,28 @@ def _build_position_map(original: str, normalized: str) -> list[int]:
                 orig_idx += 1
             continue
 
-        # Direct character match (possibly after substitution).
-        norm_of_orig = _normalize_text(orig_char)
-        if norm_of_orig == norm_char:
-            pos_map.append(orig_idx)
-            orig_idx += 1
-            norm_idx += 1
-            continue
-
-        # Whitespace collapse: normalized has single space, original has
-        # multiple spaces/tabs.
+        # Whitespace collapse: normalized has single space, original has one or
+        # more spaces/tabs. Checked before the direct-match step so that runs
+        # of whitespace are always consumed in full (a single space would pass
+        # the direct-match test below, leaving trailing spaces unadvanced).
         if norm_char == " " and orig_char in " \t":
             pos_map.append(orig_idx)
             orig_idx += 1
             # skip remaining whitespace in original
             while orig_idx < orig_len and original[orig_idx] in " \t":
                 orig_idx += 1
+            norm_idx += 1
+            continue
+
+        # Direct character match (possibly after NFC + char substitution).
+        # Using _normalize_text(orig_char) would be O(n²) and would also
+        # incorrectly strip a lone space as "trailing whitespace", so we
+        # apply NFC and _CHAR_SUBS directly instead.
+        nfc_char = unicodedata.normalize("NFC", orig_char)
+        sub_char = _CHAR_SUBS.get(nfc_char, nfc_char)
+        if sub_char == norm_char:
+            pos_map.append(orig_idx)
+            orig_idx += 1
             norm_idx += 1
             continue
 
@@ -2438,7 +2457,12 @@ class Collection:
             old_text: Text to replace. Required for exact-match and
                 scoped-match modes.  Must appear exactly once (in the
                 file or in the line range).
-            new_text: Replacement text.
+            new_text: Replacement text. When using line-range mode with an
+                empty string (``""``), the selected lines are replaced with a
+                single blank line. To delete lines entirely, pass the literal
+                content of those lines as *old_text* (scoped-match mode) and
+                supply an empty *new_text*, which removes that text span
+                without inserting a blank line.
             if_match: Optional etag from a previous :meth:`read` call.
                 When provided, the edit is only performed if the current
                 file hash matches this value, preventing edits based on
@@ -2551,8 +2575,9 @@ class Collection:
         if old_text is not None:
             # Scoped match: search within the line range only.
             scope = "\n".join(lines[start_idx:end_idx])
+            context_desc = f"lines {line_start}-{line_end} of {path}"
             new_scope, match_type = self._match_and_replace(
-                scope, old_text, new_text, path
+                scope, old_text, new_text, path, context_desc=context_desc
             )
             lines[start_idx:end_idx] = new_scope.split("\n")
         else:
@@ -2586,12 +2611,23 @@ class Collection:
         old_text: str,
         new_text: str,
         path: str,
+        context_desc: str | None = None,
     ) -> tuple[str, str]:
         """Try exact match, then normalized match, then raise with diagnostics.
+
+        Args:
+            content: The text to search within (full file or a line-range scope).
+            old_text: Text to find and replace.
+            new_text: Replacement text.
+            path: Vault-relative file path, used in error messages.
+            context_desc: Optional human-readable context for error messages
+                (e.g. ``"lines 5-10 of notes/foo.md"``). When omitted, errors
+                refer to *path* directly.
 
         Returns:
             Tuple of (new_content, match_type).
         """
+        location = context_desc or path
         count = content.count(old_text)
 
         if count == 1:
@@ -2599,7 +2635,7 @@ class Collection:
 
         if count > 1:
             raise EditConflictError(
-                f"old_text appears {count} times in {path}; must appear exactly once"
+                f"old_text appears {count} times in {location}; must appear exactly once"
             )
 
         # count == 0: try normalized matching.
@@ -2620,13 +2656,13 @@ class Collection:
 
         if norm_count > 1:
             raise EditConflictError(
-                f"old_text appears {norm_count} times in {path} after "
+                f"old_text appears {norm_count} times in {location} after "
                 f"normalization; must appear exactly once"
             )
 
         # norm_count == 0: raise with diagnostics.
         diag = _find_closest_match(old_text, content)
-        raise EditConflictError(f"old_text not found in {path}", **diag)
+        raise EditConflictError(f"old_text not found in {location}", **diag)
 
     def delete(self, path: str, if_match: str | None = None) -> DeleteResult:
         """Delete a document or attachment.
