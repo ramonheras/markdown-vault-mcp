@@ -267,7 +267,7 @@ Two-layer model:
 |-----------|-----------|------|
 | `DocumentNotFoundError` | `edit()`, `delete()`, `rename()` | Document path does not exist on disk |
 | `ReadOnlyError` | `write()`, `edit()`, `delete()`, `rename()` | `read_only=True` |
-| `EditConflictError` | `edit()` | `old_text` not found or appears more than once |
+| `EditConflictError` | `edit()` | `old_text` not found or appears more than once. Includes optional diagnostic fields: `closest_match_line`, `first_diff_char`, `expected_snippet`, `found_snippet` |
 | `DocumentExistsError` | `rename()` | `new_path` already exists |
 | `ConcurrentModificationError` | `write()`, `edit()`, `delete()`, `rename()`, `write_attachment()` | `if_match` provided and current file hash does not match |
 | `ValueError` | `build_embeddings()` | No `embedding_provider` or `embeddings_path` configured |
@@ -505,6 +505,7 @@ class EditResult:
     """Result of an edit operation."""
     path: str
     replacements: int                 # always 1 (enforced by edit semantics)
+    match_type: str = "exact"         # "exact" or "normalized"
 
 @dataclass
 class DeleteResult:
@@ -786,8 +787,10 @@ class Collection:
     def write(self, path: str, content: str,
               frontmatter: dict | None = None,
               if_match: str | None = None) -> WriteResult: ...
-    def edit(self, path: str, old_text: str, new_text: str,
-             if_match: str | None = None) -> EditResult: ...
+    def edit(self, path: str, old_text: str | None = None,
+             new_text: str = "", if_match: str | None = None,
+             line_start: int | None = None,
+             line_end: int | None = None) -> EditResult: ...
     def delete(self, path: str,
                if_match: str | None = None) -> DeleteResult: ...
     def rename(self, old_path: str, new_path: str,
@@ -834,11 +837,21 @@ intermediate directories as needed (`mkdir -p` semantics). If `frontmatter` is
 provided, it is serialized as YAML front matter at the top of the file. Updates
 the FTS index and triggers `on_write`.
 
-**`edit()` behavior**: reads the file first, verifies `old_text` exists exactly
-once in the full file content (including frontmatter). Replaces it with
-`new_text`, writes back, updates index, triggers `on_write`. Raises
-`DocumentNotFoundError` if the file does not exist. Raises `EditConflictError`
-if `old_text` is not found or appears more than once.
+**`edit()` behavior**: supports three modes: (1) exact match — reads file,
+verifies `old_text` exists exactly once, replaces with `new_text`; (2) line-range
+— replaces lines `line_start..line_end` (1-based, inclusive) with `new_text`;
+(3) scoped match — searches for `old_text` within the specified line range only.
+
+When exact match fails (count == 0), a normalized comparison is attempted:
+Unicode NFC, en-dash/em-dash → hyphen, smart quotes → straight quotes,
+whitespace collapse within lines, trailing whitespace stripping. If exactly
+one normalized match is found, the original byte range is replaced and
+`match_type="normalized"` is returned. Raises `DocumentNotFoundError`
+if the file does not exist. Raises `EditConflictError` if `old_text` is
+not found (after both exact and normalized matching) or appears more than
+once. When both exact and normalized match fail, `EditConflictError`
+includes diagnostic fields: `closest_match_line`, `first_diff_char`,
+`expected_snippet`, `found_snippet`.
 
 **`delete()` behavior**: removes the file from disk, deletes FTS and embedding
 entries, triggers `on_write`. Raises `DocumentNotFoundError` if not found.
