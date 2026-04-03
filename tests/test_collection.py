@@ -1012,6 +1012,106 @@ class TestEdit:
         paths = [r.path for r in results]
         assert "vec_editable.md" in paths
 
+    def test_edit_line_range_replaces(
+        self, writable: Collection, vault_path: Path
+    ) -> None:
+        """edit() with line_start/line_end replaces the specified lines."""
+        writable.write("lines.md", "line1\nline2\nline3\nline4\n")
+        result = writable.edit(
+            "lines.md", new_text="replaced\n", line_start=2, line_end=3
+        )
+        assert result.replacements == 1
+        content = (vault_path / "lines.md").read_text()
+        assert content == "line1\nreplaced\nline4\n"
+
+    def test_edit_line_range_single_line(
+        self, writable: Collection, vault_path: Path
+    ) -> None:
+        """line_start == line_end replaces exactly one line."""
+        writable.write("lines.md", "line1\nline2\nline3\n")
+        writable.edit("lines.md", new_text="new2", line_start=2, line_end=2)
+        content = (vault_path / "lines.md").read_text()
+        assert content == "line1\nnew2\nline3\n"
+
+    def test_edit_line_range_out_of_bounds(self, writable: Collection) -> None:
+        """line_end beyond file length raises ValueError."""
+        writable.write("lines.md", "line1\nline2\n")
+        with pytest.raises(ValueError, match="out of range"):
+            writable.edit("lines.md", new_text="x", line_start=1, line_end=5)
+
+    def test_edit_line_range_inverted(self, writable: Collection) -> None:
+        """line_start > line_end raises ValueError."""
+        writable.write("lines.md", "line1\nline2\n")
+        with pytest.raises(ValueError, match=r"line_start.*line_end"):
+            writable.edit("lines.md", new_text="x", line_start=3, line_end=1)
+
+    def test_edit_line_range_only_one_provided(self, writable: Collection) -> None:
+        """Providing only line_start without line_end raises ValueError."""
+        with pytest.raises(ValueError, match=r"both.*line_start.*line_end"):
+            writable.edit("simple.md", new_text="x", line_start=1)
+
+    def test_edit_no_old_text_no_lines(self, writable: Collection) -> None:
+        """Neither old_text nor line range raises ValueError."""
+        with pytest.raises(ValueError, match=r"old_text.*line_start"):
+            writable.edit("simple.md", new_text="x")
+
+    def test_edit_line_range_zero_raises(self, writable: Collection) -> None:
+        """line_start < 1 raises ValueError (1-based)."""
+        with pytest.raises(ValueError, match=r"line_start.*>= 1"):
+            writable.edit("simple.md", new_text="x", line_start=0, line_end=1)
+
+    def test_edit_line_range_updates_index(self, writable: Collection) -> None:
+        """Line-range edit updates the FTS index."""
+        writable.write("lines.md", "# Old Title\n\nOld body.\n")
+        writable.edit(
+            "lines.md", new_text="# Xylophone Title\n", line_start=1, line_end=1
+        )
+        results = writable.search("xylophone", mode="keyword")
+        assert any(r.path == "lines.md" for r in results)
+
+    def test_edit_line_range_with_if_match(
+        self, writable: Collection, vault_path: Path
+    ) -> None:
+        """Line-range edit respects if_match etag."""
+        writable.write("lines.md", "line1\nline2\n")
+        read_result = writable.read("lines.md")
+        writable.edit(
+            "lines.md",
+            new_text="new1\n",
+            line_start=1,
+            line_end=1,
+            if_match=read_result.etag,
+        )
+        content = (vault_path / "lines.md").read_text()
+        assert content == "new1\nline2\n"
+
+    def test_edit_line_range_with_wrong_if_match(self, writable: Collection) -> None:
+        """Line-range edit rejects stale etag."""
+        writable.write("lines.md", "line1\nline2\n")
+        with pytest.raises(ConcurrentModificationError):
+            writable.edit(
+                "lines.md",
+                new_text="new",
+                line_start=1,
+                line_end=1,
+                if_match="stale_hash",
+            )
+
+    def test_edit_line_range_triggers_callback(self, vault_path: Path) -> None:
+        """Line-range edit fires the on_write callback."""
+        calls: list = []
+        col = _make_collection(
+            vault_path, read_only=False, on_write=lambda *args: calls.append(args)
+        )
+        col.build_index()
+        col.write("lines.md", "line1\nline2\n")
+        col.edit("lines.md", new_text="replaced\n", line_start=1, line_end=1)
+        col.close()
+        # write + edit = 2 callbacks
+        assert len(calls) == 2
+        _, _, operation = calls[1]
+        assert operation == "edit"
+
 
 class TestEditConflictDiagnostics:
     def test_error_has_diagnostic_fields(self) -> None:

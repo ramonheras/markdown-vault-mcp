@@ -2408,22 +2408,45 @@ class Collection:
         return result
 
     def edit(
-        self, path: str, old_text: str, new_text: str, if_match: str | None = None
+        self,
+        path: str,
+        old_text: str | None = None,
+        new_text: str = "",
+        if_match: str | None = None,
+        line_start: int | None = None,
+        line_end: int | None = None,
     ) -> EditResult:
         """Patch a section of a document.
 
-        Reads the file, verifies *old_text* exists exactly once in the
-        full file content (including frontmatter), replaces it with
-        *new_text*, and writes back.
+        Supports three modes:
+
+        - **Exact match** (``old_text`` only): verifies *old_text* exists
+          exactly once in the full file content (including frontmatter),
+          replaces it with *new_text*.
+        - **Line-range** (``line_start``/``line_end`` only): replaces the
+          specified line range with *new_text*.
+        - **Scoped match** (both): searches for *old_text* only within the
+          specified line range, allowing disambiguation of repeated text.
+
+        When exact match fails, a normalized comparison is attempted
+        (Unicode NFC, dash/quote normalization, whitespace collapsing).
+        If a unique normalized match is found, it is used and
+        ``match_type="normalized"`` is returned.
 
         Args:
             path: Relative document path.
-            old_text: Text to replace (must appear exactly once).
+            old_text: Text to replace. Required for exact-match and
+                scoped-match modes.  Must appear exactly once (in the
+                file or in the line range).
             new_text: Replacement text.
             if_match: Optional etag from a previous :meth:`read` call.
                 When provided, the edit is only performed if the current
                 file hash matches this value, preventing edits based on
                 stale content. Pass ``None`` (default) to skip the check.
+            line_start: First line to replace (1-based, inclusive).
+                Must be provided together with *line_end*.
+            line_end: Last line to replace (1-based, inclusive).
+                Must be provided together with *line_start*.
 
         Returns:
             :class:`~markdown_vault_mcp.types.EditResult`.
@@ -2435,11 +2458,26 @@ class Collection:
                 not match the current file hash.
             EditConflictError: If *old_text* is not found or appears
                 more than once.
+            ValueError: If parameter combination is invalid, or line
+                numbers are out of range.
         """
         self._check_writable()
 
-        if not old_text:
+        # --- Parameter validation ---
+        if old_text is not None and not old_text:
             raise ValueError("old_text must not be empty")
+        has_lines = line_start is not None or line_end is not None
+        if old_text is None and not has_lines:
+            raise ValueError("Must provide old_text, line_start/line_end, or both")
+        if (line_start is None) != (line_end is None):
+            raise ValueError("Must provide both line_start and line_end, not just one")
+        if line_start is not None and line_end is not None:
+            if line_start < 1:
+                raise ValueError("line_start must be >= 1 (lines are 1-based)")
+            if line_start > line_end:
+                raise ValueError(
+                    f"line_start ({line_start}) must be <= line_end ({line_end})"
+                )
 
         with self._write_lock:
             self._ensure_initialized()
@@ -2456,16 +2494,18 @@ class Collection:
                     )
 
             file_content = abs_path.read_text(encoding="utf-8")
-            count = file_content.count(old_text)
 
-            if count == 0:
-                raise EditConflictError(f"old_text not found in {path}")
-            if count > 1:
-                raise EditConflictError(
-                    f"old_text appears {count} times in {path}; must appear exactly once"
+            if has_lines:
+                assert line_start is not None and line_end is not None
+                new_content, match_type = self._edit_with_lines(
+                    file_content, old_text, new_text, line_start, line_end, path
+                )
+            else:
+                assert old_text is not None
+                new_content, match_type = self._edit_with_text(
+                    file_content, old_text, new_text, path
                 )
 
-            new_content = file_content.replace(old_text, new_text, 1)
             abs_path.write_text(new_content, encoding="utf-8")
 
             # Update FTS index.
@@ -2478,7 +2518,115 @@ class Collection:
         # Fire git callback in background thread.
         self._fire_write_callback(abs_path, new_content, "edit")
 
-        return EditResult(path=path, replacements=1)
+        return EditResult(path=path, replacements=1, match_type=match_type)
+
+    def _edit_with_lines(
+        self,
+        file_content: str,
+        old_text: str | None,
+        new_text: str,
+        line_start: int,
+        line_end: int,
+        path: str,
+    ) -> tuple[str, str]:
+        """Handle line-range and scoped-match edit modes.
+
+        Returns:
+            Tuple of (new_file_content, match_type).
+        """
+        lines = file_content.split("\n")
+        # The split produces an extra empty string after a trailing newline.
+        # Total addressable lines = len(lines) if last is non-empty, else
+        # len(lines) - 1 (the trailing empty element isn't a real line).
+        total_lines = len(lines) - 1 if lines and lines[-1] == "" else len(lines)
+        if line_end > total_lines:
+            raise ValueError(
+                f"line_end ({line_end}) out of range (file has {total_lines} lines)"
+            )
+
+        # Convert to 0-based indices for slicing.
+        start_idx = line_start - 1
+        end_idx = line_end  # exclusive for slice
+
+        if old_text is not None:
+            # Scoped match: search within the line range only.
+            scope = "\n".join(lines[start_idx:end_idx])
+            new_scope, match_type = self._match_and_replace(
+                scope, old_text, new_text, path
+            )
+            lines[start_idx:end_idx] = new_scope.split("\n")
+        else:
+            # Pure line-range replacement.
+            match_type = "exact"
+            # Reconstruct: new_text replaces lines, preserving structure.
+            # Strip trailing newline from new_text if present to avoid
+            # double-newline when rejoining.
+            replacement_lines = new_text.rstrip("\n").split("\n") if new_text else [""]
+            lines[start_idx:end_idx] = replacement_lines
+
+        return "\n".join(lines), match_type
+
+    def _edit_with_text(
+        self,
+        file_content: str,
+        old_text: str,
+        new_text: str,
+        path: str,
+    ) -> tuple[str, str]:
+        """Handle exact-match edit mode (with normalized fallback).
+
+        Returns:
+            Tuple of (new_file_content, match_type).
+        """
+        return self._match_and_replace(file_content, old_text, new_text, path)
+
+    def _match_and_replace(
+        self,
+        content: str,
+        old_text: str,
+        new_text: str,
+        path: str,
+    ) -> tuple[str, str]:
+        """Try exact match, then normalized match, then raise with diagnostics.
+
+        Returns:
+            Tuple of (new_content, match_type).
+        """
+        count = content.count(old_text)
+
+        if count == 1:
+            return content.replace(old_text, new_text, 1), "exact"
+
+        if count > 1:
+            raise EditConflictError(
+                f"old_text appears {count} times in {path}; must appear exactly once"
+            )
+
+        # count == 0: try normalized matching.
+        normalized_content = _normalize_text(content)
+        normalized_old = _normalize_text(old_text)
+        norm_count = normalized_content.count(normalized_old)
+
+        if norm_count == 1:
+            pos_map = _build_position_map(content, normalized_content)
+            norm_start = normalized_content.index(normalized_old)
+            norm_end = norm_start + len(normalized_old)
+            orig_start = pos_map[norm_start]
+            orig_end = (
+                pos_map[norm_end - 1] + 1 if norm_end <= len(pos_map) else len(content)
+            )
+            new_content = content[:orig_start] + new_text + content[orig_end:]
+            return new_content, "normalized"
+
+        if norm_count > 1:
+            raise EditConflictError(
+                f"old_text appears {norm_count} times in {path} after "
+                f"normalization; must appear exactly once"
+            )
+
+        # norm_count == 0: raise with diagnostics.
+        diag = _find_closest_match(old_text, content)
+        raise EditConflictError(f"old_text not found in {path}", **diag)
 
     def delete(self, path: str, if_match: str | None = None) -> DeleteResult:
         """Delete a document or attachment.
