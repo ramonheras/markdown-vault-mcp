@@ -295,7 +295,7 @@ markdown-vault-mcp reindex [--source-dir PATH] [--index-path PATH]
 | `search` | Hybrid full-text + semantic search with optional frontmatter filters |
 | `read` | Read a document or attachment by relative path |
 | `write` | Create or overwrite a document or attachment |
-| `edit` | Replace a unique text span in a document (notes only) |
+| `edit` | Replace text in a document — exact match, line-range, or scoped match with normalized fallback |
 | `delete` | Delete a document or attachment and its index entries |
 | `rename` | Rename/move a document or attachment, updating all index entries; pass `update_links=true` to also rewrite backlinks in other notes |
 | `list_documents` | List indexed documents; pass `include_attachments=true` to also list non-markdown files |
