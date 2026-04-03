@@ -1008,6 +1008,31 @@ class TestEdit:
         assert "vec_editable.md" in paths
 
 
+class TestEditConflictDiagnostics:
+    def test_error_has_diagnostic_fields(self) -> None:
+        """EditConflictError stores diagnostic fields."""
+        err = EditConflictError(
+            "old_text not found in test.md",
+            closest_match_line=10,
+            first_diff_char=42,
+            expected_snippet="—",
+            found_snippet="-",
+        )
+        assert err.closest_match_line == 10
+        assert err.first_diff_char == 42
+        assert err.expected_snippet == "—"
+        assert err.found_snippet == "-"
+        assert str(err) == "old_text not found in test.md"
+
+    def test_error_defaults_none(self) -> None:
+        """EditConflictError diagnostic fields default to None."""
+        err = EditConflictError("old_text not found in test.md")
+        assert err.closest_match_line is None
+        assert err.first_diff_char is None
+        assert err.expected_snippet is None
+        assert err.found_snippet is None
+
+
 class TestDelete:
     def test_delete_removes_file(self, writable: Collection, vault_path: Path) -> None:
         """delete() removes the file from disk."""
