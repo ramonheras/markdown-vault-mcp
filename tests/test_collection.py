@@ -920,6 +920,11 @@ class TestEdit:
         assert "Updated Document" in content
         assert "Simple Document" not in content
 
+    def test_edit_match_type_exact_default(self, writable: Collection) -> None:
+        """edit() returns match_type='exact' by default."""
+        result = writable.edit("simple.md", "Simple Document", "Updated Document")
+        assert result.match_type == "exact"
+
     def test_edit_empty_old_text_raises(self, writable: Collection) -> None:
         """edit() raises ValueError when old_text is empty."""
         with pytest.raises(ValueError, match="old_text must not be empty"):

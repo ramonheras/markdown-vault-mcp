@@ -107,6 +107,7 @@ class EditResult:
 
     path: str
     replacements: int
+    match_type: str = "exact"
 
 
 @dataclass
