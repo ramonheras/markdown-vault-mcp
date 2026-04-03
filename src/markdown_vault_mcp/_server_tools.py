@@ -16,8 +16,10 @@ from urllib.parse import urlparse, urlunparse
 
 from fastmcp import FastMCP
 from fastmcp.dependencies import Depends
+from fastmcp.exceptions import ToolError
 
 from markdown_vault_mcp.collection import Collection
+from markdown_vault_mcp.exceptions import EditConflictError
 
 from ._icons import _TOOL_ICONS
 from ._server_deps import get_collection
@@ -858,38 +860,80 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
     )
     async def edit(
         path: str,
-        old_text: str,
-        new_text: str,
+        old_text: str | None = None,
+        new_text: str = "",
         if_match: str | None = None,
+        line_start: int | None = None,
+        line_end: int | None = None,
         collection: Collection = Depends(get_collection),
     ) -> dict[str, Any]:
         """Make a targeted text replacement in an existing .md note (not supported for attachments).
 
-        Always call 'read' first to get the exact current text, then pass
-        a portion of it as old_text. The match is exact and must appear
-        only once — if not found the call fails (text changed or wrong);
-        if found multiple times the call fails (use a longer, unique
-        excerpt). Frontmatter can be edited: old_text may span the YAML
-        block. The search index is updated immediately; do not call
-        'reindex' afterward.
+        Three edit modes:
+        - **Exact match** (old_text only): pass a portion of the file as
+          old_text — must appear exactly once. Frontmatter can be edited.
+        - **Line-range** (line_start + line_end, no old_text): replace the
+          specified lines with new_text. Lines are 1-based (matching
+          'read' output). Recommended: pass if_match for safety.
+        - **Scoped match** (old_text + line_start/line_end): search for
+          old_text within the line range only — useful when old_text
+          appears multiple times in the file.
+
+        When exact match fails, a normalized comparison is attempted
+        (Unicode NFC, dash/quote normalization, whitespace collapsing).
+        If a unique normalized match is found, it is used and
+        match_type='normalized' is returned.
+
+        Always call 'read' first to get the current text and line numbers.
+        The search index is updated immediately; do not call 'reindex'.
 
         Args:
             path: Relative path to the document.
-            old_text: Exact text to replace. Must appear exactly once in
-                the document (including frontmatter). Get this via 'read'.
+            old_text: Text to replace. Must appear exactly once in the
+                document or line range. Get this via 'read'. Optional
+                when using line-range mode.
             new_text: Replacement text. May be longer or shorter.
             if_match: Optional etag obtained from a previous 'read' call.
                 When provided, the edit only proceeds if the file has not
                 been modified since that read (optimistic concurrency).
-                Omit to edit unconditionally.
+            line_start: First line to replace (1-based, inclusive).
+                Must be provided together with line_end.
+            line_end: Last line to replace (1-based, inclusive).
+                Must be provided together with line_start.
 
         Returns:
-            Dict with path (str) and replacements (int, always 1).
+            - **path** (str): path of the edited document.
+            - **replacements** (int): always 1.
+            - **match_type** (str): ``'exact'`` or ``'normalized'``.
+
+        Raises:
+            ValueError: If parameter combination is invalid, or line
+                numbers are out of range.
+            EditConflictError: If old_text is not found or appears more
+                than once.
         """
-        result = await asyncio.to_thread(
-            collection.edit, path, old_text, new_text, if_match=if_match
-        )
-        return asdict(result)
+        try:
+            result = await asyncio.to_thread(
+                collection.edit,
+                path,
+                old_text=old_text,
+                new_text=new_text,
+                if_match=if_match,
+                line_start=line_start,
+                line_end=line_end,
+            )
+            return asdict(result)
+        except EditConflictError as exc:
+            parts = [str(exc)]
+            if exc.closest_match_line is not None:
+                parts.append(f"closest_match_line: {exc.closest_match_line}")
+            if exc.first_diff_char is not None:
+                parts.append(f"first_diff_at_char: {exc.first_diff_char}")
+            if exc.expected_snippet is not None:
+                parts.append(f"expected: {exc.expected_snippet!r}")
+            if exc.found_snippet is not None:
+                parts.append(f"found: {exc.found_snippet!r}")
+            raise ToolError("\n".join(parts)) from exc
 
     @mcp.tool(
         tags={"write"},

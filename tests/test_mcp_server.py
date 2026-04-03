@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 from fastmcp import Client
@@ -25,6 +25,8 @@ from markdown_vault_mcp.mcp_server import (
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    import mcp.types as mcp_types
 
 
 def _parse_tool_data(result: Any) -> Any:
@@ -544,6 +546,69 @@ class TestEditTool:
                 {"path": "simple.md", "old_text": "missing text", "new_text": "b"},
             )
         assert result.isError is True
+
+    @pytest.mark.usefixtures("_mcp_env_writable")
+    async def test_edit_line_range(self) -> None:
+        """MCP edit tool accepts line_start/line_end."""
+        server = create_server()
+        async with Client(server) as client:
+            await client.call_tool(
+                "write",
+                {"path": "lines.md", "content": "line1\nline2\nline3\n"},
+            )
+            result = await client.call_tool(
+                "edit",
+                {
+                    "path": "lines.md",
+                    "new_text": "replaced\n",
+                    "line_start": 2,
+                    "line_end": 2,
+                },
+            )
+        data = result.data
+        assert data["path"] == "lines.md"
+        assert data["replacements"] == 1
+
+    @pytest.mark.usefixtures("_mcp_env_writable")
+    async def test_edit_normalized_match(self) -> None:
+        """MCP edit response includes match_type."""
+        server = create_server()
+        async with Client(server) as client:
+            await client.call_tool(
+                "write",
+                {"path": "norm.md", "content": "hello \u2014 world\n"},
+            )
+            result = await client.call_tool(
+                "edit",
+                {
+                    "path": "norm.md",
+                    "old_text": "hello - world",
+                    "new_text": "goodbye",
+                },
+            )
+        data = result.data
+        assert data["match_type"] == "normalized"
+
+    @pytest.mark.usefixtures("_mcp_env_writable")
+    async def test_edit_diagnostic_error(self) -> None:
+        """MCP edit error includes diagnostic info."""
+        server = create_server()
+        async with Client(server) as client:
+            await client.call_tool(
+                "write",
+                {"path": "diag.md", "content": "the quick brown fox\n"},
+            )
+            result = await client.call_tool_mcp(
+                "edit",
+                {
+                    "path": "diag.md",
+                    "old_text": "the quick brown fax",
+                    "new_text": "x",
+                },
+            )
+        assert result.isError is True
+        error_text = cast("mcp_types.TextContent", result.content[0]).text
+        assert "closest_match_line" in error_text or "line 1" in error_text.lower()
 
 
 class TestDeleteTool:
