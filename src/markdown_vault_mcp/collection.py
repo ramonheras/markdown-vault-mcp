@@ -130,8 +130,11 @@ def _build_position_map(original: str, normalized: str) -> list[int]:
         normalized: The result of ``_normalize_text(original)``.
 
     Returns:
-        A list where ``pos_map[i]`` is the index in *original* that
-        corresponds to ``normalized[i]``.
+        A list of *len(normalized) + 1* entries where ``pos_map[i]`` is the
+        index in *original* corresponding to ``normalized[i]``, and the final
+        sentinel ``pos_map[len(normalized)]`` equals ``len(original)``.  The
+        sentinel lets callers compute the original end-position of a match
+        as ``pos_map[norm_end]`` without special-casing the last character.
     """
     pos_map: list[int] = []
     orig_idx = 0
@@ -209,6 +212,9 @@ def _build_position_map(original: str, normalized: str) -> list[int]:
             orig_idx += 1
             norm_idx += 1
 
+    # Sentinel: pos_map[norm_len] = orig_len so callers can compute
+    # orig_end = pos_map[norm_end] for any norm_end including norm_len.
+    pos_map.append(orig_len)
     return pos_map
 
 
@@ -2600,6 +2606,9 @@ class Collection:
     ) -> tuple[str, str]:
         """Handle exact-match edit mode (with normalized fallback).
 
+        Thin wrapper so ``edit()`` has a symmetric call site for both modes
+        (line-range via ``_edit_with_lines``, text via this method).
+
         Returns:
             Tuple of (new_file_content, match_type).
         """
@@ -2648,9 +2657,7 @@ class Collection:
             norm_start = normalized_content.index(normalized_old)
             norm_end = norm_start + len(normalized_old)
             orig_start = pos_map[norm_start]
-            orig_end = (
-                pos_map[norm_end - 1] + 1 if norm_end <= len(pos_map) else len(content)
-            )
+            orig_end = pos_map[norm_end]
             new_content = content[:orig_start] + new_text + content[orig_end:]
             return new_content, "normalized"
 

@@ -1235,6 +1235,29 @@ class TestEdit:
         # Smart quotes in intro/outro must be preserved.
         assert content == "\u201cintro\u201d\ngoodbye\n\u201coutro\u201d\n"
 
+    def test_edit_normalized_decomposed_unicode_replacement(
+        self, writable: Collection, vault_path: Path
+    ) -> None:
+        """Normalized match correctly replaces decomposed Unicode (multi-char → one).
+
+        When a file contains a decomposed combining sequence (e.g. 'e' +
+        U+0301) and old_text contains the composed form (é, U+00E9), the
+        replacement must consume the *full* original span including the
+        combining accent, not just the base character.
+        """
+        # File has decomposed 'é' (e + combining acute) at the end of a word.
+        writable.write("decomposed.md", "caf\u0065\u0301 au lait\n")
+        result = writable.edit(
+            "decomposed.md",
+            old_text="caf\u00e9",  # composed form
+            new_text="tea",
+        )
+        assert result.match_type == "normalized"
+        content = (vault_path / "decomposed.md").read_text()
+        # The combining accent must NOT appear in the output.
+        assert content == "tea au lait\n"
+        assert "\u0301" not in content
+
     def test_edit_normalized_within_line_range(
         self, writable: Collection, vault_path: Path
     ) -> None:
@@ -1347,55 +1370,65 @@ class TestNormalizeText:
 
 class TestBuildPositionMap:
     def test_identity_mapping(self) -> None:
-        """When text is already normalized, positions map 1:1."""
+        """When text is already normalized, positions map 1:1 plus sentinel."""
         text = "hello"
         pos_map = _build_position_map(text, text)
-        assert pos_map == [0, 1, 2, 3, 4]
+        # 5 chars + 1 sentinel = 6 entries; sentinel equals len(original)
+        assert pos_map == [0, 1, 2, 3, 4, 5]
 
     def test_dash_mapping(self) -> None:
-        """Em-dash (1 char) maps to hyphen (1 char)."""
+        """Em-dash (1 char) maps to hyphen (1 char), sentinel = orig_len."""
         original = "a\u2014b"
         normalized = _normalize_text(original)
         pos_map = _build_position_map(original, normalized)
-        # normalized is "a-b", length 3
-        assert len(pos_map) == 3
+        # normalized is "a-b", length 3 → 4 entries (3 + sentinel)
+        assert len(pos_map) == 4
         assert pos_map[0] == 0  # 'a' -> 'a'
         assert pos_map[1] == 1  # '—' -> '-'
         assert pos_map[2] == 2  # 'b' -> 'b'
+        assert pos_map[3] == 3  # sentinel = orig_len
 
     def test_whitespace_collapse_mapping(self) -> None:
         """Multiple spaces collapse; map points to first original space."""
         original = "a   b"
         normalized = _normalize_text(original)
         pos_map = _build_position_map(original, normalized)
-        # normalized is "a b", length 3
-        assert len(pos_map) == 3
+        # normalized is "a b", length 3 → 4 entries (3 + sentinel)
+        assert len(pos_map) == 4
         assert pos_map[0] == 0  # 'a'
         assert pos_map[1] == 1  # first space of '   '
         assert pos_map[2] == 4  # 'b'
+        assert pos_map[3] == 5  # sentinel = orig_len
 
     def test_trailing_ws_mapping(self) -> None:
         """Trailing whitespace stripped; mapping covers remaining chars."""
         original = "ab  "
         normalized = _normalize_text(original)
         pos_map = _build_position_map(original, normalized)
-        # normalized is "ab", length 2
-        assert len(pos_map) == 2
+        # normalized is "ab", length 2 → 3 entries (2 + sentinel)
+        assert len(pos_map) == 3
         assert pos_map[0] == 0
         assert pos_map[1] == 1
+        assert pos_map[2] == 4  # sentinel = orig_len
 
     def test_nfc_multichar_mapping(self) -> None:
-        """NFC decomposed sequence (2 chars) maps to original start index."""
+        """NFC decomposed sequence (2 chars) maps to original start index.
+
+        Sentinel must equal orig_len so orig_end is computed correctly
+        when the NFC sequence is the last character.
+        """
         # 'e' + combining acute accent (U+0301) → 'é' (U+00E9) after NFC.
         original = "caf\u0065\u0301"  # 5 chars: c a f e ́
         normalized = _normalize_text(original)  # "café" — 4 chars
         assert normalized == "caf\u00e9"
         pos_map = _build_position_map(original, normalized)
-        assert len(pos_map) == 4
+        # 4 normalized chars + 1 sentinel = 5 entries
+        assert len(pos_map) == 5
         assert pos_map[0] == 0  # 'c'
         assert pos_map[1] == 1  # 'a'
         assert pos_map[2] == 2  # 'f'
-        assert pos_map[3] == 3  # 'e' (start of the 2-char decomposed sequence)
+        assert pos_map[3] == 3  # 'e' (start of 2-char decomposed sequence)
+        assert pos_map[4] == 5  # sentinel = orig_len (past the combining accent)
 
 
 class TestFindClosestMatch:
