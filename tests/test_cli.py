@@ -37,7 +37,7 @@ class TestBuildParser:
         parser = _build_parser()
         args = parser.parse_args(["serve", "--transport", "http"])
         assert args.transport == "http"
-        assert args.host == "0.0.0.0"
+        assert args.host == "127.0.0.1"
         assert args.port == 8000
         assert args.path is None
 

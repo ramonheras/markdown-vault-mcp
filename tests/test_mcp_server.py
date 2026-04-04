@@ -2656,14 +2656,18 @@ class TestAuthModeSelection:
         monkeypatch: pytest.MonkeyPatch,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
-        """Without any auth vars, server runs unauthenticated."""
+        """Without any auth vars, server runs unauthenticated and logs at WARNING."""
         monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", str(vault_path))
 
-        with caplog.at_level(logging.INFO):
+        with caplog.at_level(logging.WARNING):
             server = create_server()
 
         assert server.auth is None
         assert "unauthenticated" in caplog.text
+        warning_records = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert any("unauthenticated" in r.message for r in warning_records), (
+            "No-auth message must be logged at WARNING level, not INFO"
+        )
 
 
 class TestAuthDebugLogging:
