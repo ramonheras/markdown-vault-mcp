@@ -42,4 +42,4 @@ EXPOSE 8000
 VOLUME ["/data/vault", "/data/state"]
 
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
-CMD ["markdown-vault-mcp", "serve", "--transport", "http"]
+CMD ["markdown-vault-mcp", "serve", "--transport", "http", "--host", "0.0.0.0"]
