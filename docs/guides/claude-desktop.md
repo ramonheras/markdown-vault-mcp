@@ -43,24 +43,45 @@ Edit your Claude Desktop configuration file:
 
     `~/.config/Claude/claude_desktop_config.json`
 
-```json
-{
-  "mcpServers": {
-    "my-vault": {
-      "command": "markdown-vault-mcp",
-      "args": ["serve"],
-      "env": {
-        "MARKDOWN_VAULT_MCP_SOURCE_DIR": "/path/to/your/ObsidianVault",
-        "MARKDOWN_VAULT_MCP_SERVER_NAME": "my-vault",
-        "MARKDOWN_VAULT_MCP_EXCLUDE": ".obsidian/**,.trash/**",
-        "MARKDOWN_VAULT_MCP_INDEX_PATH": "/path/to/store/index.db"
+=== "macOS / Linux"
+
+    ```json
+    {
+      "mcpServers": {
+        "my-vault": {
+          "command": "markdown-vault-mcp",
+          "args": ["serve"],
+          "env": {
+            "MARKDOWN_VAULT_MCP_SOURCE_DIR": "/path/to/your/ObsidianVault",
+            "MARKDOWN_VAULT_MCP_SERVER_NAME": "my-vault",
+            "MARKDOWN_VAULT_MCP_EXCLUDE": ".obsidian/**,.trash/**",
+            "MARKDOWN_VAULT_MCP_INDEX_PATH": "/path/to/store/index.db"
+          }
+        }
       }
     }
-  }
-}
-```
+    ```
 
-Replace `/path/to/your/ObsidianVault` with the actual path to your vault.
+=== "Windows"
+
+    ```json
+    {
+      "mcpServers": {
+        "my-vault": {
+          "command": "markdown-vault-mcp",
+          "args": ["serve"],
+          "env": {
+            "MARKDOWN_VAULT_MCP_SOURCE_DIR": "C:\\Users\\YourName\\Documents\\ObsidianVault",
+            "MARKDOWN_VAULT_MCP_SERVER_NAME": "my-vault",
+            "MARKDOWN_VAULT_MCP_EXCLUDE": ".obsidian/**,.trash/**",
+            "MARKDOWN_VAULT_MCP_INDEX_PATH": "C:\\Users\\YourName\\vault_index.db"
+          }
+        }
+      }
+    }
+    ```
+
+Replace the paths with the actual locations on your machine.
 
 !!! tip "Persist the index"
     Setting `MARKDOWN_VAULT_MCP_INDEX_PATH` stores the FTS5 index on disk. Without it, the index is built in memory on every startup. With it, only changed files are reindexed.
@@ -154,57 +175,117 @@ You should see a commit from `markdown-vault-mcp`. Delete the test note when don
 
 **Goal:** Enable embedding-based search alongside keyword search for better recall on conceptual queries.
 
-**Prerequisites:** Step 1 complete. One of: FastEmbed installed (`pip install markdown-vault-mcp[embeddings]`), [Ollama](https://ollama.com) running locally, or an OpenAI API key (see [Embeddings guide](embeddings.md) for details).
+**Prerequisites:** Step 1 complete. Choose an embedding backend:
 
-This example uses Ollama — the easiest option for local, private embeddings.
+- **FastEmbed** (recommended for Windows and offline use) — local inference, no external service
+- **Ollama** (macOS/Linux) — local inference via [Ollama](https://ollama.com)
+- **OpenAI** — cloud-based, requires API key (see [Embeddings guide](embeddings.md))
 
-### Install and start Ollama
+### Install and configure
 
-```bash
-# Install Ollama (macOS)
-brew install ollama
+=== "FastEmbed (Windows / offline)"
 
-# Pull the embedding model
-ollama pull nomic-embed-text
+    Install the embeddings extra:
 
-# Ollama runs automatically after install; verify:
-curl http://localhost:11434/api/tags
-```
+    ```powershell
+    pip install "markdown-vault-mcp[embeddings]"
+    # or:
+    uv tool install "markdown-vault-mcp[embeddings]"
+    ```
 
-### Update the configuration
+    Update your `claude_desktop_config.json`:
 
-Add the highlighted lines:
-
-```json hl_lines="9-12"
-{
-  "mcpServers": {
-    "my-vault": {
-      "command": "markdown-vault-mcp",
-      "args": ["serve"],
-      "env": {
-        "MARKDOWN_VAULT_MCP_SOURCE_DIR": "/path/to/your/ObsidianVault",
-        "MARKDOWN_VAULT_MCP_SERVER_NAME": "my-vault",
-        "MARKDOWN_VAULT_MCP_EMBEDDINGS_PATH": "/path/to/store/embeddings",
-        "EMBEDDING_PROVIDER": "ollama",
-        "OLLAMA_HOST": "http://localhost:11434",
-        "MARKDOWN_VAULT_MCP_OLLAMA_MODEL": "nomic-embed-text",
-        "MARKDOWN_VAULT_MCP_EXCLUDE": ".obsidian/**,.trash/**",
-        "MARKDOWN_VAULT_MCP_INDEX_PATH": "/path/to/store/index.db"
+    ```json hl_lines="9-13"
+    {
+      "mcpServers": {
+        "my-vault": {
+          "command": "markdown-vault-mcp",
+          "args": ["serve"],
+          "env": {
+            "MARKDOWN_VAULT_MCP_SOURCE_DIR": "C:\\Users\\YourName\\Documents\\ObsidianVault",
+            "MARKDOWN_VAULT_MCP_SERVER_NAME": "my-vault",
+            "MARKDOWN_VAULT_MCP_EMBEDDINGS_PATH": "C:\\Users\\YourName\\vault_embeddings",
+            "EMBEDDING_PROVIDER": "fastembed",
+            "MARKDOWN_VAULT_MCP_FASTEMBED_MODEL": "BAAI/bge-small-en-v1.5",
+            "MARKDOWN_VAULT_MCP_FASTEMBED_CACHE_DIR": "C:\\Users\\YourName\\fastembed_cache",
+            "MARKDOWN_VAULT_MCP_INDEX_PATH": "C:\\Users\\YourName\\vault_index.db",
+            "MARKDOWN_VAULT_MCP_EXCLUDE": ".obsidian/**,.trash/**"
+          }
+        }
       }
     }
-  }
-}
-```
+    ```
 
-**What these do:**
+=== "Ollama (macOS / Linux)"
+
+    Install and start Ollama:
+
+    ```bash
+    brew install ollama        # macOS
+    ollama pull nomic-embed-text
+    ```
+
+    Update your config:
+
+    ```json hl_lines="9-12"
+    {
+      "mcpServers": {
+        "my-vault": {
+          "command": "markdown-vault-mcp",
+          "args": ["serve"],
+          "env": {
+            "MARKDOWN_VAULT_MCP_SOURCE_DIR": "/path/to/your/ObsidianVault",
+            "MARKDOWN_VAULT_MCP_SERVER_NAME": "my-vault",
+            "MARKDOWN_VAULT_MCP_EMBEDDINGS_PATH": "/path/to/store/embeddings",
+            "EMBEDDING_PROVIDER": "ollama",
+            "OLLAMA_HOST": "http://localhost:11434",
+            "MARKDOWN_VAULT_MCP_OLLAMA_MODEL": "nomic-embed-text",
+            "MARKDOWN_VAULT_MCP_EXCLUDE": ".obsidian/**,.trash/**",
+            "MARKDOWN_VAULT_MCP_INDEX_PATH": "/path/to/store/index.db"
+          }
+        }
+      }
+    }
+    ```
+
+**Key env vars:**
 
 - `EMBEDDINGS_PATH` — where to persist embedding vectors on disk (required to enable semantic search)
-- `EMBEDDING_PROVIDER=ollama` — use Ollama for embeddings (auto-detected if omitted, but explicit is clearer)
-- `OLLAMA_HOST` — Ollama server URL (default `http://localhost:11434`)
-- `OLLAMA_MODEL` — embedding model (default `nomic-embed-text`)
+- `EMBEDDING_PROVIDER` — `fastembed`, `ollama`, or `openai`
+- `FASTEMBED_MODEL` / `OLLAMA_MODEL` — which model to use
 
-!!! note "First startup is slower"
-    The first startup with embeddings builds vectors for every document. Subsequent starts only process changed files.
+### Pre-build embeddings before first launch
+
+For large vaults, building embeddings on first startup can take several minutes — long enough for Claude Desktop to time out the connection. Pre-build from the command line instead:
+
+=== "macOS / Linux"
+
+    ```bash
+    export MARKDOWN_VAULT_MCP_SOURCE_DIR="/path/to/your/ObsidianVault"
+    export MARKDOWN_VAULT_MCP_INDEX_PATH="/path/to/store/index.db"
+    export MARKDOWN_VAULT_MCP_EMBEDDINGS_PATH="/path/to/store/embeddings"
+    export EMBEDDING_PROVIDER="ollama"
+
+    markdown-vault-mcp reindex
+    ```
+
+=== "Windows (PowerShell)"
+
+    ```powershell
+    $env:MARKDOWN_VAULT_MCP_SOURCE_DIR = "C:\Users\YourName\Documents\ObsidianVault"
+    $env:MARKDOWN_VAULT_MCP_INDEX_PATH = "C:\Users\YourName\vault_index.db"
+    $env:MARKDOWN_VAULT_MCP_EMBEDDINGS_PATH = "C:\Users\YourName\vault_embeddings"
+    $env:EMBEDDING_PROVIDER = "fastembed"
+    $env:MARKDOWN_VAULT_MCP_FASTEMBED_MODEL = "BAAI/bge-small-en-v1.5"
+    $env:MARKDOWN_VAULT_MCP_FASTEMBED_CACHE_DIR = "C:\Users\YourName\fastembed_cache"
+
+    markdown-vault-mcp reindex
+    ```
+
+`reindex` builds (or updates) both the FTS index and the embedding vectors. Once complete, Claude Desktop will load the pre-built index on startup without needing to re-embed anything.
+
+!!! note "Subsequent startups are fast"
+    After the initial build, only new or changed files are reindexed. You can run `reindex` again any time to catch up if you edited files outside Claude.
 
 ### Restart and verify
 

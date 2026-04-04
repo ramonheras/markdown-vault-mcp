@@ -144,6 +144,12 @@ def _cmd_index(args: argparse.Namespace) -> None:
         stats.chunks_indexed,
     )
     print(f"Indexed {stats.documents_indexed} documents, {stats.chunks_indexed} chunks")
+    try:
+        n = collection.build_embeddings(force=args.force)
+        logger.info("Embedded %d chunks", n)
+        print(f"Embedded {n} chunks")
+    except ValueError:
+        pass  # embeddings not configured
 
 
 def _cmd_search(args: argparse.Namespace) -> None:
@@ -188,6 +194,12 @@ def _cmd_reindex(args: argparse.Namespace) -> None:
         f"Reindex: {result.added} added, {result.modified} modified, "
         f"{result.deleted} deleted, {result.unchanged} unchanged"
     )
+    try:
+        n = collection.build_embeddings(force=True)
+        logger.info("Embedded %d chunks", n)
+        print(f"Embedded {n} chunks")
+    except ValueError:
+        pass  # embeddings not configured
 
 
 def _build_parser() -> argparse.ArgumentParser:
