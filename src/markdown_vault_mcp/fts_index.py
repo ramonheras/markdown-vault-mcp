@@ -625,6 +625,9 @@ class FTSIndex:
             LIMIT ?
         """
 
+        if not query:
+            return []
+
         params: list[object] = [query, *folder_params, *tag_params, limit]
         logger.debug(
             "FTS search: query=%r folder=%r filters=%r limit=%d",
@@ -633,7 +636,19 @@ class FTSIndex:
             filters,
             limit,
         )
-        cur = self._conn.execute(sql, params)
+        try:
+            cur = self._conn.execute(sql, params)
+        except sqlite3.OperationalError as exc:
+            msg = str(exc).lower()
+            if (
+                "fts5" in msg
+                or "syntax error" in msg
+                or "no such column" in msg
+                or "unterminated" in msg
+            ):
+                logger.debug("FTS search: malformed query %r — %s", query, exc)
+                return []
+            raise
         rows = cur.fetchall()
         logger.debug("FTS search: %d results for query=%r", len(rows), query)
 

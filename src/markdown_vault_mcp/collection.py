@@ -17,6 +17,7 @@ import queue
 import re
 import shutil
 import sqlite3
+import tempfile
 import threading
 import unicodedata
 from collections import defaultdict
@@ -2349,7 +2350,18 @@ class Collection:
                     )
             created = not abs_path.is_file()
             abs_path.parent.mkdir(parents=True, exist_ok=True)
-            abs_path.write_bytes(content)
+            with tempfile.NamedTemporaryFile(
+                dir=abs_path.parent, mode="wb", suffix=".tmp", delete=False
+            ) as tmp:
+                tmp.write(content)
+                tmp_name = tmp.name
+            if abs_path.is_file():
+                shutil.copymode(abs_path, tmp_name)
+            try:
+                Path(tmp_name).replace(abs_path)
+            except Exception:
+                Path(tmp_name).unlink(missing_ok=True)
+                raise
             result = WriteResult(path=path, created=created)
 
         self._fire_write_callback(abs_path, "", "write")
@@ -2416,7 +2428,22 @@ class Collection:
             else:
                 file_content = content
 
-            abs_path.write_text(file_content, encoding="utf-8")
+            with tempfile.NamedTemporaryFile(
+                dir=abs_path.parent,
+                mode="w",
+                encoding="utf-8",
+                suffix=".tmp",
+                delete=False,
+            ) as tmp:
+                tmp.write(file_content)
+                tmp_name = tmp.name
+            if abs_path.is_file():
+                shutil.copymode(abs_path, tmp_name)
+            try:
+                Path(tmp_name).replace(abs_path)
+            except Exception:
+                Path(tmp_name).unlink(missing_ok=True)
+                raise
 
             # Update FTS index.
             note = parse_note(abs_path, self._source_dir, self._chunk_strategy)
@@ -2536,7 +2563,21 @@ class Collection:
                     file_content, old_text, new_text, path
                 )
 
-            abs_path.write_text(new_content, encoding="utf-8")
+            with tempfile.NamedTemporaryFile(
+                dir=abs_path.parent,
+                mode="w",
+                encoding="utf-8",
+                suffix=".tmp",
+                delete=False,
+            ) as tmp:
+                tmp.write(new_content)
+                tmp_name = tmp.name
+            shutil.copymode(abs_path, tmp_name)
+            try:
+                Path(tmp_name).replace(abs_path)
+            except Exception:
+                Path(tmp_name).unlink(missing_ok=True)
+                raise
 
             # Update FTS index.
             note = parse_note(abs_path, self._source_dir, self._chunk_strategy)
@@ -2805,7 +2846,21 @@ class Collection:
                         row["raw_target"],
                         new_raw,
                     )
-                source_abs.write_text(content, encoding="utf-8")
+                with tempfile.NamedTemporaryFile(
+                    dir=source_abs.parent,
+                    mode="w",
+                    encoding="utf-8",
+                    suffix=".tmp",
+                    delete=False,
+                ) as tmp:
+                    tmp.write(content)
+                    tmp_name = tmp.name
+                shutil.copymode(source_abs, tmp_name)
+                try:
+                    Path(tmp_name).replace(source_abs)
+                except Exception:
+                    Path(tmp_name).unlink(missing_ok=True)
+                    raise
                 updated_note = parse_note(
                     source_abs, self._source_dir, self._chunk_strategy
                 )

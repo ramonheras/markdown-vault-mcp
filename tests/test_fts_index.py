@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import datetime
 import json
+import sqlite3
 from typing import TYPE_CHECKING
+from unittest.mock import patch
 
 import pytest
 
@@ -290,6 +292,78 @@ class TestSearch:
         results = idx.search("story", filters={"cluster": "fiction", "genre": "horror"})
         assert len(results) == 1
         assert results[0].path == "b.md"
+
+    def test_search_empty_query_returns_empty_results(self) -> None:
+        """search() returns an empty list for an empty query string (no exception)."""
+        idx = FTSIndex(":memory:")
+        idx.upsert_note(
+            make_note(
+                "a.md",
+                chunks=[
+                    Chunk(
+                        heading=None,
+                        heading_level=0,
+                        content="hello world",
+                        start_line=0,
+                    )
+                ],
+            )
+        )
+        results = idx.search("")
+        assert results == []
+
+    def test_search_malformed_fts5_syntax_returns_empty_results(self) -> None:
+        """search() returns an empty list for malformed FTS5 syntax (no exception)."""
+        idx = FTSIndex(":memory:")
+        idx.upsert_note(
+            make_note(
+                "a.md",
+                chunks=[
+                    Chunk(
+                        heading=None,
+                        heading_level=0,
+                        content="hello world",
+                        start_line=0,
+                    )
+                ],
+            )
+        )
+        # Unclosed quote is invalid FTS5 syntax
+        results = idx.search('"unclosed quote')
+        assert results == []
+
+    def test_search_invalid_fts5_column_returns_empty_results(self) -> None:
+        """search() returns an empty list for an invalid FTS5 column reference."""
+        idx = FTSIndex(":memory:")
+        idx.upsert_note(
+            make_note(
+                "a.md",
+                chunks=[
+                    Chunk(
+                        heading=None,
+                        heading_level=0,
+                        content="hello world",
+                        start_line=0,
+                    )
+                ],
+            )
+        )
+        # FTS5 column filters for non-existent columns raise OperationalError
+        results = idx.search("nonexistent_column:value")
+        assert results == []
+
+    def test_search_non_fts5_operational_error_propagates(self) -> None:
+        """Non-FTS5 OperationalError (e.g. DB lock) must propagate, not return []."""
+        from unittest.mock import MagicMock
+
+        idx = FTSIndex(":memory:")
+        # Replace the real connection with a mock that raises a non-FTS5 DB error.
+        mock_conn = MagicMock()
+        mock_conn.execute.side_effect = sqlite3.OperationalError("database is locked")
+        idx._conn = mock_conn
+
+        with pytest.raises(sqlite3.OperationalError, match="database is locked"):
+            idx.search("hello")
 
 
 class TestUpsert:
@@ -592,7 +666,7 @@ class TestWALMode:
     ) -> None:
         """A warning is logged when WAL mode cannot be enabled."""
         import logging
-        from unittest.mock import MagicMock, patch
+        from unittest.mock import MagicMock
 
         from markdown_vault_mcp.fts_index import _open_connection
 

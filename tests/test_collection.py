@@ -5,6 +5,7 @@ from __future__ import annotations
 import concurrent.futures
 import json
 import logging
+from pathlib import Path
 from typing import TYPE_CHECKING
 from unittest.mock import patch
 
@@ -37,8 +38,6 @@ from markdown_vault_mcp.types import (
 )
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from .conftest import MockEmbeddingProvider
 
 
@@ -1782,6 +1781,154 @@ class TestConcurrentWrites:
 
         col.sync_from_remote_before_index()
         assert git_strategy.calls == [vault_path]
+
+
+# ---------------------------------------------------------------------------
+# Atomic writes
+# ---------------------------------------------------------------------------
+
+
+class TestAtomicWrites:
+    """write(), edit(), and write_attachment() must use Path.replace for atomicity."""
+
+    def test_write_uses_path_replace(
+        self, writable: Collection, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """write() calls Path.replace to atomically land the new file."""
+        replace_calls: list[tuple[str, str]] = []
+        original = Path.replace
+
+        def tracking(self: Path, target: Path) -> Path:
+            replace_calls.append((str(self), str(target)))
+            return original(self, target)
+
+        monkeypatch.setattr(Path, "replace", tracking)
+        writable.write("atomic_write.md", "atomic content")
+
+        assert any(dst.endswith("atomic_write.md") for _, dst in replace_calls), (
+            "write() did not use Path.replace — file was not written atomically"
+        )
+
+    def test_edit_uses_path_replace(
+        self, writable: Collection, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """edit() calls Path.replace to atomically land the patched file."""
+        writable.write("atomic_edit.md", "original content")
+        replace_calls: list[tuple[str, str]] = []
+        original = Path.replace
+
+        def tracking(self: Path, target: Path) -> Path:
+            replace_calls.append((str(self), str(target)))
+            return original(self, target)
+
+        monkeypatch.setattr(Path, "replace", tracking)
+        writable.edit(
+            "atomic_edit.md", old_text="original content", new_text="updated content"
+        )
+
+        assert any(dst.endswith("atomic_edit.md") for _, dst in replace_calls), (
+            "edit() did not use Path.replace — file was not written atomically"
+        )
+
+    def test_write_attachment_uses_path_replace(
+        self, writable: Collection, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """write_attachment() calls Path.replace to atomically land the attachment."""
+        replace_calls: list[tuple[str, str]] = []
+        original = Path.replace
+
+        def tracking(self: Path, target: Path) -> Path:
+            replace_calls.append((str(self), str(target)))
+            return original(self, target)
+
+        monkeypatch.setattr(Path, "replace", tracking)
+        writable.write_attachment("diagram.png", b"\x89PNG\r\n\x1a\n")
+
+        assert any(dst.endswith("diagram.png") for _, dst in replace_calls), (
+            "write_attachment() did not use Path.replace — file was not written atomically"
+        )
+
+    def test_write_preserves_original_on_failed_write(
+        self, writable: Collection, vault_path: Path
+    ) -> None:
+        """If the write fails, the original file is untouched (no silent truncation)."""
+        writable.write("safe.md", "original content")
+
+        def failing_replace(_self: Path, _target: Path) -> Path:
+            raise OSError("simulated disk full")
+
+        with patch.object(Path, "replace", failing_replace), pytest.raises(OSError):
+            writable.write("safe.md", "replacement content")
+
+        assert "original content" in (vault_path / "safe.md").read_text()
+        # No leftover .tmp files should remain after the failed write.
+        assert list(vault_path.glob("**/*.tmp")) == [], (
+            "Temp file was not cleaned up on failure"
+        )
+
+    def test_write_preserves_file_permissions_on_overwrite(
+        self, writable: Collection, vault_path: Path
+    ) -> None:
+        """Overwriting an existing file must not downgrade its permissions."""
+        writable.write("perms.md", "original content")
+        target = vault_path / "perms.md"
+        target.chmod(0o644)
+
+        writable.write("perms.md", "new content")
+
+        mode = target.stat().st_mode & 0o777
+        assert mode == 0o644, (
+            f"write() changed file permissions from 0o644 to {oct(mode)}"
+        )
+
+    def test_edit_preserves_file_permissions_on_overwrite(
+        self, writable: Collection, vault_path: Path
+    ) -> None:
+        """edit() on an existing file must not downgrade its permissions."""
+        writable.write("perms_edit.md", "original content")
+        target = vault_path / "perms_edit.md"
+        target.chmod(0o644)
+
+        writable.edit(
+            "perms_edit.md", old_text="original content", new_text="edited content"
+        )
+
+        mode = target.stat().st_mode & 0o777
+        assert mode == 0o644, (
+            f"edit() changed file permissions from 0o644 to {oct(mode)}"
+        )
+
+    def test_write_attachment_preserves_file_permissions_on_overwrite(
+        self, writable: Collection, vault_path: Path
+    ) -> None:
+        """Overwriting an existing attachment must not downgrade its permissions."""
+        writable.write_attachment("diagram.png", b"\x89PNG\r\n\x1a\n")
+        target = vault_path / "diagram.png"
+        target.chmod(0o644)
+
+        writable.write_attachment("diagram.png", b"\x89PNG\r\n\x1a\nUpdated")
+
+        mode = target.stat().st_mode & 0o777
+        assert mode == 0o644, (
+            f"write_attachment() changed file permissions from 0o644 to {oct(mode)}"
+        )
+
+    def test_write_attachment_preserves_original_on_failed_write(
+        self, writable: Collection, vault_path: Path
+    ) -> None:
+        """If write_attachment fails, the original is untouched and no .tmp files remain."""
+        writable.write_attachment("diagram.png", b"original bytes")
+
+        def failing_replace(_self: Path, _target: Path) -> Path:
+            raise OSError("simulated disk full")
+
+        with patch.object(Path, "replace", failing_replace), pytest.raises(OSError):
+            writable.write_attachment("diagram.png", b"new bytes")
+
+        assert (vault_path / "diagram.png").read_bytes() == b"original bytes"
+        assert list(vault_path.glob("**/*.tmp")) == [], (
+            "Temp file was not cleaned up on failure"
+        )
 
 
 # ---------------------------------------------------------------------------

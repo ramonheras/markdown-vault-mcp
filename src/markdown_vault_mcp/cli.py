@@ -219,8 +219,8 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     serve_parser.add_argument(
         "--host",
-        default="0.0.0.0",
-        help="host to bind to for http transport (default: 0.0.0.0)",
+        default="127.0.0.1",
+        help="host to bind to for http transport (default: 127.0.0.1)",
     )
     serve_parser.add_argument(
         "--port",

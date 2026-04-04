@@ -467,7 +467,9 @@ def create_server(transport: str = "stdio") -> FastMCP:
     else:
         auth = None
         auth_mode = "none"
-        logger.info("No auth configured — server accepts unauthenticated connections")
+        logger.warning(
+            "No auth configured — server accepts unauthenticated connections"
+        )
 
     try:
         pkg_ver = _pkg_version("markdown-vault-mcp")

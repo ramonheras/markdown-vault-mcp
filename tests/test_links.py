@@ -1242,16 +1242,25 @@ class TestRenameUpdateLinks:
         self, rename_vault: Path
     ) -> None:
         """A write failure on a source file does not prevent the rename."""
+        import contextlib
+        from pathlib import Path as _Path
+
         col = Collection(source_dir=rename_vault, read_only=False)
         col.build_index()
 
-        # Make one source file read-only to simulate a write failure.
-        linker = rename_vault / "linker_md.md"
-        linker.chmod(0o444)
-        try:
+        linker_abs = str(rename_vault / "linker_md.md")
+        original_replace = _Path.replace
+
+        def failing_replace(self: _Path, target: _Path) -> _Path:
+            if str(target) == linker_abs:
+                # Clean up the temp file and simulate a write failure.
+                with contextlib.suppress(OSError):
+                    self.unlink()
+                raise PermissionError(f"simulated: cannot write {target}")
+            return original_replace(self, target)
+
+        with patch.object(_Path, "replace", failing_replace):
             result = col.rename("target.md", "renamed.md", update_links=True)
-        finally:
-            linker.chmod(0o644)
 
         # Rename succeeded even though one source update failed.
         assert (rename_vault / "renamed.md").is_file()
