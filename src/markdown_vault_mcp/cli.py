@@ -108,7 +108,7 @@ def _cmd_serve(args: argparse.Namespace) -> None:
     env_http_path = os.environ.get(f"{_ENV_PREFIX}_HTTP_PATH")
     http_path = _normalise_http_path(args.path or env_http_path)
     if transport != "http" and (
-        args.host != "0.0.0.0" or args.port != 8000 or args.path is not None
+        args.host != "127.0.0.1" or args.port != 8000 or args.path is not None
     ):
         logger.warning("--host, --port and --path are only used with --transport http")
     if transport == "http":
