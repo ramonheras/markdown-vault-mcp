@@ -2355,6 +2355,8 @@ class Collection:
             ) as tmp:
                 tmp.write(content)
                 tmp_name = tmp.name
+            if abs_path.is_file():
+                shutil.copymode(abs_path, tmp_name)
             try:
                 Path(tmp_name).replace(abs_path)
             except Exception:
@@ -2435,6 +2437,8 @@ class Collection:
             ) as tmp:
                 tmp.write(file_content)
                 tmp_name = tmp.name
+            if abs_path.is_file():
+                shutil.copymode(abs_path, tmp_name)
             try:
                 Path(tmp_name).replace(abs_path)
             except Exception:
@@ -2568,6 +2572,7 @@ class Collection:
             ) as tmp:
                 tmp.write(new_content)
                 tmp_name = tmp.name
+            shutil.copymode(abs_path, tmp_name)
             try:
                 Path(tmp_name).replace(abs_path)
             except Exception:
@@ -2850,6 +2855,7 @@ class Collection:
                 ) as tmp:
                     tmp.write(content)
                     tmp_name = tmp.name
+                shutil.copymode(source_abs, tmp_name)
                 try:
                     Path(tmp_name).replace(source_abs)
                 except Exception:

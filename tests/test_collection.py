@@ -1866,6 +1866,38 @@ class TestAtomicWrites:
             "Temp file was not cleaned up on failure"
         )
 
+    def test_write_preserves_file_permissions_on_overwrite(
+        self, writable: Collection, vault_path: Path
+    ) -> None:
+        """Overwriting an existing file must not downgrade its permissions."""
+        writable.write("perms.md", "original content")
+        target = vault_path / "perms.md"
+        target.chmod(0o644)
+
+        writable.write("perms.md", "new content")
+
+        mode = target.stat().st_mode & 0o777
+        assert mode == 0o644, (
+            f"write() changed file permissions from 0o644 to {oct(mode)}"
+        )
+
+    def test_edit_preserves_file_permissions_on_overwrite(
+        self, writable: Collection, vault_path: Path
+    ) -> None:
+        """edit() on an existing file must not downgrade its permissions."""
+        writable.write("perms_edit.md", "original content")
+        target = vault_path / "perms_edit.md"
+        target.chmod(0o644)
+
+        writable.edit(
+            "perms_edit.md", old_text="original content", new_text="edited content"
+        )
+
+        mode = target.stat().st_mode & 0o777
+        assert mode == 0o644, (
+            f"edit() changed file permissions from 0o644 to {oct(mode)}"
+        )
+
 
 # ---------------------------------------------------------------------------
 # Attachment helpers
