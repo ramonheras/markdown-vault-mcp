@@ -1861,6 +1861,10 @@ class TestAtomicWrites:
             writable.write("safe.md", "replacement content")
 
         assert "original content" in (vault_path / "safe.md").read_text()
+        # No leftover .tmp files should remain after the failed write.
+        assert list(vault_path.glob("**/*.tmp")) == [], (
+            "Temp file was not cleaned up on failure"
+        )
 
 
 # ---------------------------------------------------------------------------

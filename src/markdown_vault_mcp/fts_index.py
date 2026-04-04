@@ -639,8 +639,16 @@ class FTSIndex:
         try:
             cur = self._conn.execute(sql, params)
         except sqlite3.OperationalError as exc:
-            logger.debug("FTS search: malformed query %r — %s", query, exc)
-            return []
+            msg = str(exc).lower()
+            if (
+                "fts5" in msg
+                or "syntax error" in msg
+                or "no such column" in msg
+                or "unterminated" in msg
+            ):
+                logger.debug("FTS search: malformed query %r — %s", query, exc)
+                return []
+            raise
         rows = cur.fetchall()
         logger.debug("FTS search: %d results for query=%r", len(rows), query)
 

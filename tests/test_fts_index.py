@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import datetime
 import json
+import sqlite3
 from typing import TYPE_CHECKING
+from unittest.mock import patch
 
 import pytest
 
@@ -350,6 +352,19 @@ class TestSearch:
         results = idx.search("nonexistent_column:value")
         assert results == []
 
+    def test_search_non_fts5_operational_error_propagates(self) -> None:
+        """Non-FTS5 OperationalError (e.g. DB lock) must propagate, not return []."""
+        from unittest.mock import MagicMock
+
+        idx = FTSIndex(":memory:")
+        # Replace the real connection with a mock that raises a non-FTS5 DB error.
+        mock_conn = MagicMock()
+        mock_conn.execute.side_effect = sqlite3.OperationalError("database is locked")
+        idx._conn = mock_conn
+
+        with pytest.raises(sqlite3.OperationalError, match="database is locked"):
+            idx.search("hello")
+
 
 class TestUpsert:
     def test_upsert_note_replaces_existing(self) -> None:
@@ -651,7 +666,7 @@ class TestWALMode:
     ) -> None:
         """A warning is logged when WAL mode cannot be enabled."""
         import logging
-        from unittest.mock import MagicMock, patch
+        from unittest.mock import MagicMock
 
         from markdown_vault_mcp.fts_index import _open_connection
 

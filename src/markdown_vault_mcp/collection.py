@@ -2355,7 +2355,11 @@ class Collection:
             ) as tmp:
                 tmp.write(content)
                 tmp_name = tmp.name
-            Path(tmp_name).replace(abs_path)
+            try:
+                Path(tmp_name).replace(abs_path)
+            except Exception:
+                Path(tmp_name).unlink(missing_ok=True)
+                raise
             result = WriteResult(path=path, created=created)
 
         self._fire_write_callback(abs_path, "", "write")
@@ -2431,7 +2435,11 @@ class Collection:
             ) as tmp:
                 tmp.write(file_content)
                 tmp_name = tmp.name
-            Path(tmp_name).replace(abs_path)
+            try:
+                Path(tmp_name).replace(abs_path)
+            except Exception:
+                Path(tmp_name).unlink(missing_ok=True)
+                raise
 
             # Update FTS index.
             note = parse_note(abs_path, self._source_dir, self._chunk_strategy)
@@ -2560,7 +2568,11 @@ class Collection:
             ) as tmp:
                 tmp.write(new_content)
                 tmp_name = tmp.name
-            Path(tmp_name).replace(abs_path)
+            try:
+                Path(tmp_name).replace(abs_path)
+            except Exception:
+                Path(tmp_name).unlink(missing_ok=True)
+                raise
 
             # Update FTS index.
             note = parse_note(abs_path, self._source_dir, self._chunk_strategy)
@@ -2838,7 +2850,11 @@ class Collection:
                 ) as tmp:
                     tmp.write(content)
                     tmp_name = tmp.name
-                Path(tmp_name).replace(source_abs)
+                try:
+                    Path(tmp_name).replace(source_abs)
+                except Exception:
+                    Path(tmp_name).unlink(missing_ok=True)
+                    raise
                 updated_note = parse_note(
                     source_abs, self._source_dir, self._chunk_strategy
                 )
