@@ -5,6 +5,7 @@ from __future__ import annotations
 import concurrent.futures
 import json
 import logging
+from pathlib import Path
 from typing import TYPE_CHECKING
 from unittest.mock import patch
 
@@ -37,8 +38,6 @@ from markdown_vault_mcp.types import (
 )
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from .conftest import MockEmbeddingProvider
 
 
@@ -1782,6 +1781,86 @@ class TestConcurrentWrites:
 
         col.sync_from_remote_before_index()
         assert git_strategy.calls == [vault_path]
+
+
+# ---------------------------------------------------------------------------
+# Atomic writes
+# ---------------------------------------------------------------------------
+
+
+class TestAtomicWrites:
+    """write(), edit(), and write_attachment() must use Path.replace for atomicity."""
+
+    def test_write_uses_path_replace(
+        self, writable: Collection, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """write() calls Path.replace to atomically land the new file."""
+        replace_calls: list[tuple[str, str]] = []
+        original = Path.replace
+
+        def tracking(self: Path, target: Path) -> Path:
+            replace_calls.append((str(self), str(target)))
+            return original(self, target)
+
+        monkeypatch.setattr(Path, "replace", tracking)
+        writable.write("atomic_write.md", "atomic content")
+
+        assert any(dst.endswith("atomic_write.md") for _, dst in replace_calls), (
+            "write() did not use Path.replace — file was not written atomically"
+        )
+
+    def test_edit_uses_path_replace(
+        self, writable: Collection, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """edit() calls Path.replace to atomically land the patched file."""
+        writable.write("atomic_edit.md", "original content")
+        replace_calls: list[tuple[str, str]] = []
+        original = Path.replace
+
+        def tracking(self: Path, target: Path) -> Path:
+            replace_calls.append((str(self), str(target)))
+            return original(self, target)
+
+        monkeypatch.setattr(Path, "replace", tracking)
+        writable.edit(
+            "atomic_edit.md", old_text="original content", new_text="updated content"
+        )
+
+        assert any(dst.endswith("atomic_edit.md") for _, dst in replace_calls), (
+            "edit() did not use Path.replace — file was not written atomically"
+        )
+
+    def test_write_attachment_uses_path_replace(
+        self, writable: Collection, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """write_attachment() calls Path.replace to atomically land the attachment."""
+        replace_calls: list[tuple[str, str]] = []
+        original = Path.replace
+
+        def tracking(self: Path, target: Path) -> Path:
+            replace_calls.append((str(self), str(target)))
+            return original(self, target)
+
+        monkeypatch.setattr(Path, "replace", tracking)
+        writable.write_attachment("diagram.png", b"\x89PNG\r\n\x1a\n")
+
+        assert any(dst.endswith("diagram.png") for _, dst in replace_calls), (
+            "write_attachment() did not use Path.replace — file was not written atomically"
+        )
+
+    def test_write_preserves_original_on_failed_write(
+        self, writable: Collection, vault_path: Path
+    ) -> None:
+        """If the write fails, the original file is untouched (no silent truncation)."""
+        writable.write("safe.md", "original content")
+
+        def failing_replace(_self: Path, _target: Path) -> Path:
+            raise OSError("simulated disk full")
+
+        with patch.object(Path, "replace", failing_replace), pytest.raises(OSError):
+            writable.write("safe.md", "replacement content")
+
+        assert "original content" in (vault_path / "safe.md").read_text()
 
 
 # ---------------------------------------------------------------------------
