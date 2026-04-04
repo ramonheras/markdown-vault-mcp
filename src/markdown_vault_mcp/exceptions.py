@@ -16,6 +16,21 @@ class ReadOnlyError(MarkdownMCPError):
 class EditConflictError(MarkdownMCPError):
     """old_text not found or appears more than once."""
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        closest_match_line: int | None = None,
+        first_diff_char: int | None = None,
+        expected_snippet: str | None = None,
+        found_snippet: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.closest_match_line = closest_match_line
+        self.first_diff_char = first_diff_char
+        self.expected_snippet = expected_snippet
+        self.found_snippet = found_snippet
+
 
 class DocumentExistsError(MarkdownMCPError):
     """Target path already exists (e.g., rename destination)."""

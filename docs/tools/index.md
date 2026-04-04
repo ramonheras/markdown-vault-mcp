@@ -225,20 +225,35 @@ Create or overwrite a document or attachment.
 
 ### `edit`
 
-Make a targeted text replacement in an existing document.
+Make a targeted text replacement in an existing document. Supports three modes:
+
+- **Exact match** (`old_text` only) — must appear exactly once in the document.
+- **Line-range** (`line_start` + `line_end`, no `old_text`) — replaces the specified lines. Pass `if_match` for safety.
+- **Scoped match** (`old_text` + `line_start`/`line_end`) — searches for `old_text` within the specified line range only.
 
 **Parameters:**
 
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `path` | string | Relative path to the document |
-| `old_text` | string | Exact text to replace. Must appear exactly once in the document |
-| `new_text` | string | Replacement text |
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `path` | string | Yes | Relative path to the document |
+| `old_text` | string | Conditional | Text to replace. Required unless using line-range mode |
+| `new_text` | string | Yes | Replacement text |
+| `if_match` | string | No | Etag from `read` for optimistic concurrency |
+| `line_start` | integer | Conditional | First line to replace (1-based, inclusive). Required with `line_end` |
+| `line_end` | integer | Conditional | Last line to replace (1-based, inclusive). Required with `line_start` |
 
-**Returns:** `{"path": "Journal/note.md", "replacements": 1}`
+**Returns:** `{"path": "Journal/note.md", "replacements": 1, "match_type": "exact"}`
+
+`match_type` is `"exact"` when the text matched byte-for-byte, or `"normalized"` when it matched after Unicode/whitespace normalization.
 
 !!! tip "Usage pattern"
-    Always call `read` first to get the exact current text, then pass a portion of it as `old_text`. The match is exact and must appear only once. Frontmatter can be edited — `old_text` may span the YAML block.
+    Always call `read` first to get the exact current text and line numbers. For small edits, use `old_text` (exact match). For large block replacements, use `line_start`/`line_end` with the line numbers shown by `read`. Frontmatter can be edited — `old_text` may span the YAML block.
+
+!!! info "Normalized matching"
+    When exact match fails, the tool automatically tries a normalized comparison: Unicode NFC, dash normalization (en-dash/em-dash → hyphen), smart quote normalization, whitespace collapsing. If a unique match is found, it proceeds and returns `match_type: "normalized"`.
+
+!!! warning "Diagnostic errors"
+    When no match is found, the error message includes diagnostic info: the closest matching line number, the character position of the first difference, and short snippets showing what was expected vs. what was found. This helps identify the exact mismatch.
 
 ### `delete`
 

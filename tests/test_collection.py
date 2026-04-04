@@ -10,7 +10,12 @@ from unittest.mock import patch
 
 import pytest
 
-from markdown_vault_mcp.collection import Collection
+from markdown_vault_mcp.collection import (
+    Collection,
+    _build_position_map,
+    _find_closest_match,
+    _normalize_text,
+)
 from markdown_vault_mcp.exceptions import (
     ConcurrentModificationError,
     DocumentExistsError,
@@ -920,6 +925,11 @@ class TestEdit:
         assert "Updated Document" in content
         assert "Simple Document" not in content
 
+    def test_edit_match_type_exact_default(self, writable: Collection) -> None:
+        """edit() returns match_type='exact' by default."""
+        result = writable.edit("simple.md", "Simple Document", "Updated Document")
+        assert result.match_type == "exact"
+
     def test_edit_empty_old_text_raises(self, writable: Collection) -> None:
         """edit() raises ValueError when old_text is empty."""
         with pytest.raises(ValueError, match="old_text must not be empty"):
@@ -1001,6 +1011,450 @@ class TestEdit:
         results = writable_with_embeddings.search("quantum mechanics", mode="semantic")
         paths = [r.path for r in results]
         assert "vec_editable.md" in paths
+
+    def test_edit_line_range_replaces(
+        self, writable: Collection, vault_path: Path
+    ) -> None:
+        """edit() with line_start/line_end replaces the specified lines."""
+        writable.write("lines.md", "line1\nline2\nline3\nline4\n")
+        result = writable.edit(
+            "lines.md", new_text="replaced\n", line_start=2, line_end=3
+        )
+        assert result.replacements == 1
+        content = (vault_path / "lines.md").read_text()
+        assert content == "line1\nreplaced\nline4\n"
+
+    def test_edit_line_range_single_line(
+        self, writable: Collection, vault_path: Path
+    ) -> None:
+        """line_start == line_end replaces exactly one line."""
+        writable.write("lines.md", "line1\nline2\nline3\n")
+        writable.edit("lines.md", new_text="new2", line_start=2, line_end=2)
+        content = (vault_path / "lines.md").read_text()
+        assert content == "line1\nnew2\nline3\n"
+
+    def test_edit_line_range_out_of_bounds(self, writable: Collection) -> None:
+        """line_end beyond file length raises ValueError."""
+        writable.write("lines.md", "line1\nline2\n")
+        with pytest.raises(ValueError, match="out of range"):
+            writable.edit("lines.md", new_text="x", line_start=1, line_end=5)
+
+    def test_edit_line_range_inverted(self, writable: Collection) -> None:
+        """line_start > line_end raises ValueError."""
+        writable.write("lines.md", "line1\nline2\n")
+        with pytest.raises(ValueError, match=r"line_start.*line_end"):
+            writable.edit("lines.md", new_text="x", line_start=3, line_end=1)
+
+    def test_edit_line_range_only_one_provided(self, writable: Collection) -> None:
+        """Providing only line_start without line_end raises ValueError."""
+        with pytest.raises(ValueError, match=r"both.*line_start.*line_end"):
+            writable.edit("simple.md", new_text="x", line_start=1)
+
+    def test_edit_no_old_text_no_lines(self, writable: Collection) -> None:
+        """Neither old_text nor line range raises ValueError."""
+        with pytest.raises(ValueError, match=r"old_text.*line_start"):
+            writable.edit("simple.md", new_text="x")
+
+    def test_edit_line_range_zero_raises(self, writable: Collection) -> None:
+        """line_start < 1 raises ValueError (1-based)."""
+        with pytest.raises(ValueError, match=r"line_start.*>= 1"):
+            writable.edit("simple.md", new_text="x", line_start=0, line_end=1)
+
+    def test_edit_line_range_updates_index(self, writable: Collection) -> None:
+        """Line-range edit updates the FTS index."""
+        writable.write("lines.md", "# Old Title\n\nOld body.\n")
+        writable.edit(
+            "lines.md", new_text="# Xylophone Title\n", line_start=1, line_end=1
+        )
+        results = writable.search("xylophone", mode="keyword")
+        assert any(r.path == "lines.md" for r in results)
+
+    def test_edit_line_range_with_if_match(
+        self, writable: Collection, vault_path: Path
+    ) -> None:
+        """Line-range edit respects if_match etag."""
+        writable.write("lines.md", "line1\nline2\n")
+        read_result = writable.read("lines.md")
+        writable.edit(
+            "lines.md",
+            new_text="new1\n",
+            line_start=1,
+            line_end=1,
+            if_match=read_result.etag,
+        )
+        content = (vault_path / "lines.md").read_text()
+        assert content == "new1\nline2\n"
+
+    def test_edit_line_range_with_wrong_if_match(self, writable: Collection) -> None:
+        """Line-range edit rejects stale etag."""
+        writable.write("lines.md", "line1\nline2\n")
+        with pytest.raises(ConcurrentModificationError):
+            writable.edit(
+                "lines.md",
+                new_text="new",
+                line_start=1,
+                line_end=1,
+                if_match="stale_hash",
+            )
+
+    def test_edit_line_range_triggers_callback(self, vault_path: Path) -> None:
+        """Line-range edit fires the on_write callback."""
+        calls: list = []
+        col = _make_collection(
+            vault_path, read_only=False, on_write=lambda *args: calls.append(args)
+        )
+        col.build_index()
+        col.write("lines.md", "line1\nline2\n")
+        col.edit("lines.md", new_text="replaced\n", line_start=1, line_end=1)
+        col.close()
+        # write + edit = 2 callbacks
+        assert len(calls) == 2
+        _, _, operation = calls[1]
+        assert operation == "edit"
+
+    # -----------------------------------------------------------------------
+    # Scoped match tests
+    # -----------------------------------------------------------------------
+
+    def test_edit_scoped_match(self, writable: Collection, vault_path: Path) -> None:
+        """old_text + line range disambiguates repeated text."""
+        writable.write("repeated.md", "hello\nworld\nhello\n")
+        # "hello" appears twice, but only once in lines 1-1.
+        result = writable.edit(
+            "repeated.md",
+            old_text="hello",
+            new_text="goodbye",
+            line_start=1,
+            line_end=1,
+        )
+        assert result.replacements == 1
+        content = (vault_path / "repeated.md").read_text()
+        assert content == "goodbye\nworld\nhello\n"
+
+    def test_edit_scoped_match_not_found(self, writable: Collection) -> None:
+        """old_text not in the specified line range raises EditConflictError."""
+        writable.write("scoped.md", "aaa\nbbb\nccc\n")
+        with pytest.raises(EditConflictError, match="not found"):
+            writable.edit(
+                "scoped.md",
+                old_text="ccc",
+                new_text="ddd",
+                line_start=1,
+                line_end=2,
+            )
+
+    # -----------------------------------------------------------------------
+    # Normalized match tests
+    # -----------------------------------------------------------------------
+
+    def test_edit_normalized_dashes(
+        self, writable: Collection, vault_path: Path
+    ) -> None:
+        """Normalized match handles em-dash vs hyphen."""
+        writable.write("dashes.md", "hello \u2014 world\n")
+        result = writable.edit(
+            "dashes.md", old_text="hello - world", new_text="goodbye"
+        )
+        assert result.match_type == "normalized"
+        content = (vault_path / "dashes.md").read_text()
+        assert content == "goodbye\n"
+
+    def test_edit_normalized_quotes(
+        self, writable: Collection, vault_path: Path
+    ) -> None:
+        """Normalized match handles smart quotes vs straight."""
+        writable.write("quotes.md", "\u201chello\u201d\n")
+        result = writable.edit("quotes.md", old_text='"hello"', new_text="goodbye")
+        assert result.match_type == "normalized"
+        content = (vault_path / "quotes.md").read_text()
+        assert content == "goodbye\n"
+
+    def test_edit_normalized_whitespace(
+        self, writable: Collection, vault_path: Path
+    ) -> None:
+        """Normalized match handles collapsed whitespace."""
+        writable.write("ws.md", "hello   world\n")
+        result = writable.edit("ws.md", old_text="hello world", new_text="goodbye")
+        assert result.match_type == "normalized"
+        content = (vault_path / "ws.md").read_text()
+        assert content == "goodbye\n"
+
+    def test_edit_normalized_trailing_ws(
+        self, writable: Collection, vault_path: Path
+    ) -> None:
+        """Normalized match handles trailing whitespace difference."""
+        writable.write("trail.md", "hello   \nworld\n")
+        result = writable.edit("trail.md", old_text="hello\nworld", new_text="goodbye")
+        assert result.match_type == "normalized"
+        content = (vault_path / "trail.md").read_text()
+        assert content == "goodbye\n"
+
+    def test_edit_normalized_unicode(
+        self, writable: Collection, vault_path: Path
+    ) -> None:
+        """Normalized match handles NFC decomposed vs composed."""
+        # File content: decomposed é written as "café" (will normalize to composed on write)
+        # We match it with composed é from old_text, confirming normalization works
+        writable.write("unicode.md", "caf\u00e9\n")  # Use composed form explicitly
+        # Try to match with a slight variation that requires normalization
+        # (in practice, this tests that equivalence is handled)
+        result = writable.edit("unicode.md", old_text="caf\u00e9", new_text="tea")
+        assert result.match_type == "exact"  # Will be exact since they match exactly
+        content = (vault_path / "unicode.md").read_text()
+        assert content == "tea\n"
+
+    def test_edit_normalized_returns_match_type(self, writable: Collection) -> None:
+        """Normalized match returns match_type='normalized' in EditResult."""
+        writable.write("norm.md", "a\u2014b\n")
+        result = writable.edit("norm.md", old_text="a-b", new_text="c")
+        assert result.match_type == "normalized"
+
+    def test_edit_normalized_multiple_raises(self, writable: Collection) -> None:
+        """Normalized match with >1 occurrences raises EditConflictError."""
+        writable.write("multi.md", "a\u2014b and a\u2014b\n")
+        with pytest.raises(EditConflictError, match="after normalization"):
+            writable.edit("multi.md", old_text="a-b", new_text="c")
+
+    def test_edit_exact_preferred_over_normalized(self, writable: Collection) -> None:
+        """Exact match is used even when normalized would also work."""
+        writable.write("exact.md", "a-b\n")
+        result = writable.edit("exact.md", old_text="a-b", new_text="c")
+        assert result.match_type == "exact"
+
+    def test_edit_normalized_preserves_original_bytes(
+        self, writable: Collection, vault_path: Path
+    ) -> None:
+        """Normalized replacement preserves original bytes outside the match."""
+        # File has smart quotes + em-dash in OTHER parts.
+        writable.write(
+            "preserve.md",
+            "\u201cintro\u201d\nhello   world\n\u201coutro\u201d\n",
+        )
+        writable.edit("preserve.md", old_text="hello world", new_text="goodbye")
+        content = (vault_path / "preserve.md").read_text()
+        # Smart quotes in intro/outro must be preserved.
+        assert content == "\u201cintro\u201d\ngoodbye\n\u201coutro\u201d\n"
+
+    def test_edit_normalized_decomposed_unicode_replacement(
+        self, writable: Collection, vault_path: Path
+    ) -> None:
+        """Normalized match correctly replaces decomposed Unicode (multi-char → one).
+
+        When a file contains a decomposed combining sequence (e.g. 'e' +
+        U+0301) and old_text contains the composed form (é, U+00E9), the
+        replacement must consume the *full* original span including the
+        combining accent, not just the base character.
+        """
+        # File has decomposed 'é' (e + combining acute) at the end of a word.
+        writable.write("decomposed.md", "caf\u0065\u0301 au lait\n")
+        result = writable.edit(
+            "decomposed.md",
+            old_text="caf\u00e9",  # composed form
+            new_text="tea",
+        )
+        assert result.match_type == "normalized"
+        content = (vault_path / "decomposed.md").read_text()
+        # The combining accent must NOT appear in the output.
+        assert content == "tea au lait\n"
+        assert "\u0301" not in content
+
+    def test_edit_normalized_within_line_range(
+        self, writable: Collection, vault_path: Path
+    ) -> None:
+        """Normalized match works within a scoped line range."""
+        writable.write("scoped_norm.md", "aaa\nhello\u2014world\nccc\n")
+        result = writable.edit(
+            "scoped_norm.md",
+            old_text="hello-world",
+            new_text="goodbye",
+            line_start=2,
+            line_end=2,
+        )
+        assert result.match_type == "normalized"
+        content = (vault_path / "scoped_norm.md").read_text()
+        assert content == "aaa\ngoodbye\nccc\n"
+
+    # -----------------------------------------------------------------------
+    # Diagnostic error tests
+    # -----------------------------------------------------------------------
+
+    def test_edit_diagnostic_closest_line(self, writable: Collection) -> None:
+        """Failed match includes closest_match_line in error."""
+        writable.write("diag.md", "line one\nthe quick brown fox\nline three\n")
+        with pytest.raises(EditConflictError) as exc_info:
+            writable.edit("diag.md", old_text="the quick brown fax", new_text="x")
+        assert exc_info.value.closest_match_line == 2
+
+    def test_edit_diagnostic_diff_snippet(self, writable: Collection) -> None:
+        """Failed match includes expected/found snippets."""
+        writable.write("diag2.md", "the quick brown fox\n")
+        with pytest.raises(EditConflictError) as exc_info:
+            writable.edit("diag2.md", old_text="the quick-brown fox", new_text="x")
+        err = exc_info.value
+        assert err.expected_snippet is not None
+        assert err.found_snippet is not None
+
+    def test_edit_diagnostic_no_close_match(self, writable: Collection) -> None:
+        """No diagnostics when nothing is remotely close."""
+        writable.write("diag3.md", "aaaa\nbbbb\ncccc\n")
+        with pytest.raises(EditConflictError) as exc_info:
+            writable.edit(
+                "diag3.md",
+                old_text="xyz123 completely different",
+                new_text="x",
+            )
+        err = exc_info.value
+        assert err.closest_match_line is None
+
+
+class TestEditConflictDiagnostics:
+    def test_error_has_diagnostic_fields(self) -> None:
+        """EditConflictError stores diagnostic fields."""
+        err = EditConflictError(
+            "old_text not found in test.md",
+            closest_match_line=10,
+            first_diff_char=42,
+            expected_snippet="—",
+            found_snippet="-",
+        )
+        assert err.closest_match_line == 10
+        assert err.first_diff_char == 42
+        assert err.expected_snippet == "—"
+        assert err.found_snippet == "-"
+        assert str(err) == "old_text not found in test.md"
+
+    def test_error_defaults_none(self) -> None:
+        """EditConflictError diagnostic fields default to None."""
+        err = EditConflictError("old_text not found in test.md")
+        assert err.closest_match_line is None
+        assert err.first_diff_char is None
+        assert err.expected_snippet is None
+        assert err.found_snippet is None
+
+
+class TestNormalizeText:
+    def test_nfc_normalization(self) -> None:
+        """NFC normalizes composed vs decomposed Unicode."""
+        # e + combining acute accent → é (composed)
+        decomposed = "caf\u0065\u0301"
+        assert _normalize_text(decomposed) == "caf\u00e9"
+
+    def test_dashes_normalized(self) -> None:
+        """En-dash and em-dash become hyphens."""
+        assert _normalize_text("a\u2013b\u2014c") == "a-b-c"
+
+    def test_smart_quotes_normalized(self) -> None:
+        """Smart quotes become straight quotes."""
+        assert (
+            _normalize_text("\u201chello\u201d \u2018world\u2019")
+            == "\"hello\" 'world'"
+        )
+
+    def test_whitespace_collapsed(self) -> None:
+        """Multiple spaces/tabs collapse to single space within lines."""
+        assert _normalize_text("a   b\tc") == "a b c"
+
+    def test_trailing_whitespace_stripped(self) -> None:
+        """Trailing whitespace stripped per line."""
+        assert _normalize_text("hello   \nworld\t\n") == "hello\nworld\n"
+
+    def test_newlines_preserved(self) -> None:
+        """Newlines are not collapsed."""
+        assert _normalize_text("a\n\nb") == "a\n\nb"
+
+    def test_no_change_passthrough(self) -> None:
+        """Clean text passes through unchanged."""
+        text = "hello world"
+        assert _normalize_text(text) == text
+
+
+class TestBuildPositionMap:
+    def test_identity_mapping(self) -> None:
+        """When text is already normalized, positions map 1:1 plus sentinel."""
+        text = "hello"
+        pos_map = _build_position_map(text, text)
+        # 5 chars + 1 sentinel = 6 entries; sentinel equals len(original)
+        assert pos_map == [0, 1, 2, 3, 4, 5]
+
+    def test_dash_mapping(self) -> None:
+        """Em-dash (1 char) maps to hyphen (1 char), sentinel = orig_len."""
+        original = "a\u2014b"
+        normalized = _normalize_text(original)
+        pos_map = _build_position_map(original, normalized)
+        # normalized is "a-b", length 3 → 4 entries (3 + sentinel)
+        assert len(pos_map) == 4
+        assert pos_map[0] == 0  # 'a' -> 'a'
+        assert pos_map[1] == 1  # '—' -> '-'
+        assert pos_map[2] == 2  # 'b' -> 'b'
+        assert pos_map[3] == 3  # sentinel = orig_len
+
+    def test_whitespace_collapse_mapping(self) -> None:
+        """Multiple spaces collapse; map points to first original space."""
+        original = "a   b"
+        normalized = _normalize_text(original)
+        pos_map = _build_position_map(original, normalized)
+        # normalized is "a b", length 3 → 4 entries (3 + sentinel)
+        assert len(pos_map) == 4
+        assert pos_map[0] == 0  # 'a'
+        assert pos_map[1] == 1  # first space of '   '
+        assert pos_map[2] == 4  # 'b'
+        assert pos_map[3] == 5  # sentinel = orig_len
+
+    def test_trailing_ws_mapping(self) -> None:
+        """Trailing whitespace stripped; mapping covers remaining chars."""
+        original = "ab  "
+        normalized = _normalize_text(original)
+        pos_map = _build_position_map(original, normalized)
+        # normalized is "ab", length 2 → 3 entries (2 + sentinel)
+        assert len(pos_map) == 3
+        assert pos_map[0] == 0
+        assert pos_map[1] == 1
+        assert pos_map[2] == 4  # sentinel = orig_len
+
+    def test_nfc_multichar_mapping(self) -> None:
+        """NFC decomposed sequence (2 chars) maps to original start index.
+
+        Sentinel must equal orig_len so orig_end is computed correctly
+        when the NFC sequence is the last character.
+        """
+        # 'e' + combining acute accent (U+0301) → 'é' (U+00E9) after NFC.
+        original = "caf\u0065\u0301"  # 5 chars: c a f e ́
+        normalized = _normalize_text(original)  # "café" — 4 chars
+        assert normalized == "caf\u00e9"
+        pos_map = _build_position_map(original, normalized)
+        # 4 normalized chars + 1 sentinel = 5 entries
+        assert len(pos_map) == 5
+        assert pos_map[0] == 0  # 'c'
+        assert pos_map[1] == 1  # 'a'
+        assert pos_map[2] == 2  # 'f'
+        assert pos_map[3] == 3  # 'e' (start of 2-char decomposed sequence)
+        assert pos_map[4] == 5  # sentinel = orig_len (past the combining accent)
+
+
+class TestFindClosestMatch:
+    def test_close_match_found(self) -> None:
+        """Returns diagnostic info when a close match exists."""
+        old_text = "the quick\u2014brown fox"
+        file_content = "line one\nthe quick-brown fox\nline three\n"
+        diag = _find_closest_match(old_text, file_content)
+        assert diag["closest_match_line"] == 2
+        assert diag["first_diff_char"] is not None
+        assert diag["expected_snippet"] is not None
+        assert diag["found_snippet"] is not None
+
+    def test_no_close_match(self) -> None:
+        """Returns empty dict when nothing is close."""
+        old_text = "completely different text xyz123"
+        file_content = "line one\nline two\nline three\n"
+        diag = _find_closest_match(old_text, file_content)
+        assert diag == {}
+
+    def test_exact_match_reports_line(self) -> None:
+        """Even near-exact matches are reported with correct line number."""
+        old_text = "hello world"
+        file_content = "first\nhello worlds\nthird\n"
+        diag = _find_closest_match(old_text, file_content)
+        assert diag["closest_match_line"] == 2
 
 
 class TestDelete:

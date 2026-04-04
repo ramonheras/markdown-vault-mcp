@@ -18,7 +18,9 @@ import re
 import shutil
 import sqlite3
 import threading
+import unicodedata
 from collections import defaultdict
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -76,6 +78,192 @@ logger = logging.getLogger(__name__)
 _DEFAULT_STATE_SUBDIR = ".markdown_vault_mcp"
 _DEFAULT_STATE_FILENAME = "state.json"
 _CONTEXT_FOLDER_PEERS_LIMIT = 20
+
+# ---------------------------------------------------------------------------
+# Edit helpers
+# ---------------------------------------------------------------------------
+
+# Direct single-character substitutions applied during normalization.
+# Used by _build_position_map to avoid calling _normalize_text() per
+# character, which would (a) be O(n²) and (b) incorrectly strip a lone
+# space/tab as "trailing whitespace" of a one-char string.
+_CHAR_SUBS: dict[str, str] = {
+    "\u2013": "-",  # en-dash
+    "\u2014": "-",  # em-dash
+    "\u201c": '"',  # left double quotation mark
+    "\u201d": '"',  # right double quotation mark
+    "\u2018": "'",  # left single quotation mark
+    "\u2019": "'",  # right single quotation mark
+}
+
+
+def _normalize_text(text: str) -> str:
+    """Normalize text for fuzzy edit matching.
+
+    Applied to both old_text and file content for comparison only — the
+    actual file replacement uses original bytes.
+
+    Steps:
+        1. Unicode NFC normalization.
+        2. En-dash / em-dash → hyphen.
+        3. Smart quotes → straight quotes.
+        4. Collapse whitespace runs within lines (not across newlines).
+        5. Strip trailing whitespace per line.
+    """
+    text = unicodedata.normalize("NFC", text)
+    text = text.replace("\u2013", "-").replace("\u2014", "-")
+    text = text.replace("\u201c", '"').replace("\u201d", '"')
+    text = text.replace("\u2018", "'").replace("\u2019", "'")
+    lines = text.split("\n")
+    lines = [re.sub(r"[ \t]+", " ", line).rstrip() for line in lines]
+    return "\n".join(lines)
+
+
+def _build_position_map(original: str, normalized: str) -> list[int]:
+    """Map each normalized character index to its original character index.
+
+    Walks both strings in parallel, advancing the original pointer past
+    characters that were removed or merged by normalization.
+
+    Args:
+        original: The original (un-normalized) text.
+        normalized: The result of ``_normalize_text(original)``.
+
+    Returns:
+        A list of *len(normalized) + 1* entries where ``pos_map[i]`` is the
+        index in *original* corresponding to ``normalized[i]``, and the final
+        sentinel ``pos_map[len(normalized)]`` equals ``len(original)``.  The
+        sentinel lets callers compute the original end-position of a match
+        as ``pos_map[norm_end]`` without special-casing the last character.
+    """
+    pos_map: list[int] = []
+    orig_idx = 0
+    norm_idx = 0
+    orig_len = len(original)
+    norm_len = len(normalized)
+
+    while norm_idx < norm_len:
+        if orig_idx >= orig_len:
+            # Safety: normalized should never be longer.
+            break
+
+        norm_char = normalized[norm_idx]
+        orig_char = original[orig_idx]
+
+        # Newlines anchor both streams.
+        if norm_char == "\n" and orig_char == "\n":
+            pos_map.append(orig_idx)
+            orig_idx += 1
+            norm_idx += 1
+            continue
+
+        # Trailing whitespace was stripped: skip original trailing ws
+        # before a newline or end-of-string.
+        if norm_char == "\n" or (norm_idx == norm_len - 1 and norm_char != "\n"):
+            if norm_char != "\n":
+                # last char of normalized, not a newline — emit it first
+                pos_map.append(orig_idx)
+                orig_idx += 1
+                norm_idx += 1
+            # skip trailing whitespace in original before newline/end
+            while orig_idx < orig_len and original[orig_idx] in " \t":
+                orig_idx += 1
+            continue
+
+        # Whitespace collapse: normalized has single space, original has one or
+        # more spaces/tabs. Checked before the direct-match step so that runs
+        # of whitespace are always consumed in full (a single space would pass
+        # the direct-match test below, leaving trailing spaces unadvanced).
+        if norm_char == " " and orig_char in " \t":
+            pos_map.append(orig_idx)
+            orig_idx += 1
+            # skip remaining whitespace in original
+            while orig_idx < orig_len and original[orig_idx] in " \t":
+                orig_idx += 1
+            norm_idx += 1
+            continue
+
+        # Direct character match (possibly after NFC + char substitution).
+        # Using _normalize_text(orig_char) would be O(n²) and would also
+        # incorrectly strip a lone space as "trailing whitespace", so we
+        # apply NFC and _CHAR_SUBS directly instead.
+        nfc_char = unicodedata.normalize("NFC", orig_char)
+        sub_char = _CHAR_SUBS.get(nfc_char, nfc_char)
+        if sub_char == norm_char:
+            pos_map.append(orig_idx)
+            orig_idx += 1
+            norm_idx += 1
+            continue
+
+        # Unicode NFC: original may have multiple chars for one normalized.
+        # Try expanding original chars until they normalize to norm_char.
+        consumed = 1
+        while orig_idx + consumed <= orig_len:
+            chunk = original[orig_idx : orig_idx + consumed]
+            if unicodedata.normalize("NFC", chunk) == norm_char:
+                pos_map.append(orig_idx)
+                orig_idx += consumed
+                norm_idx += 1
+                break
+            consumed += 1
+        else:
+            # Fallback: advance both by one.
+            pos_map.append(orig_idx)
+            orig_idx += 1
+            norm_idx += 1
+
+    # Sentinel: pos_map[norm_len] = orig_len so callers can compute
+    # orig_end = pos_map[norm_end] for any norm_end including norm_len.
+    pos_map.append(orig_len)
+    return pos_map
+
+
+def _find_closest_match(old_text: str, file_content: str) -> dict[str, Any]:
+    """Find the closest fuzzy match for diagnostic error reporting.
+
+    Compares the first line of *old_text* against every line in the file
+    using ``difflib.SequenceMatcher``.  If a match with ratio >= 0.6 is
+    found, returns diagnostic info about the first character divergence.
+
+    Args:
+        old_text: The text the caller tried to match.
+        file_content: The full file content.
+
+    Returns:
+        A dict with ``closest_match_line``, ``first_diff_char``,
+        ``expected_snippet``, and ``found_snippet``; or an empty dict
+        if no match with ratio >= 0.6 is found.
+    """
+    first_line = old_text.split("\n", 1)[0]
+    file_lines = file_content.split("\n")
+    best_ratio = 0.0
+    best_line_num = 0
+    best_line_text = ""
+
+    for i, line in enumerate(file_lines, 1):
+        ratio = SequenceMatcher(None, first_line, line).ratio()
+        if ratio > best_ratio:
+            best_ratio = ratio
+            best_line_num = i
+            best_line_text = line
+
+    if best_ratio < 0.6:
+        return {}
+
+    # Find first character difference.
+    diff_pos = 0
+    min_len = min(len(first_line), len(best_line_text))
+    while diff_pos < min_len and first_line[diff_pos] == best_line_text[diff_pos]:
+        diff_pos += 1
+
+    ctx = 30
+    return {
+        "closest_match_line": best_line_num,
+        "first_diff_char": diff_pos,
+        "expected_snippet": first_line[max(0, diff_pos - ctx) : diff_pos + ctx],
+        "found_snippet": best_line_text[max(0, diff_pos - ctx) : diff_pos + ctx],
+    }
+
 
 # ---------------------------------------------------------------------------
 # Link-update helpers (used by Collection.rename update_links logic)
@@ -2245,22 +2433,50 @@ class Collection:
         return result
 
     def edit(
-        self, path: str, old_text: str, new_text: str, if_match: str | None = None
+        self,
+        path: str,
+        old_text: str | None = None,
+        new_text: str = "",
+        if_match: str | None = None,
+        line_start: int | None = None,
+        line_end: int | None = None,
     ) -> EditResult:
         """Patch a section of a document.
 
-        Reads the file, verifies *old_text* exists exactly once in the
-        full file content (including frontmatter), replaces it with
-        *new_text*, and writes back.
+        Supports three modes:
+
+        - **Exact match** (``old_text`` only): verifies *old_text* exists
+          exactly once in the full file content (including frontmatter),
+          replaces it with *new_text*.
+        - **Line-range** (``line_start``/``line_end`` only): replaces the
+          specified line range with *new_text*.
+        - **Scoped match** (both): searches for *old_text* only within the
+          specified line range, allowing disambiguation of repeated text.
+
+        When exact match fails, a normalized comparison is attempted
+        (Unicode NFC, dash/quote normalization, whitespace collapsing).
+        If a unique normalized match is found, it is used and
+        ``match_type="normalized"`` is returned.
 
         Args:
             path: Relative document path.
-            old_text: Text to replace (must appear exactly once).
-            new_text: Replacement text.
+            old_text: Text to replace. Required for exact-match and
+                scoped-match modes.  Must appear exactly once (in the
+                file or in the line range).
+            new_text: Replacement text. When using line-range mode with an
+                empty string (``""``), the selected lines are replaced with a
+                single blank line. To delete lines entirely, pass the literal
+                content of those lines as *old_text* (scoped-match mode) and
+                supply an empty *new_text*, which removes that text span
+                without inserting a blank line.
             if_match: Optional etag from a previous :meth:`read` call.
                 When provided, the edit is only performed if the current
                 file hash matches this value, preventing edits based on
                 stale content. Pass ``None`` (default) to skip the check.
+            line_start: First line to replace (1-based, inclusive).
+                Must be provided together with *line_end*.
+            line_end: Last line to replace (1-based, inclusive).
+                Must be provided together with *line_start*.
 
         Returns:
             :class:`~markdown_vault_mcp.types.EditResult`.
@@ -2272,11 +2488,26 @@ class Collection:
                 not match the current file hash.
             EditConflictError: If *old_text* is not found or appears
                 more than once.
+            ValueError: If parameter combination is invalid, or line
+                numbers are out of range.
         """
         self._check_writable()
 
-        if not old_text:
+        # --- Parameter validation ---
+        if old_text is not None and not old_text:
             raise ValueError("old_text must not be empty")
+        has_lines = line_start is not None or line_end is not None
+        if old_text is None and not has_lines:
+            raise ValueError("Must provide old_text, line_start/line_end, or both")
+        if (line_start is None) != (line_end is None):
+            raise ValueError("Must provide both line_start and line_end, not just one")
+        if line_start is not None and line_end is not None:
+            if line_start < 1:
+                raise ValueError("line_start must be >= 1 (lines are 1-based)")
+            if line_start > line_end:
+                raise ValueError(
+                    f"line_start ({line_start}) must be <= line_end ({line_end})"
+                )
 
         with self._write_lock:
             self._ensure_initialized()
@@ -2293,16 +2524,18 @@ class Collection:
                     )
 
             file_content = abs_path.read_text(encoding="utf-8")
-            count = file_content.count(old_text)
 
-            if count == 0:
-                raise EditConflictError(f"old_text not found in {path}")
-            if count > 1:
-                raise EditConflictError(
-                    f"old_text appears {count} times in {path}; must appear exactly once"
+            if has_lines:
+                assert line_start is not None and line_end is not None
+                new_content, match_type = self._edit_with_lines(
+                    file_content, old_text, new_text, line_start, line_end, path
+                )
+            else:
+                assert old_text is not None
+                new_content, match_type = self._edit_with_text(
+                    file_content, old_text, new_text, path
                 )
 
-            new_content = file_content.replace(old_text, new_text, 1)
             abs_path.write_text(new_content, encoding="utf-8")
 
             # Update FTS index.
@@ -2315,7 +2548,128 @@ class Collection:
         # Fire git callback in background thread.
         self._fire_write_callback(abs_path, new_content, "edit")
 
-        return EditResult(path=path, replacements=1)
+        return EditResult(path=path, replacements=1, match_type=match_type)
+
+    def _edit_with_lines(
+        self,
+        file_content: str,
+        old_text: str | None,
+        new_text: str,
+        line_start: int,
+        line_end: int,
+        path: str,
+    ) -> tuple[str, str]:
+        """Handle line-range and scoped-match edit modes.
+
+        Returns:
+            Tuple of (new_file_content, match_type).
+        """
+        lines = file_content.split("\n")
+        # The split produces an extra empty string after a trailing newline.
+        # Total addressable lines = len(lines) if last is non-empty, else
+        # len(lines) - 1 (the trailing empty element isn't a real line).
+        total_lines = len(lines) - 1 if lines and lines[-1] == "" else len(lines)
+        if line_end > total_lines:
+            raise ValueError(
+                f"line_end ({line_end}) out of range (file has {total_lines} lines)"
+            )
+
+        # Convert to 0-based indices for slicing.
+        start_idx = line_start - 1
+        end_idx = line_end  # exclusive for slice
+
+        if old_text is not None:
+            # Scoped match: search within the line range only.
+            scope = "\n".join(lines[start_idx:end_idx])
+            context_desc = f"lines {line_start}-{line_end} of {path}"
+            new_scope, match_type = self._match_and_replace(
+                scope, old_text, new_text, path, context_desc=context_desc
+            )
+            lines[start_idx:end_idx] = new_scope.split("\n")
+        else:
+            # Pure line-range replacement.
+            match_type = "exact"
+            # Reconstruct: new_text replaces lines, preserving structure.
+            # Strip trailing newline from new_text if present to avoid
+            # double-newline when rejoining.
+            replacement_lines = new_text.rstrip("\n").split("\n") if new_text else [""]
+            lines[start_idx:end_idx] = replacement_lines
+
+        return "\n".join(lines), match_type
+
+    def _edit_with_text(
+        self,
+        file_content: str,
+        old_text: str,
+        new_text: str,
+        path: str,
+    ) -> tuple[str, str]:
+        """Handle exact-match edit mode (with normalized fallback).
+
+        Thin wrapper so ``edit()`` has a symmetric call site for both modes
+        (line-range via ``_edit_with_lines``, text via this method).
+
+        Returns:
+            Tuple of (new_file_content, match_type).
+        """
+        return self._match_and_replace(file_content, old_text, new_text, path)
+
+    def _match_and_replace(
+        self,
+        content: str,
+        old_text: str,
+        new_text: str,
+        path: str,
+        context_desc: str | None = None,
+    ) -> tuple[str, str]:
+        """Try exact match, then normalized match, then raise with diagnostics.
+
+        Args:
+            content: The text to search within (full file or a line-range scope).
+            old_text: Text to find and replace.
+            new_text: Replacement text.
+            path: Vault-relative file path, used in error messages.
+            context_desc: Optional human-readable context for error messages
+                (e.g. ``"lines 5-10 of notes/foo.md"``). When omitted, errors
+                refer to *path* directly.
+
+        Returns:
+            Tuple of (new_content, match_type).
+        """
+        location = context_desc or path
+        count = content.count(old_text)
+
+        if count == 1:
+            return content.replace(old_text, new_text, 1), "exact"
+
+        if count > 1:
+            raise EditConflictError(
+                f"old_text appears {count} times in {location}; must appear exactly once"
+            )
+
+        # count == 0: try normalized matching.
+        normalized_content = _normalize_text(content)
+        normalized_old = _normalize_text(old_text)
+        norm_count = normalized_content.count(normalized_old)
+
+        if norm_count == 1:
+            pos_map = _build_position_map(content, normalized_content)
+            norm_start = normalized_content.index(normalized_old)
+            norm_end = norm_start + len(normalized_old)
+            orig_start = pos_map[norm_start]
+            orig_end = pos_map[norm_end]
+            new_content = content[:orig_start] + new_text + content[orig_end:]
+            return new_content, "normalized"
+
+        if norm_count > 1:
+            raise EditConflictError(
+                f"old_text appears {norm_count} times in {location} after "
+                f"normalization; must appear exactly once"
+            )
+
+        # norm_count == 0: raise with diagnostics.
+        diag = _find_closest_match(old_text, content)
+        raise EditConflictError(f"old_text not found in {location}", **diag)
 
     def delete(self, path: str, if_match: str | None = None) -> DeleteResult:
         """Delete a document or attachment.
