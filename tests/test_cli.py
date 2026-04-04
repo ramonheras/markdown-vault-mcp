@@ -428,6 +428,63 @@ class TestCmdIndex:
 
         mock_collection.build_index.assert_called_once_with(force=True)
 
+    @patch("markdown_vault_mcp.cli._build_collection")
+    def test_index_builds_embeddings_when_configured(
+        self,
+        mock_build: MagicMock,
+    ) -> None:
+        """index command calls build_embeddings() after build_index() when configured."""
+        mock_collection = MagicMock()
+        mock_stats = MagicMock()
+        mock_stats.documents_indexed = 5
+        mock_stats.chunks_indexed = 20
+        mock_collection.build_index.return_value = mock_stats
+        mock_collection.build_embeddings.return_value = 20
+        mock_build.return_value = mock_collection
+
+        with patch("sys.argv", ["markdown-vault-mcp", "index"]):
+            main()
+
+        mock_collection.build_embeddings.assert_called_once_with(force=False)
+
+    @patch("markdown_vault_mcp.cli._build_collection")
+    def test_index_skips_embeddings_when_not_configured(
+        self,
+        mock_build: MagicMock,
+    ) -> None:
+        """index command does not fail when embeddings are not configured."""
+        mock_collection = MagicMock()
+        mock_stats = MagicMock()
+        mock_stats.documents_indexed = 5
+        mock_stats.chunks_indexed = 20
+        mock_collection.build_index.return_value = mock_stats
+        mock_collection.build_embeddings.side_effect = ValueError("not configured")
+        mock_build.return_value = mock_collection
+
+        with patch("sys.argv", ["markdown-vault-mcp", "index"]):
+            main()  # must not raise
+
+        mock_collection.build_embeddings.assert_called_once()
+
+    @patch("markdown_vault_mcp.cli._build_collection")
+    def test_index_force_propagates_to_embeddings(
+        self,
+        mock_build: MagicMock,
+    ) -> None:
+        """--force flag is passed through to build_embeddings."""
+        mock_collection = MagicMock()
+        mock_stats = MagicMock()
+        mock_stats.documents_indexed = 5
+        mock_stats.chunks_indexed = 20
+        mock_collection.build_index.return_value = mock_stats
+        mock_collection.build_embeddings.return_value = 20
+        mock_build.return_value = mock_collection
+
+        with patch("sys.argv", ["markdown-vault-mcp", "index", "--force"]):
+            main()
+
+        mock_collection.build_embeddings.assert_called_once_with(force=True)
+
 
 class TestCmdSearch:
     """Test the search subcommand."""
@@ -694,3 +751,87 @@ class TestCmdReindex:
         assert "1 modified" in captured.out
         assert "2 deleted" in captured.out
         assert "10 unchanged" in captured.out
+
+    @patch("markdown_vault_mcp.cli._build_collection")
+    def test_reindex_builds_embeddings_when_configured(
+        self,
+        mock_build: MagicMock,
+    ) -> None:
+        """reindex command calls build_embeddings(force=True) when configured."""
+        mock_collection = MagicMock()
+        mock_result = MagicMock()
+        mock_result.added = 1
+        mock_result.modified = 0
+        mock_result.deleted = 0
+        mock_result.unchanged = 5
+        mock_collection.reindex.return_value = mock_result
+        mock_collection.build_embeddings.return_value = 10
+        mock_build.return_value = mock_collection
+
+        with patch("sys.argv", ["markdown-vault-mcp", "reindex"]):
+            main()
+
+        mock_collection.build_embeddings.assert_called_once_with(force=True)
+
+    @patch("markdown_vault_mcp.cli._build_collection")
+    def test_reindex_skips_embeddings_when_not_configured(
+        self,
+        mock_build: MagicMock,
+    ) -> None:
+        """reindex command does not fail when embeddings are not configured."""
+        mock_collection = MagicMock()
+        mock_result = MagicMock()
+        mock_result.added = 0
+        mock_result.modified = 0
+        mock_result.deleted = 0
+        mock_result.unchanged = 5
+        mock_collection.reindex.return_value = mock_result
+        mock_collection.build_embeddings.side_effect = ValueError("not configured")
+        mock_build.return_value = mock_collection
+
+        with patch("sys.argv", ["markdown-vault-mcp", "reindex"]):
+            main()  # must not raise
+
+        mock_collection.build_embeddings.assert_called_once()
+
+    @patch("markdown_vault_mcp.cli._build_collection")
+    def test_reindex_uses_force_false_when_no_changes(
+        self,
+        mock_build: MagicMock,
+    ) -> None:
+        """reindex skips force rebuild when FTS found no changes."""
+        mock_collection = MagicMock()
+        mock_result = MagicMock()
+        mock_result.added = 0
+        mock_result.modified = 0
+        mock_result.deleted = 0
+        mock_result.unchanged = 10
+        mock_collection.reindex.return_value = mock_result
+        mock_collection.build_embeddings.return_value = 0
+        mock_build.return_value = mock_collection
+
+        with patch("sys.argv", ["markdown-vault-mcp", "reindex"]):
+            main()
+
+        mock_collection.build_embeddings.assert_called_once_with(force=False)
+
+    @patch("markdown_vault_mcp.cli._build_collection")
+    def test_reindex_uses_force_true_when_changes_exist(
+        self,
+        mock_build: MagicMock,
+    ) -> None:
+        """reindex forces rebuild when FTS found added/modified/deleted files."""
+        mock_collection = MagicMock()
+        mock_result = MagicMock()
+        mock_result.added = 2
+        mock_result.modified = 1
+        mock_result.deleted = 0
+        mock_result.unchanged = 10
+        mock_collection.reindex.return_value = mock_result
+        mock_collection.build_embeddings.return_value = 30
+        mock_build.return_value = mock_collection
+
+        with patch("sys.argv", ["markdown-vault-mcp", "reindex"]):
+            main()
+
+        mock_collection.build_embeddings.assert_called_once_with(force=True)
