@@ -195,7 +195,8 @@ def _cmd_reindex(args: argparse.Namespace) -> None:
         f"{result.deleted} deleted, {result.unchanged} unchanged"
     )
     try:
-        n = collection.build_embeddings(force=True)
+        should_force = result.added > 0 or result.modified > 0 or result.deleted > 0
+        n = collection.build_embeddings(force=should_force)
         logger.info("Embedded %d chunks", n)
         print(f"Embedded {n} chunks")
     except ValueError:

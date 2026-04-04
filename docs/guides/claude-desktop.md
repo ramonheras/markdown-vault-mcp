@@ -250,9 +250,9 @@ You should see a commit from `markdown-vault-mcp`. Delete the test note when don
 
 **Key env vars:**
 
-- `EMBEDDINGS_PATH` — where to persist embedding vectors on disk (required to enable semantic search)
-- `EMBEDDING_PROVIDER` — `fastembed`, `ollama`, or `openai`
-- `FASTEMBED_MODEL` / `OLLAMA_MODEL` — which model to use
+- `MARKDOWN_VAULT_MCP_EMBEDDINGS_PATH` — where to persist embedding vectors on disk (required to enable semantic search)
+- `EMBEDDING_PROVIDER` — `fastembed`, `ollama`, or `openai` (no prefix — intentional)
+- `MARKDOWN_VAULT_MCP_FASTEMBED_MODEL` / `MARKDOWN_VAULT_MCP_OLLAMA_MODEL` — which model to use
 
 ### Pre-build embeddings before first launch
 

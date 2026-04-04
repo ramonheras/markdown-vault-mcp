@@ -466,6 +466,25 @@ class TestCmdIndex:
 
         mock_collection.build_embeddings.assert_called_once()
 
+    @patch("markdown_vault_mcp.cli._build_collection")
+    def test_index_force_propagates_to_embeddings(
+        self,
+        mock_build: MagicMock,
+    ) -> None:
+        """--force flag is passed through to build_embeddings."""
+        mock_collection = MagicMock()
+        mock_stats = MagicMock()
+        mock_stats.documents_indexed = 5
+        mock_stats.chunks_indexed = 20
+        mock_collection.build_index.return_value = mock_stats
+        mock_collection.build_embeddings.return_value = 20
+        mock_build.return_value = mock_collection
+
+        with patch("sys.argv", ["markdown-vault-mcp", "index", "--force"]):
+            main()
+
+        mock_collection.build_embeddings.assert_called_once_with(force=True)
+
 
 class TestCmdSearch:
     """Test the search subcommand."""
@@ -774,3 +793,45 @@ class TestCmdReindex:
             main()  # must not raise
 
         mock_collection.build_embeddings.assert_called_once()
+
+    @patch("markdown_vault_mcp.cli._build_collection")
+    def test_reindex_uses_force_false_when_no_changes(
+        self,
+        mock_build: MagicMock,
+    ) -> None:
+        """reindex skips force rebuild when FTS found no changes."""
+        mock_collection = MagicMock()
+        mock_result = MagicMock()
+        mock_result.added = 0
+        mock_result.modified = 0
+        mock_result.deleted = 0
+        mock_result.unchanged = 10
+        mock_collection.reindex.return_value = mock_result
+        mock_collection.build_embeddings.return_value = 0
+        mock_build.return_value = mock_collection
+
+        with patch("sys.argv", ["markdown-vault-mcp", "reindex"]):
+            main()
+
+        mock_collection.build_embeddings.assert_called_once_with(force=False)
+
+    @patch("markdown_vault_mcp.cli._build_collection")
+    def test_reindex_uses_force_true_when_changes_exist(
+        self,
+        mock_build: MagicMock,
+    ) -> None:
+        """reindex forces rebuild when FTS found added/modified/deleted files."""
+        mock_collection = MagicMock()
+        mock_result = MagicMock()
+        mock_result.added = 2
+        mock_result.modified = 1
+        mock_result.deleted = 0
+        mock_result.unchanged = 10
+        mock_collection.reindex.return_value = mock_result
+        mock_collection.build_embeddings.return_value = 30
+        mock_build.return_value = mock_collection
+
+        with patch("sys.argv", ["markdown-vault-mcp", "reindex"]):
+            main()
+
+        mock_collection.build_embeddings.assert_called_once_with(force=True)
