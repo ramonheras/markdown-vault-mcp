@@ -291,6 +291,65 @@ class TestSearch:
         assert len(results) == 1
         assert results[0].path == "b.md"
 
+    def test_search_empty_query_returns_empty_results(self) -> None:
+        """search() returns an empty list for an empty query string (no exception)."""
+        idx = FTSIndex(":memory:")
+        idx.upsert_note(
+            make_note(
+                "a.md",
+                chunks=[
+                    Chunk(
+                        heading=None,
+                        heading_level=0,
+                        content="hello world",
+                        start_line=0,
+                    )
+                ],
+            )
+        )
+        results = idx.search("")
+        assert results == []
+
+    def test_search_malformed_fts5_syntax_returns_empty_results(self) -> None:
+        """search() returns an empty list for malformed FTS5 syntax (no exception)."""
+        idx = FTSIndex(":memory:")
+        idx.upsert_note(
+            make_note(
+                "a.md",
+                chunks=[
+                    Chunk(
+                        heading=None,
+                        heading_level=0,
+                        content="hello world",
+                        start_line=0,
+                    )
+                ],
+            )
+        )
+        # Unclosed quote is invalid FTS5 syntax
+        results = idx.search('"unclosed quote')
+        assert results == []
+
+    def test_search_invalid_fts5_column_returns_empty_results(self) -> None:
+        """search() returns an empty list for an invalid FTS5 column reference."""
+        idx = FTSIndex(":memory:")
+        idx.upsert_note(
+            make_note(
+                "a.md",
+                chunks=[
+                    Chunk(
+                        heading=None,
+                        heading_level=0,
+                        content="hello world",
+                        start_line=0,
+                    )
+                ],
+            )
+        )
+        # FTS5 column filters for non-existent columns raise OperationalError
+        results = idx.search("nonexistent_column:value")
+        assert results == []
+
 
 class TestUpsert:
     def test_upsert_note_replaces_existing(self) -> None:

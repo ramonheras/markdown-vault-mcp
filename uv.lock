@@ -1163,7 +1163,7 @@ wheels = [
 
 [[package]]
 name = "markdown-vault-mcp"
-version = "1.18.0"
+version = "1.18.1"
 source = { editable = "." }
 dependencies = [
     { name = "python-frontmatter" },
