@@ -509,7 +509,7 @@ def create_server(transport: str = "stdio") -> FastMCP:
     # called after CLI verbose setup.  In library/test usage where logging is
     # configured later, tracebacks default to off (safe for production).
     include_traceback = logging.getLogger().isEnabledFor(logging.DEBUG)
-    mcp.add_middleware(ErrorHandlingMiddleware(include_traceback=include_traceback))
+    mcp.add_middleware(ErrorHandlingMiddleware(include_traceback=include_traceback, transform_errors=False))
     mcp.add_middleware(TimingMiddleware())
     rich_logging = os.environ.get("FASTMCP_ENABLE_RICH_LOGGING", "true").strip().lower()
     if rich_logging in ("false", "0", "no"):
