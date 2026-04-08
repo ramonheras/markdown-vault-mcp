@@ -24,6 +24,12 @@ if TYPE_CHECKING:
     from fastmcp.server.event_store import EventStore
 
 from fastmcp import FastMCP
+from fastmcp.server.middleware.error_handling import ErrorHandlingMiddleware
+from fastmcp.server.middleware.logging import (
+    LoggingMiddleware,
+    StructuredLoggingMiddleware,
+)
+from fastmcp.server.middleware.timing import TimingMiddleware
 
 from markdown_vault_mcp.config import _ENV_PREFIX, load_config
 
@@ -493,6 +499,20 @@ def create_server(transport: str = "stdio") -> FastMCP:
         lifespan=make_collection_lifespan(config),
         auth=auth,
     )
+
+    # --- Middleware stack ---
+    # Order matters: outermost runs first.
+    #  1. ErrorHandlingMiddleware — catches unhandled exceptions
+    #  2. TimingMiddleware — records tool invocation duration
+    #  3. LoggingMiddleware — rich or structured (JSON) output
+    include_traceback = logging.getLogger().isEnabledFor(logging.DEBUG)
+    mcp.add_middleware(ErrorHandlingMiddleware(include_traceback=include_traceback))
+    mcp.add_middleware(TimingMiddleware())
+    rich_logging = os.environ.get("FASTMCP_ENABLE_RICH_LOGGING", "true").strip().lower()
+    if rich_logging in ("false", "0", "no"):
+        mcp.add_middleware(StructuredLoggingMiddleware())
+    else:
+        mcp.add_middleware(LoggingMiddleware())
 
     register_tools(mcp, transport=transport)
     register_resources(mcp)

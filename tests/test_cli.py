@@ -187,6 +187,45 @@ class TestMainDispatch:
         assert logging.getLogger("httpcore").level == logging.WARNING
 
     @patch("markdown_vault_mcp.cli._COMMANDS")
+    @patch("markdown_vault_mcp.cli.configure_logging")
+    def test_verbose_sets_fastmcp_log_level_env(
+        self, _mock_configure: MagicMock, mock_commands: MagicMock
+    ) -> None:
+        """``-v`` sets FASTMCP_LOG_LEVEL=DEBUG in the environment."""
+        import os
+
+        mock_handler = MagicMock()
+        mock_commands.__getitem__ = MagicMock(return_value=mock_handler)
+        old = os.environ.pop("FASTMCP_LOG_LEVEL", None)
+        try:
+            with patch("sys.argv", ["markdown-vault-mcp", "-v", "index"]):
+                main()
+            assert os.environ.get("FASTMCP_LOG_LEVEL") == "DEBUG"
+        finally:
+            if old is not None:
+                os.environ["FASTMCP_LOG_LEVEL"] = old
+            else:
+                os.environ.pop("FASTMCP_LOG_LEVEL", None)
+
+    @patch("markdown_vault_mcp.cli._COMMANDS")
+    def test_no_verbose_does_not_set_fastmcp_log_level(
+        self, mock_commands: MagicMock
+    ) -> None:
+        """Without ``-v``, FASTMCP_LOG_LEVEL is not touched."""
+        import os
+
+        mock_handler = MagicMock()
+        mock_commands.__getitem__ = MagicMock(return_value=mock_handler)
+        old = os.environ.pop("FASTMCP_LOG_LEVEL", None)
+        try:
+            with patch("sys.argv", ["markdown-vault-mcp", "index"]):
+                main()
+            assert os.environ.get("FASTMCP_LOG_LEVEL") is None
+        finally:
+            if old is not None:
+                os.environ["FASTMCP_LOG_LEVEL"] = old
+
+    @patch("markdown_vault_mcp.cli._COMMANDS")
     def test_root_handler_added_when_none_exist(self, mock_commands: MagicMock) -> None:
         """A StreamHandler is added to root when it has no handlers."""
         import logging

@@ -338,6 +338,7 @@ def main() -> None:
         root.addHandler(handler)
 
     if args.verbose:
+        os.environ["FASTMCP_LOG_LEVEL"] = "DEBUG"
         configure_logging("DEBUG")
         # httpx is noisy at DEBUG — keep it at WARNING.
         logging.getLogger("httpx").setLevel(logging.WARNING)

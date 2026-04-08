@@ -32,6 +32,25 @@ src/markdown_vault_mcp/
 - Type hints everywhere
 - Tests: `pytest` with fixtures in `tests/fixtures/`
 
+## Hard PR Acceptance Gates
+
+Every PR must pass **all** of the following before merge. Do not open or push a PR until these are green locally:
+
+1. **CI passes** — `uv run pytest -x -q` all tests pass
+2. **Lint passes** — run in this exact order: `uv run ruff check --fix .` then `uv run ruff format .` then verify with `uv run ruff format --check .`. Always run format *after* check --fix because check --fix can leave files needing reformatting.
+3. **Type-check passes** — `uv run mypy src/` reports no errors
+4. **Patch coverage ≥ 80%** — Codecov measures only lines added/changed in the PR diff. Run `uv run pytest --cov=<changed_module> --cov-report=term-missing` and verify new code is exercised. Add tests for every uncovered branch before pushing.
+5. **Docs updated** — `README.md` and `docs/**` reflect any user-facing changes in the same commit
+
+## GitHub Review Types
+
+GitHub has two distinct review mechanisms — **both must be read and addressed**:
+
+- **Inline review comments** (`get_review_comments`): attached to specific lines of the diff. Appear in the "Files changed" tab. Use `get_review_comments` to fetch these.
+- **PR-level comments** (`get_comments`): posted on the Conversation tab, not tied to a line. Review summary posts, bot analysis, and blocking issues are often posted here. Use `get_comments` to fetch these.
+
+Always fetch both before declaring a review round complete.
+
 ## Reference
 
 This project is extracted from [`pvliesdonk/if-craft-corpus`](https://github.com/pvliesdonk/if-craft-corpus). See the design doc's Reference Code section for the mapping between source files.
@@ -61,6 +80,34 @@ Every issue, PR, and code change must consider documentation impact. Before clos
 This repo shares domain-independent infrastructure with [`pvliesdonk/image-generation-mcp`](https://github.com/pvliesdonk/image-generation-mcp). See [`SYNC.md`](SYNC.md) for the shared file mapping, known divergences, and port history.
 
 **Rule:** When fixing or improving shared infrastructure (auth, CI/CD, Docker entrypoint, release pipeline, packaging, CLI logging), create a corresponding issue in the other repo to port the change. Reference the source PR in the issue body. Domain-specific code (vault logic, image generation, tools, resources) does not need cross-posting.
+
+## Logging Standard
+
+### Framework
+- Standard library `logging` throughout. Every module: `logger = logging.getLogger(__name__)`.
+- No `print()` for operational output. No third-party logging libraries.
+- FastMCP middleware handles tool invocation, timing, and error logging automatically.
+- All logging goes through FastMCP's `configure_logging()` for uniform output. `FASTMCP_LOG_LEVEL` is the single log level control; the `-v` CLI flag sets it to `DEBUG`. `FASTMCP_ENABLE_RICH_LOGGING=false` switches to plain/JSON output.
+
+### Log Levels
+| Level | Use for |
+|-------|---------|
+| `DEBUG` | Detailed internals: cache hits, parameter values, config resolution |
+| `INFO` | Significant operations: service startup, configuration decisions (tool calls logged by middleware) |
+| `WARNING` | Degraded but continuing: API errors with fallback, missing optional config, unexpected data |
+| `ERROR` | Failures affecting the primary result. Use `logger.error(..., exc_info=True)` when traceback is needed |
+
+### Exception Handling
+- All exceptions must be caught and handled. No bare `except:`. Always specify the exception type.
+- Expected errors (HTTP 4xx, missing data): catch, log, return user-facing error string.
+- Optional enrichment failures: catch, log at `DEBUG` with `exc_info=True`, continue.
+- Primary result errors: catch, log at `WARNING` or `ERROR`, return error string.
+- `ErrorHandlingMiddleware` is a safety net. If it catches something, that's a bug to fix.
+
+### Message Format
+- Pseudo-structured: `logger.info("event_name key=%s", value)`
+- Event name as first token (snake_case), then key=value pairs via `%s` formatting.
+- Never use f-strings in log calls (defeats lazy evaluation).
 
 ## Key Design Decisions
 
