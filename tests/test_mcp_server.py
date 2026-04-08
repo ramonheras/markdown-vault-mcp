@@ -3176,6 +3176,9 @@ class TestMiddlewareStack:
 
         server = create_server()
         types = [type(m) for m in server.middleware]
+        assert ErrorHandlingMiddleware in types, "ErrorHandlingMiddleware missing"
+        assert TimingMiddleware in types, "TimingMiddleware missing"
+        assert LoggingMiddleware in types, "LoggingMiddleware missing"
         eh_idx = types.index(ErrorHandlingMiddleware)
         tm_idx = types.index(TimingMiddleware)
         lg_idx = types.index(LoggingMiddleware)

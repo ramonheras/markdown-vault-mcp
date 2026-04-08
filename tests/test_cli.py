@@ -224,6 +224,8 @@ class TestMainDispatch:
         finally:
             if old is not None:
                 os.environ["FASTMCP_LOG_LEVEL"] = old
+            else:
+                os.environ.pop("FASTMCP_LOG_LEVEL", None)
 
     @patch("markdown_vault_mcp.cli._COMMANDS")
     def test_root_handler_added_when_none_exist(self, mock_commands: MagicMock) -> None:

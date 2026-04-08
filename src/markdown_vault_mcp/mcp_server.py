@@ -505,6 +505,9 @@ def create_server(transport: str = "stdio") -> FastMCP:
     #  1. ErrorHandlingMiddleware — catches unhandled exceptions
     #  2. TimingMiddleware — records tool invocation duration
     #  3. LoggingMiddleware — rich or structured (JSON) output
+    # Capture root log level *now* — works correctly when create_server() is
+    # called after CLI verbose setup.  In library/test usage where logging is
+    # configured later, tracebacks default to off (safe for production).
     include_traceback = logging.getLogger().isEnabledFor(logging.DEBUG)
     mcp.add_middleware(ErrorHandlingMiddleware(include_traceback=include_traceback))
     mcp.add_middleware(TimingMiddleware())
