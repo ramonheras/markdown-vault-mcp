@@ -8,6 +8,7 @@ depends on (version strings, import paths) stay consistent.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -99,3 +100,31 @@ def test_claude_code_plugin_json_shape() -> None:
     assert len(parts) == 3 and all(p.isdigit() for p in parts), (
         f"expected X.Y.Z semver, got {version!r}"
     )
+
+
+def _load_plugin_mcp_json() -> dict:
+    """Load the Claude Code .mcp.json server launch config."""
+    path = PLUGIN_DIR / ".mcp.json"
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def test_plugin_mcp_json_pinned_and_matches_plugin_version() -> None:
+    """.mcp.json must pin --from markdown-vault-mcp[all]==<X.Y.Z> and match plugin.json."""
+    mcp_cfg = _load_plugin_mcp_json()
+    entry = mcp_cfg["markdown-vault-mcp"]
+    assert entry["command"] == "uvx"
+
+    args = entry["args"]
+    assert "--from" in args, f"args must include --from, got {args}"
+    from_index = args.index("--from")
+    spec = args[from_index + 1]
+    match = re.fullmatch(r"markdown-vault-mcp\[all\]==(\d+\.\d+\.\d+)", spec)
+    assert match, f"unexpected --from spec: {spec!r}"
+
+    plugin_version = _load_plugin_json()["version"]
+    assert match.group(1) == plugin_version, (
+        f".mcp.json pinned to {match.group(1)} but plugin.json is {plugin_version}"
+    )
+
+    env = entry["env"]
+    assert "MARKDOWN_VAULT_MCP_SOURCE_DIR" in env
