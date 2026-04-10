@@ -1504,6 +1504,13 @@ Set `MARKDOWN_VAULT_MCP_GIT_LFS=false` for repos that do not use LFS, or when
 
 Safety branch mode for push failures is tracked separately (see #119).
 
+**Git history queries**: `GitWriteStrategy` exposes two read-only methods for querying the git commit log without modifying any state:
+
+- `get_file_history(repo_path, path, since, limit)` — runs `git log` with a sentinel-delimited format string to enumerate commits touching a note or the entire vault. Uses ASCII Record Separator (`\x1e`) as a block delimiter so commit records can be parsed reliably regardless of commit message content. Vault-wide queries append `--name-only` to include changed file paths per commit.
+- `get_file_diff(repo_path, path, ref, per_commit)` — runs `git diff` or `git show` to produce unified diffs. When `since_sha` is provided (validated as `[0-9a-f]{4,40}`), it is used directly as the ref. When `since_timestamp` is provided, `git rev-list --before=<ts> -1 HEAD -- <path>` resolves it to a SHA. Output exceeding 50 KB is truncated with a `[diff truncated: N bytes omitted]` note. `CalledProcessError` from an unknown ref is re-raised as `ValueError`.
+
+Both methods use the existing `_git_env()` / `_cleanup_git_env()` pattern for credential forwarding and cleanup. Path arguments are always validated via `Collection._validate_path()` before being passed to the git layer. No shell injection is possible because all subprocess calls use list arguments with `shell=False`.
+
 ### Future Work
 
 - **FastMCP OAuth**: implemented via `OIDCProxy` — see OIDC Authentication section above.

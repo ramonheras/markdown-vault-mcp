@@ -20,7 +20,7 @@ Point it at a directory of Markdown files (an Obsidian vault, a docs folder, a Z
 - **Attachment support** — read, write, delete, and list non-markdown files (PDFs, images, etc.)
 - **Git integration** — optional auto-commit and push on every write via `GIT_ASKPASS`
 - **OIDC authentication** — optional token-based auth for HTTP deployments (Authelia, Keycloak, etc.)
-- **MCP tools** — 13 tools including search, read, write, edit, delete, rename, and admin operations
+- **MCP tools** — 25+ tools including search, read, write, edit, delete, rename, git history, and admin operations
 - **MCP resources** — 6 resources exposing vault configuration, statistics, tags, folders, and document outlines
 - **MCP prompts** — 6 prompt templates including template-driven note creation
 
@@ -315,6 +315,8 @@ markdown-vault-mcp reindex [--source-dir PATH] [--index-path PATH]
 | `get_orphan_notes` | Find all notes with no inbound or outbound links |
 | `get_most_linked` | Find the most-linked-to notes ranked by backlink count |
 | `get_connection_path` | Find the shortest path between two notes via BFS on the undirected link graph (max 10 hops) |
+| `get_history` | List commits that touched a note or the whole vault (git-backed vaults only) |
+| `get_diff` | Return a unified diff of a note between a reference commit/timestamp and HEAD (git-backed vaults only) |
 | `fetch` | Download a file from a URL and save it to the vault as a note or attachment (MCP-to-MCP transfer) |
 | `create_download_link` | Generate a one-time download URL for a vault file — enables MCP-to-MCP file transfer (HTTP/SSE transport only; requires `BASE_URL`) |
 

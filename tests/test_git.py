@@ -2165,3 +2165,195 @@ class TestCheckRemoteProtocol:
         msg = str(exc_info.value)
         assert "SSH transport" in msg
         assert "https://github.com/owner/repo.git" in msg
+
+
+class TestGetFileHistory:
+    """Tests for GitWriteStrategy.get_file_history()."""
+
+    def _make_repo_with_commits(self, tmp_path: Path) -> Path:
+        """Create a git repo with two commits touching note.md."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        subprocess.run(
+            ["git", "-C", str(repo), "init"], capture_output=True, check=True
+        )
+        subprocess.run(
+            ["git", "-C", str(repo), "config", "user.email", "test@test.com"],
+            capture_output=True,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(repo), "config", "user.name", "Test"],
+            capture_output=True,
+            check=True,
+        )
+        # First commit
+        (repo / "note.md").write_text("# Note v1\n")
+        subprocess.run(
+            ["git", "-C", str(repo), "add", "."], capture_output=True, check=True
+        )
+        subprocess.run(
+            ["git", "-C", str(repo), "commit", "-m", "write: note.md"],
+            capture_output=True,
+            check=True,
+        )
+        # Second commit
+        (repo / "note.md").write_text("# Note v2\n")
+        subprocess.run(
+            ["git", "-C", str(repo), "add", "."], capture_output=True, check=True
+        )
+        subprocess.run(
+            ["git", "-C", str(repo), "commit", "-m", "edit: note.md"],
+            capture_output=True,
+            check=True,
+        )
+        return repo
+
+    def test_vault_wide_history(self, tmp_path: Path) -> None:
+        """get_file_history with path=None returns all vault commits."""
+        repo = self._make_repo_with_commits(tmp_path)
+        strategy = GitWriteStrategy()
+        strategy._ensure_git_root(repo)
+        entries = strategy.get_file_history(repo, path=None, since=None, limit=20)
+        assert len(entries) == 2
+        assert entries[0].message == "edit: note.md"
+        assert entries[1].message == "write: note.md"
+        assert len(entries[0].sha) == 40
+        assert len(entries[0].short_sha) == 7
+
+    def test_file_history(self, tmp_path: Path) -> None:
+        """get_file_history with path filters to commits touching that file."""
+        repo = self._make_repo_with_commits(tmp_path)
+        strategy = GitWriteStrategy()
+        entries = strategy.get_file_history(
+            repo, path=repo / "note.md", since=None, limit=20
+        )
+        assert len(entries) == 2
+        assert all(e.message in {"write: note.md", "edit: note.md"} for e in entries)
+        # paths_changed is empty for single-note queries
+        assert entries[0].paths_changed == []
+
+    def test_limit_is_respected(self, tmp_path: Path) -> None:
+        """get_file_history respects the limit parameter."""
+        repo = self._make_repo_with_commits(tmp_path)
+        strategy = GitWriteStrategy()
+        entries = strategy.get_file_history(repo, path=None, since=None, limit=1)
+        assert len(entries) == 1
+        assert entries[0].message == "edit: note.md"
+
+    def test_limit_capped_at_100(self, tmp_path: Path) -> None:
+        """Limit is capped at 100 regardless of input."""
+        repo = self._make_repo_with_commits(tmp_path)
+        strategy = GitWriteStrategy()
+        # Requesting 200 should not error; git returns at most 100 anyway.
+        entries = strategy.get_file_history(repo, path=None, since=None, limit=200)
+        assert isinstance(entries, list)
+
+    def test_no_git_root_returns_empty(self, tmp_path: Path) -> None:
+        """get_file_history returns empty list when not in a git repo."""
+        non_repo = tmp_path / "not_a_repo"
+        non_repo.mkdir()
+        strategy = GitWriteStrategy()
+        entries = strategy.get_file_history(non_repo, path=None, since=None, limit=20)
+        assert entries == []
+
+    def test_history_entry_fields(self, tmp_path: Path) -> None:
+        """HistoryEntry has all expected fields populated."""
+        repo = self._make_repo_with_commits(tmp_path)
+        strategy = GitWriteStrategy()
+        entries = strategy.get_file_history(repo, path=None, since=None, limit=1)
+        entry = entries[0]
+        assert entry.sha
+        assert entry.short_sha
+        assert entry.timestamp  # ISO 8601
+        assert "Test" in entry.author
+        assert entry.message
+
+
+class TestGetFileDiff:
+    """Tests for GitWriteStrategy.get_file_diff()."""
+
+    def _make_repo_with_commits(self, tmp_path: Path) -> tuple[Path, str]:
+        """Create a repo with two commits; return repo path and first commit SHA."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        subprocess.run(
+            ["git", "-C", str(repo), "init"], capture_output=True, check=True
+        )
+        subprocess.run(
+            ["git", "-C", str(repo), "config", "user.email", "test@test.com"],
+            capture_output=True,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(repo), "config", "user.name", "Test"],
+            capture_output=True,
+            check=True,
+        )
+        (repo / "note.md").write_text("# Note v1\n")
+        subprocess.run(
+            ["git", "-C", str(repo), "add", "."], capture_output=True, check=True
+        )
+        subprocess.run(
+            ["git", "-C", str(repo), "commit", "-m", "write: note.md"],
+            capture_output=True,
+            check=True,
+        )
+        first_sha = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        (repo / "note.md").write_text("# Note v2\n")
+        subprocess.run(
+            ["git", "-C", str(repo), "add", "."], capture_output=True, check=True
+        )
+        subprocess.run(
+            ["git", "-C", str(repo), "commit", "-m", "edit: note.md"],
+            capture_output=True,
+            check=True,
+        )
+        return repo, first_sha
+
+    def test_single_diff(self, tmp_path: Path) -> None:
+        """get_file_diff with per_commit=False returns a unified diff string."""
+        repo, first_sha = self._make_repo_with_commits(tmp_path)
+        strategy = GitWriteStrategy()
+        diff = strategy.get_file_diff(
+            repo, repo / "note.md", first_sha, per_commit=False
+        )
+        assert isinstance(diff, str)
+        assert "Note v1" in diff or "Note v2" in diff
+
+    def test_per_commit_diff(self, tmp_path: Path) -> None:
+        """get_file_diff with per_commit=True returns a list of CommitDiff."""
+        from markdown_vault_mcp.types import CommitDiff
+
+        repo, first_sha = self._make_repo_with_commits(tmp_path)
+        strategy = GitWriteStrategy()
+        diffs = strategy.get_file_diff(
+            repo, repo / "note.md", first_sha, per_commit=True
+        )
+        assert isinstance(diffs, list)
+        assert len(diffs) == 1
+        assert isinstance(diffs[0], CommitDiff)
+        assert diffs[0].message == "edit: note.md"
+        assert diffs[0].diff
+
+    def test_no_git_root_returns_empty(self, tmp_path: Path) -> None:
+        """get_file_diff returns empty when not in a git repo."""
+        non_repo = tmp_path / "not_a_repo"
+        non_repo.mkdir()
+        strategy = GitWriteStrategy()
+        result = strategy.get_file_diff(
+            non_repo, non_repo / "note.md", "abcd1234", per_commit=False
+        )
+        assert result == ""
+
+    def test_invalid_ref_raises_value_error(self, tmp_path: Path) -> None:
+        """get_file_diff raises ValueError for an unknown ref."""
+        repo, _ = self._make_repo_with_commits(tmp_path)
+        strategy = GitWriteStrategy()
+        with pytest.raises(ValueError, match="not found in history"):
+            strategy.get_file_diff(repo, repo / "note.md", "deadbeef", per_commit=False)

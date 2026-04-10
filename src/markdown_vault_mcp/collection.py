@@ -17,6 +17,7 @@ import queue
 import re
 import shutil
 import sqlite3
+import subprocess
 import tempfile
 import threading
 import unicodedata
@@ -50,8 +51,10 @@ from markdown_vault_mcp.types import (
     BacklinkInfo,
     BrokenLinkInfo,
     CollectionStats,
+    CommitDiff,
     DeleteResult,
     EditResult,
+    HistoryEntry,
     IndexStats,
     MostLinkedNote,
     NoteContent,
@@ -1962,6 +1965,148 @@ class Collection:
         self._validate_path(source)
         self._validate_path(target)
         return self._fts.get_connection_path(source, target, max_depth=max_depth)
+
+    # ------------------------------------------------------------------
+    # Git history query methods
+    # ------------------------------------------------------------------
+
+    def get_history(
+        self,
+        path: str | None = None,
+        since: str | None = None,
+        limit: int = 20,
+    ) -> list[HistoryEntry]:
+        """Return commits that touched a note or the whole vault.
+
+        Requires a git-backed vault (``git_strategy`` set on the collection).
+        When *path* is ``None``, queries the full vault history.
+
+        Args:
+            path: Vault-relative path of the note to filter on (e.g.
+                ``"notes/alpha.md"``).  Must end with ``.md``.  ``None``
+                returns vault-wide history.
+            since: ISO 8601 datetime string or git date expression (e.g.
+                ``"1 week ago"``).  Passed as ``--since`` to ``git log``.
+                ``None`` disables the filter.
+            limit: Maximum number of commits to return.  Clamped to
+                ``[1, 100]``.  Defaults to ``20``.
+
+        Returns:
+            List of :class:`~markdown_vault_mcp.types.HistoryEntry` ordered
+            newest-first.  Empty list when the note has no history in the
+            given range.
+
+        Raises:
+            ValueError: If git is not configured for this vault, or if
+                *path* is provided but fails path validation.
+        """
+        if self._git_strategy is None:
+            raise ValueError("Git is not configured for this vault")
+        abs_path: Path | None = None
+        if path is not None:
+            abs_path = self._validate_path(path)
+        return self._git_strategy.get_file_history(
+            self._source_dir, abs_path, since, limit
+        )
+
+    def get_diff(
+        self,
+        path: str,
+        since_sha: str | None = None,
+        since_timestamp: str | None = None,
+        per_commit: bool = False,
+    ) -> str | list[CommitDiff]:
+        """Return the diff of a note between a reference point and HEAD.
+
+        Exactly one of *since_sha* or *since_timestamp* must be supplied.
+
+        Args:
+            path: Vault-relative path of the note to diff.  Must end with
+                ``.md``.
+            since_sha: A commit SHA (full or abbreviated, at least 4 hex
+                digits) to diff from.  Mutually exclusive with
+                *since_timestamp*.
+            since_timestamp: ISO 8601 datetime string resolved to the last
+                commit before that point via ``git rev-list``.  Mutually
+                exclusive with *since_sha*.
+            per_commit: When ``False`` (default), return a single unified diff
+                string from the reference point to HEAD.  When ``True``,
+                return one :class:`~markdown_vault_mcp.types.CommitDiff` per
+                intervening commit.
+
+        Returns:
+            A unified diff string when *per_commit* is ``False``, or a list of
+            :class:`~markdown_vault_mcp.types.CommitDiff` when *per_commit* is
+            ``True``.  Returns an empty string / empty list when the note has
+            no changes in the given range.
+
+        Raises:
+            ValueError: If git is not configured, exactly one of *since_sha*
+                / *since_timestamp* is not supplied, *since_sha* contains
+                invalid characters, or the resolved ref is not found.
+        """
+        if self._git_strategy is None:
+            raise ValueError("Git is not configured for this vault")
+
+        if (since_sha is None) == (since_timestamp is None):
+            raise ValueError(
+                "Exactly one of 'since_sha' or 'since_timestamp' must be provided"
+            )
+
+        abs_path = self._validate_path(path)
+
+        if since_sha is not None:
+            if not re.fullmatch(r"[0-9a-f]{4,40}", since_sha):
+                raise ValueError(
+                    f"Invalid SHA {since_sha!r}: must be 4-40 lowercase hex digits"
+                )
+            ref = since_sha
+        else:
+            # Resolve timestamp to a commit SHA via git rev-list.
+            assert since_timestamp is not None
+            git_root = self._git_strategy._ensure_git_root(self._source_dir)
+            if git_root is None:
+                if per_commit:
+                    return []
+                return ""
+            env = self._git_strategy._git_env()
+            try:
+                result = subprocess.run(
+                    [
+                        "git",
+                        "-C",
+                        str(git_root),
+                        "rev-list",
+                        f"--before={since_timestamp}",
+                        "-1",
+                        "HEAD",
+                        "--",
+                        str(abs_path),
+                    ],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                    env=env,
+                )
+            except subprocess.CalledProcessError as exc:
+                raise ValueError(
+                    f"Could not resolve timestamp {since_timestamp!r}: "
+                    f"{(exc.stderr or '').strip()}"
+                ) from exc
+            finally:
+                self._git_strategy._cleanup_git_env(env)
+            ref = result.stdout.strip()
+            if not ref:
+                if per_commit:
+                    return []
+                return ""
+
+        try:
+            return self._git_strategy.get_file_diff(
+                self._source_dir, abs_path, ref, per_commit
+            )
+        except subprocess.CalledProcessError as exc:
+            raise ValueError(f"Commit {ref!r} not found in history") from exc
 
     def stats(self) -> CollectionStats:
         """Return collection-wide statistics.

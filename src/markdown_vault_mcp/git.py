@@ -24,6 +24,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
 from markdown_vault_mcp.exceptions import ConfigurationError
+from markdown_vault_mcp.types import CommitDiff, HistoryEntry
 
 logger = logging.getLogger(__name__)
 
@@ -1066,6 +1067,237 @@ class GitWriteStrategy:
         self._closed = True
         self.stop()
         self.flush()
+
+    # ------------------------------------------------------------------
+    # Read-only git history query methods
+    # ------------------------------------------------------------------
+
+    def get_file_history(
+        self,
+        repo_path: Path,
+        path: Path | None,
+        since: str | None,
+        limit: int,
+    ) -> list[HistoryEntry]:
+        """Return commits that touched *path* (or the whole vault).
+
+        Args:
+            repo_path: Path inside the git repository (used to locate the root).
+            path: Absolute path of the file to filter on, or ``None`` for the
+                entire vault.
+            since: Passed as ``--since`` to ``git log`` (ISO 8601 or git date
+                expression such as ``"1 week ago"``).  ``None`` disables the
+                filter.
+            limit: Maximum number of commits to return (capped at 100).
+
+        Returns:
+            List of :class:`HistoryEntry` ordered from newest to oldest.
+
+        Raises:
+            subprocess.CalledProcessError: Propagated from git subprocess
+                failures (caller should translate to ``ValueError``).
+        """
+        git_root = self._ensure_git_root(repo_path)
+        if git_root is None:
+            return []
+
+        limit = min(max(1, limit), 100)
+
+        # \x1e (ASCII Record Separator) is the sentinel used to split commit
+        # blocks in the output — it cannot appear in filenames or commit messages.
+        _SENTINEL = "\x1e"
+        cmd = [
+            "git",
+            "-C",
+            str(git_root),
+            "log",
+            f"--format={_SENTINEL}%H%x00%h%x00%aI%x00%aN <%aE>%x00%s",
+            f"-n{limit}",
+        ]
+        if since:
+            cmd.append(f"--since={since}")
+        if path is None:
+            # vault-wide: include changed file names in each block
+            cmd.append("--name-only")
+        else:
+            cmd += ["--", str(path)]
+
+        env = self._git_env()
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=True,
+                env=env,
+            )
+        finally:
+            self._cleanup_git_env(env)
+
+        entries: list[HistoryEntry] = []
+        raw = result.stdout
+        if not raw.strip():
+            return []
+        # Split on the sentinel we embedded at the start of each format line.
+        # The first element will be empty (output starts with sentinel), so we
+        # skip it.  Each remaining block is: header_line\nfile1\nfile2\n
+        blocks = raw.split(_SENTINEL)
+        for block in blocks:
+            block = block.strip()
+            if not block:
+                continue
+            lines = block.splitlines()
+            if not lines:
+                continue
+            header = lines[0]
+            parts = header.split("\x00")
+            if len(parts) < 5:
+                continue
+            sha, short_sha, timestamp, author, message = parts[:5]
+            paths_changed: list[str] = []
+            if path is None and len(lines) > 1:
+                # vault-wide query: lines[1:] are the changed file paths
+                paths_changed = [ln for ln in lines[1:] if ln.strip()]
+            entries.append(
+                HistoryEntry(
+                    sha=sha,
+                    short_sha=short_sha,
+                    timestamp=timestamp,
+                    author=author,
+                    message=message,
+                    paths_changed=paths_changed,
+                )
+            )
+        return entries
+
+    def get_file_diff(
+        self,
+        repo_path: Path,
+        path: Path,
+        ref: str,
+        per_commit: bool,
+    ) -> str | list[CommitDiff]:
+        """Return a unified diff of *path* from *ref* to HEAD.
+
+        Args:
+            repo_path: Path inside the git repository.
+            path: Absolute path of the file to diff.
+            ref: The git ref (SHA or expression) to diff from.
+            per_commit: When ``False``, return a single unified diff string.
+                When ``True``, return one :class:`CommitDiff` per intervening
+                commit.
+
+        Returns:
+            A unified diff string when *per_commit* is ``False``, or a list of
+            :class:`CommitDiff` when *per_commit* is ``True``.
+
+        Raises:
+            ValueError: If *ref* is not found in history.
+            subprocess.CalledProcessError: Propagated from git subprocess
+                failures (caller should translate to ``ValueError``).
+        """
+        _DIFF_MAX_BYTES = 50 * 1024  # 50 KB
+
+        git_root = self._ensure_git_root(repo_path)
+        if git_root is None:
+            if per_commit:
+                return []
+            return ""
+
+        path_str = str(path)
+        env = self._git_env()
+        try:
+            if not per_commit:
+                try:
+                    result = subprocess.run(
+                        [
+                            "git",
+                            "-C",
+                            str(git_root),
+                            "diff",
+                            f"{ref}..HEAD",
+                            "--",
+                            path_str,
+                        ],
+                        capture_output=True,
+                        text=True,
+                        check=True,
+                        env=env,
+                    )
+                except subprocess.CalledProcessError as exc:
+                    raise ValueError(f"Commit {ref!r} not found in history") from exc
+                diff = result.stdout
+                if len(diff.encode()) > _DIFF_MAX_BYTES:
+                    omitted = len(diff.encode()) - _DIFF_MAX_BYTES
+                    diff = diff.encode()[:_DIFF_MAX_BYTES].decode(errors="replace")
+                    diff += f"\n[diff truncated: {omitted} bytes omitted]"
+                return diff
+
+            # per_commit=True: enumerate commits in range then show each
+            try:
+                log_result = subprocess.run(
+                    [
+                        "git",
+                        "-C",
+                        str(git_root),
+                        "log",
+                        "--format=%H%x00%h%x00%aI%x00%s",
+                        f"{ref}..HEAD",
+                        "--",
+                        path_str,
+                    ],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                    env=env,
+                )
+            except subprocess.CalledProcessError as exc:
+                raise ValueError(f"Commit {ref!r} not found in history") from exc
+
+            diffs: list[CommitDiff] = []
+            for line in log_result.stdout.strip().splitlines():
+                if not line.strip():
+                    continue
+                parts = line.split("\x00")
+                if len(parts) < 4:
+                    continue
+                sha, short_sha, timestamp, message = parts[:4]
+                show_result = subprocess.run(
+                    [
+                        "git",
+                        "-C",
+                        str(git_root),
+                        "show",
+                        "--format=",
+                        "-p",
+                        sha,
+                        "--",
+                        path_str,
+                    ],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                    env=env,
+                )
+                commit_diff = show_result.stdout
+                if len(commit_diff.encode()) > _DIFF_MAX_BYTES:
+                    omitted = len(commit_diff.encode()) - _DIFF_MAX_BYTES
+                    commit_diff = commit_diff.encode()[:_DIFF_MAX_BYTES].decode(
+                        errors="replace"
+                    )
+                    commit_diff += f"\n[diff truncated: {omitted} bytes omitted]"
+                diffs.append(
+                    CommitDiff(
+                        sha=sha,
+                        short_sha=short_sha,
+                        timestamp=timestamp,
+                        message=message,
+                        diff=commit_diff,
+                    )
+                )
+            return diffs
+        finally:
+            self._cleanup_git_env(env)
 
 
 def git_write_strategy(

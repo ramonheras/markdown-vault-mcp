@@ -716,6 +716,128 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
             return {"found": False, "path": [], "hops": -1}
         return {"found": True, "path": result, "hops": len(result) - 1}
 
+    # --- Git history tools ---
+
+    @mcp.tool(
+        icons=_TOOL_ICONS["get_history"],
+        annotations={
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+        },
+    )
+    async def get_history(
+        path: str | None = None,
+        since: str | None = None,
+        limit: int = 20,
+        collection: Collection = Depends(get_collection),
+    ) -> list[dict[str, Any]]:
+        """List commits that touched a note or the whole vault.
+
+        Only available for git-backed vaults. Use 'stats' to check
+        whether git is configured, or call this and handle the error.
+
+        Args:
+            path: Vault-relative path of the note to filter on (e.g.
+                "notes/alpha.md"). Must end with ".md". Omit (or pass null)
+                for vault-wide commit history.
+            since: ISO 8601 datetime string ("2026-04-01T00:00:00") or a git
+                date expression ("1 week ago"). Passed as --since to git log.
+                Omit for full history.
+            limit: Maximum number of commits to return. Default 20, max 100.
+
+        Returns:
+            List of commit dicts, newest-first. Each contains:
+
+            - sha (str): Full 40-character commit SHA.
+            - short_sha (str): 7-character abbreviated SHA.
+            - timestamp (str): ISO 8601 author timestamp.
+            - author (str): Committer name and email, e.g. "Name <email>".
+            - message (str): First line of the commit message.
+            - paths_changed (list[str]): Files touched (populated for
+              vault-wide queries; empty for single-note queries).
+
+        Raises:
+            ToolError: If git is not configured for this vault, or if the
+                path is invalid.
+        """
+        try:
+            results = await asyncio.to_thread(
+                collection.get_history,
+                path,
+                since=since,
+                limit=limit,
+            )
+        except ValueError as exc:
+            raise ToolError(str(exc)) from exc
+        return [asdict(r) for r in results]
+
+    @mcp.tool(
+        icons=_TOOL_ICONS["get_diff"],
+        annotations={
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+        },
+    )
+    async def get_diff(
+        path: str,
+        since_sha: str | None = None,
+        since_timestamp: str | None = None,
+        per_commit: bool = False,
+        collection: Collection = Depends(get_collection),
+    ) -> dict[str, Any] | list[dict[str, Any]]:
+        """Return the diff of a note between a reference point and HEAD.
+
+        Only available for git-backed vaults. Exactly one of 'since_sha' or
+        'since_timestamp' must be provided. Use 'get_history' first to find
+        commit SHAs.
+
+        Args:
+            path: Vault-relative path of the note to diff (e.g. "notes/alpha.md").
+                Must end with ".md".
+            since_sha: A commit SHA (full or abbreviated, at least 4 hex digits)
+                to diff from. Mutually exclusive with since_timestamp.
+            since_timestamp: ISO 8601 datetime string. Resolved to the last
+                commit before that point. Mutually exclusive with since_sha.
+            per_commit: When False (default), return a single unified diff from
+                the reference point to HEAD. When True, return one diff per
+                intervening commit.
+
+        Returns:
+            When per_commit=False: dict with a single field:
+
+            - diff (str): Unified diff from the reference to HEAD. Empty
+              string when there are no changes. May include a truncation
+              notice if the diff exceeds 50 KB.
+
+            When per_commit=True: list of commit dicts, each containing:
+
+            - sha (str): Full commit SHA.
+            - short_sha (str): Abbreviated SHA.
+            - timestamp (str): ISO 8601 author timestamp.
+            - message (str): First line of commit message.
+            - diff (str): Unified diff for this commit.
+
+        Raises:
+            ToolError: If git is not configured, neither or both reference
+                parameters are supplied, the SHA is invalid, or the reference
+                commit is not found.
+        """
+        try:
+            result = await asyncio.to_thread(
+                collection.get_diff,
+                path,
+                since_sha=since_sha,
+                since_timestamp=since_timestamp,
+                per_commit=per_commit,
+            )
+        except ValueError as exc:
+            raise ToolError(str(exc)) from exc
+        if isinstance(result, list):
+            return [asdict(r) for r in result]
+        return {"diff": result}
+
     # --- Index management tools ---
 
     @mcp.tool(
