@@ -1078,6 +1078,7 @@ class GitWriteStrategy:
         path: Path | None,
         since: str | None,
         limit: int,
+        until: str | None = None,
     ) -> list[HistoryEntry]:
         """Return commits that touched *path* (or the whole vault).
 
@@ -1089,13 +1090,19 @@ class GitWriteStrategy:
                 expression such as ``"1 week ago"``).  ``None`` disables the
                 filter.
             limit: Maximum number of commits to return (capped at 100).
+            until: Passed as ``--until`` to ``git log`` (same format as
+                *since*).  ``None`` disables the filter.  When both *since*
+                and *until* are given the window is bounded on both sides,
+                inclusive at both endpoints (git's ``--since`` / ``--until``
+                semantics: a commit whose author date equals either boundary
+                is included).
 
         Returns:
             List of :class:`HistoryEntry` ordered from newest to oldest.
 
         Raises:
             ValueError: If ``git log`` exits non-zero (e.g. an invalid
-                ``since`` expression).
+                ``since`` / ``until`` expression).
         """
         git_root = self._ensure_git_root(repo_path)
         if git_root is None:
@@ -1128,6 +1135,8 @@ class GitWriteStrategy:
         ]
         if since:
             cmd.append(f"--since={since}")
+        if until:
+            cmd.append(f"--until={until}")
         if path is None:
             # vault-wide: scope to the resolved real path so symlinked SOURCE_DIR
             # values work correctly (git compares against the real toplevel).
@@ -1198,12 +1207,14 @@ class GitWriteStrategy:
         ref: str | None,
         per_commit: bool,
         since_timestamp: str | None = None,
+        limit: int | None = None,
     ) -> str | list[CommitDiff]:
         """Return a unified diff of *path* from *ref* to HEAD.
 
         Exactly one of *ref* or *since_timestamp* must be supplied.  When
         *since_timestamp* is given, it is resolved to the most recent commit
-        before that instant via ``git rev-list``.
+        at or before that instant via ``git rev-list`` (boundary inclusive:
+        a commit whose author date equals *since_timestamp* is selected).
 
         Args:
             repo_path: Path inside the git repository.
@@ -1215,6 +1226,11 @@ class GitWriteStrategy:
                 commit.
             since_timestamp: ISO 8601 datetime string resolved to a commit SHA
                 via ``git rev-list --before``.  Mutually exclusive with *ref*.
+            limit: When *per_commit* is ``True``, cap the number of commits
+                walked to the *limit* most recent ones (clamped to
+                ``[1, 100]``).  Ignored when *per_commit* is ``False``.
+                ``None`` means unbounded (still capped by the underlying
+                ``ref..HEAD`` range).
 
         Returns:
             A unified diff string when *per_commit* is ``False``, or a list of
@@ -1301,20 +1317,22 @@ class GitWriteStrategy:
             # renames (git show sha -- new.md returns nothing for pre-rename
             # commits; we must pass the old filename instead).
             _PC_SENTINEL = "\x1e"
+            log_cmd = [
+                "git",
+                "-C",
+                str(git_root),
+                "log",
+                "--follow",
+                f"--format={_PC_SENTINEL}%H%x00%h%x00%aI%x00%s",
+                "--name-only",
+            ]
+            if limit is not None:
+                clamped_limit = min(max(1, limit), 100)
+                log_cmd.append(f"-n{clamped_limit}")
+            log_cmd += [f"{ref}..HEAD", "--", path_str]
             try:
                 log_result = subprocess.run(
-                    [
-                        "git",
-                        "-C",
-                        str(git_root),
-                        "log",
-                        "--follow",
-                        f"--format={_PC_SENTINEL}%H%x00%h%x00%aI%x00%s",
-                        "--name-only",
-                        f"{ref}..HEAD",
-                        "--",
-                        path_str,
-                    ],
+                    log_cmd,
                     capture_output=True,
                     text=True,
                     check=True,

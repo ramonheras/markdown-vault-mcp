@@ -434,14 +434,15 @@ Find the shortest path between two notes via BFS on the undirected link graph (m
 
 ### `get_history`
 
-List commits that touched a note (or the whole vault) since a given timestamp or for the last N commits. Only available for git-backed vaults.
+List commits that touched a note (or the whole vault) within an optional time window, up to a maximum count. Only available for git-backed vaults.
 
 **Parameters:**
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `path` | string | `null` | Relative vault path (e.g. `"notes/alpha.md"`). Omit for vault-wide history. Must end with `.md`. |
-| `since` | string | `null` | ISO 8601 datetime string (`"2026-04-01T00:00:00"`) or git date expression (`"1 week ago"`). Passed as `--since` to `git log`. |
+| `since` | string | `null` | ISO 8601 datetime string (`"2026-04-01T00:00:00"`) or git date expression (`"1 week ago"`). Passed as `--since` to `git log`. Inclusive at the boundary. |
+| `until` | string | `null` | ISO 8601 datetime string or git date expression, passed as `--until` to `git log`. Combined with `since` to bound a window. Inclusive at the boundary. |
 | `limit` | int | `20` | Maximum number of commits to return. Capped at 100. |
 
 **Returns:** List of commit objects, newest-first. Each entry contains:
@@ -467,15 +468,16 @@ Return the diff of a specific note between a reference point and `HEAD`. Only av
 |-----------|------|---------|-------------|
 | `path` | string | required | Relative vault path. Must end with `.md`. |
 | `since_sha` | string | `null` | A commit SHA (full or abbreviated, at least 4 hex digits) to diff from. Mutually exclusive with `since_timestamp`. |
-| `since_timestamp` | string | `null` | ISO 8601 datetime string. Resolved to the last commit before that point. Mutually exclusive with `since_sha`. |
-| `per_commit` | bool | `false` | When `false`, return a single unified diff. When `true`, return one diff per intervening commit. |
+| `since_timestamp` | string | `null` | ISO 8601 datetime string. Resolved via `git rev-list --before=<ts>` to the most recent commit at or before that instant (boundary inclusive). Mutually exclusive with `since_sha`. |
+| `per_commit` | bool | `false` | When `false`, return a single unified diff. When `true`, return one diff per intervening commit, newest-first. |
+| `limit` | int | `null` | Only meaningful when `per_commit=true`. Caps the number of commits returned to the `limit` most recent ones. Clamped to `[1, 100]`. `null` = unbounded (still bounded by the `since..HEAD` range). Silently ignored when `per_commit=false`. |
 
 Exactly one of `since_sha` / `since_timestamp` must be supplied.
 
 **Returns:**
 
 - `per_commit=false`: object with `diff` (string) — unified diff from reference to HEAD. May include `[diff truncated: N bytes omitted]` if output exceeds 50 KB.
-- `per_commit=true`: list of objects, each containing `sha`, `short_sha`, `timestamp`, `message`, and `diff`.
+- `per_commit=true`: list of objects, newest-first, each containing `sha`, `short_sha`, `timestamp`, `message`, and `diff`.
 
 **Raises:** `ToolError` if parameters are invalid or the reference commit is not found.
 

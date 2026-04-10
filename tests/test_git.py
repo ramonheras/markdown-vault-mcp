@@ -2651,3 +2651,213 @@ class TestCollectionGitHistoryMethods:
             non_repo, non_repo / "note.md", ref="abcd", per_commit=True
         )
         assert result == []
+
+    # ------------------------------------------------------------------
+    # `until` filter on get_history (issue #340)
+    # ------------------------------------------------------------------
+
+    def _make_collection_with_dated_commits(
+        self,
+        tmp_path: Path,
+        dates: list[str],
+    ):  # type: ignore[no-untyped-def]
+        """Return a Collection where each commit has a pinned ISO author date.
+
+        `GIT_AUTHOR_DATE` / `GIT_COMMITTER_DATE` are used so `--since` /
+        `--until` boundary tests are deterministic, without sleeping.
+        """
+        from markdown_vault_mcp.collection import Collection
+
+        vault = tmp_path / "vault_dated"
+        vault.mkdir()
+        subprocess.run(
+            ["git", "-C", str(vault), "init"], capture_output=True, check=True
+        )
+        subprocess.run(
+            ["git", "-C", str(vault), "config", "user.email", "t@t.com"],
+            capture_output=True,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(vault), "config", "user.name", "T"],
+            capture_output=True,
+            check=True,
+        )
+        for i, iso_date in enumerate(dates):
+            (vault / "note.md").write_text(f"# v{i}\n")
+            subprocess.run(
+                ["git", "-C", str(vault), "add", "."],
+                capture_output=True,
+                check=True,
+            )
+            env = {
+                "GIT_AUTHOR_DATE": iso_date,
+                "GIT_COMMITTER_DATE": iso_date,
+                "GIT_AUTHOR_NAME": "T",
+                "GIT_AUTHOR_EMAIL": "t@t.com",
+                "GIT_COMMITTER_NAME": "T",
+                "GIT_COMMITTER_EMAIL": "t@t.com",
+                "PATH": "/usr/bin:/bin:/usr/local/bin",
+            }
+            subprocess.run(
+                ["git", "-C", str(vault), "commit", "-m", f"v{i}"],
+                capture_output=True,
+                check=True,
+                env=env,
+            )
+        strategy = GitWriteStrategy()
+        col = Collection(source_dir=vault, git_strategy=strategy)
+        col.build_index()
+        return col
+
+    def test_get_history_with_until_filter(self, tmp_path: Path) -> None:
+        """get_history passes `until` through to `git log --until`."""
+        col = self._make_collection_with_dated_commits(
+            tmp_path,
+            dates=[
+                "2026-01-01T12:00:00+0000",
+                "2026-02-01T12:00:00+0000",
+                "2026-03-01T12:00:00+0000",
+            ],
+        )
+        # Cut off mid-February — should return Jan + (first) Feb but not Mar.
+        entries = col.get_history(until="2026-02-15T00:00:00+0000")
+        messages = [e.message for e in entries]
+        assert messages == ["v1", "v0"], messages
+
+    def test_get_history_with_since_and_until_window(self, tmp_path: Path) -> None:
+        """`since` and `until` together bound the window."""
+        col = self._make_collection_with_dated_commits(
+            tmp_path,
+            dates=[
+                "2026-01-01T12:00:00+0000",
+                "2026-02-01T12:00:00+0000",
+                "2026-03-01T12:00:00+0000",
+            ],
+        )
+        entries = col.get_history(
+            since="2026-01-15T00:00:00+0000",
+            until="2026-02-15T00:00:00+0000",
+        )
+        messages = [e.message for e in entries]
+        assert messages == ["v1"], messages
+
+    def test_get_history_until_no_match_returns_empty(self, tmp_path: Path) -> None:
+        """`until` in the distant past returns an empty list."""
+        col = self._make_collection_with_dated_commits(
+            tmp_path,
+            dates=["2026-01-01T00:00:00+0000"],
+        )
+        entries = col.get_history(until="2000-01-01T00:00:00+0000")
+        assert entries == []
+
+    def test_get_history_until_boundary_inclusive(self, tmp_path: Path) -> None:
+        """A commit at exactly the `until` timestamp is included.
+
+        Git's ``--until`` (a.k.a. ``--before``) semantics are inclusive at
+        the boundary: a commit whose author date equals the cutoff is
+        returned.  This test pins a single commit at a known instant and
+        asserts that passing that exact instant as ``until`` still returns
+        it (regression guard for the documented boundary behaviour).
+        """
+        col = self._make_collection_with_dated_commits(
+            tmp_path,
+            dates=["2026-02-01T12:00:00+0000"],
+        )
+        entries = col.get_history(until="2026-02-01T12:00:00+0000")
+        assert len(entries) == 1, entries
+        assert entries[0].message == "v0"
+
+    # ------------------------------------------------------------------
+    # `limit` on get_diff per_commit (issue #339)
+    # ------------------------------------------------------------------
+
+    def _make_collection_with_n_commits(self, tmp_path: Path, n: int):  # type: ignore[no-untyped-def]
+        """Return (col, vault) with `n` commits touching note.md."""
+        from markdown_vault_mcp.collection import Collection
+
+        vault = tmp_path / f"vault_{n}"
+        vault.mkdir()
+        subprocess.run(
+            ["git", "-C", str(vault), "init"], capture_output=True, check=True
+        )
+        subprocess.run(
+            ["git", "-C", str(vault), "config", "user.email", "t@t.com"],
+            capture_output=True,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(vault), "config", "user.name", "T"],
+            capture_output=True,
+            check=True,
+        )
+        for i in range(n):
+            (vault / "note.md").write_text(f"# v{i}\n")
+            subprocess.run(
+                ["git", "-C", str(vault), "add", "."],
+                capture_output=True,
+                check=True,
+            )
+            subprocess.run(
+                ["git", "-C", str(vault), "commit", "-m", f"v{i}"],
+                capture_output=True,
+                check=True,
+            )
+        strategy = GitWriteStrategy()
+        col = Collection(source_dir=vault, git_strategy=strategy)
+        col.build_index()
+        return col, vault
+
+    def _oldest_sha(self, vault: Path) -> str:
+        result = subprocess.run(
+            ["git", "-C", str(vault), "log", "--format=%H", "--reverse"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return result.stdout.strip().splitlines()[0]
+
+    def test_get_diff_per_commit_respects_limit(self, tmp_path: Path) -> None:
+        """get_diff(per_commit=True, limit=N) returns the N newest commits."""
+        col, vault = self._make_collection_with_n_commits(tmp_path, 5)
+        oldest = self._oldest_sha(vault)
+        out = col.get_diff("note.md", since_sha=oldest, per_commit=True, limit=2)
+        assert isinstance(out, list)
+        assert len(out) == 2
+        # Newest-first: the two most recent commit messages are v4 and v3.
+        assert [c.message for c in out] == ["v4", "v3"]
+
+    def test_get_diff_per_commit_limit_none_is_unlimited(self, tmp_path: Path) -> None:
+        """limit=None (default) walks all intervening commits."""
+        col, vault = self._make_collection_with_n_commits(tmp_path, 4)
+        oldest = self._oldest_sha(vault)
+        out = col.get_diff("note.md", since_sha=oldest, per_commit=True)
+        assert isinstance(out, list)
+        # oldest..HEAD spans 3 commits (the first is the `oldest` itself, excluded).
+        assert len(out) == 3
+
+    def test_get_diff_limit_ignored_when_not_per_commit(self, tmp_path: Path) -> None:
+        """`limit` has no effect when per_commit=False (single unified diff)."""
+        col, vault = self._make_collection_with_n_commits(tmp_path, 4)
+        oldest = self._oldest_sha(vault)
+        result = col.get_diff("note.md", since_sha=oldest, per_commit=False, limit=1)
+        # Still a single unified-diff string.
+        assert isinstance(result, str)
+        assert "v3" in result  # last version ended up in the diff
+
+    def test_get_diff_limit_clamped_low(self, tmp_path: Path) -> None:
+        """limit <= 0 is clamped to 1."""
+        col, vault = self._make_collection_with_n_commits(tmp_path, 3)
+        oldest = self._oldest_sha(vault)
+        out = col.get_diff("note.md", since_sha=oldest, per_commit=True, limit=0)
+        assert isinstance(out, list)
+        assert len(out) == 1
+
+    def test_get_diff_limit_clamped_high(self, tmp_path: Path) -> None:
+        """limit > 100 is clamped to 100 (matches get_history)."""
+        col, vault = self._make_collection_with_n_commits(tmp_path, 3)
+        oldest = self._oldest_sha(vault)
+        # Only 2 intervening commits exist; clamp should not expand beyond reality.
+        out = col.get_diff("note.md", since_sha=oldest, per_commit=True, limit=500)
+        assert isinstance(out, list)
+        assert len(out) == 2

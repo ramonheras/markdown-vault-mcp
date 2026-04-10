@@ -729,6 +729,7 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
     async def get_history(
         path: str | None = None,
         since: str | None = None,
+        until: str | None = None,
         limit: int = 20,
         collection: Collection = Depends(get_collection),
     ) -> list[dict[str, Any]]:
@@ -744,6 +745,10 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
             since: ISO 8601 datetime string ("2026-04-01T00:00:00") or a git
                 date expression ("1 week ago"). Passed as --since to git log.
                 Omit for full history.
+            until: ISO 8601 datetime string or git date expression, passed as
+                --until to git log. Both 'since' and 'until' boundaries are
+                inclusive: a commit whose author date equals either endpoint
+                is included in the result. Omit to disable the upper bound.
             limit: Maximum number of commits to return. Default 20, max 100.
 
         Returns:
@@ -754,8 +759,11 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
             - timestamp (str): ISO 8601 author timestamp.
             - author (str): Committer name and email, e.g. "Name <email>".
             - message (str): First line of the commit message.
-            - paths_changed (list[str]): Files touched (populated for
-              vault-wide queries; empty for single-note queries).
+            - paths_changed (list[str]): Files touched by the commit.
+              Populated for vault-wide queries; always empty for single-note
+              queries because the path is already determined by the query
+              arguments — callers know which file the commit touched without
+              needing it echoed back.
 
         Raises:
             ToolError: If the path is invalid.
@@ -765,6 +773,7 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
                 collection.get_history,
                 path,
                 since=since,
+                until=until,
                 limit=limit,
             )
         except ValueError as exc:
@@ -784,6 +793,7 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
         since_sha: str | None = None,
         since_timestamp: str | None = None,
         per_commit: bool = False,
+        limit: int | None = None,
         collection: Collection = Depends(get_collection),
     ) -> dict[str, Any] | list[dict[str, Any]]:
         """Return the diff of a note between a reference point and HEAD.
@@ -797,11 +807,20 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
                 Must end with ".md".
             since_sha: A commit SHA (full or abbreviated, at least 4 hex digits)
                 to diff from. Mutually exclusive with since_timestamp.
-            since_timestamp: ISO 8601 datetime string. Resolved to the last
-                commit before that point. Mutually exclusive with since_sha.
+            since_timestamp: ISO 8601 datetime string. Resolved via
+                `git rev-list --before=<ts>` to the most recent commit at or
+                before that instant — boundary is inclusive, so a commit
+                whose author date equals since_timestamp IS the resolved ref.
+                Mutually exclusive with since_sha.
             per_commit: When False (default), return a single unified diff from
                 the reference point to HEAD. When True, return one diff per
                 intervening commit.
+            limit: When per_commit=True, cap the number of intervening commits
+                returned to the `limit` most recent ones. Clamped to [1, 100].
+                Defaults to null (unbounded — still bounded by the underlying
+                since..HEAD range). Ignored when per_commit=False. Useful for
+                keeping per-commit responses within context budgets when
+                auditing long histories.
 
         Returns:
             When per_commit=False: dict with a single field:
@@ -810,7 +829,8 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
               string when there are no changes. May include a truncation
               notice if the diff exceeds 50 KB.
 
-            When per_commit=True: list of commit dicts, each containing:
+            When per_commit=True: list of commit dicts, newest-first, each
+            containing:
 
             - sha (str): Full commit SHA.
             - short_sha (str): Abbreviated SHA.
@@ -829,6 +849,7 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
                 since_sha=since_sha,
                 since_timestamp=since_timestamp,
                 per_commit=per_commit,
+                limit=limit,
             )
         except ValueError as exc:
             raise ToolError(str(exc)) from exc

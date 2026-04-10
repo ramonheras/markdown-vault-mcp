@@ -1973,6 +1973,7 @@ class Collection:
         self,
         path: str | None = None,
         since: str | None = None,
+        until: str | None = None,
         limit: int = 20,
     ) -> list[HistoryEntry]:
         """Return commits that touched a note or the whole vault.
@@ -1988,6 +1989,11 @@ class Collection:
             since: ISO 8601 datetime string or git date expression (e.g.
                 ``"1 week ago"``).  Passed as ``--since`` to ``git log``.
                 ``None`` disables the filter.
+            until: ISO 8601 datetime string or git date expression, passed as
+                ``--until`` to ``git log``.  ``None`` disables the filter.
+                Both ``since`` and ``until`` boundaries are **inclusive**: a
+                commit whose author date equals either endpoint is included
+                in the result.
             limit: Maximum number of commits to return.  Clamped to
                 ``[1, 100]``.  Defaults to ``20``.
 
@@ -2005,7 +2011,7 @@ class Collection:
         if path is not None:
             abs_path = self._validate_path(path)
         return self._git_strategy.get_file_history(
-            self._source_dir, abs_path, since, limit
+            self._source_dir, abs_path, since, limit, until=until
         )
 
     def get_diff(
@@ -2014,6 +2020,7 @@ class Collection:
         since_sha: str | None = None,
         since_timestamp: str | None = None,
         per_commit: bool = False,
+        limit: int | None = None,
     ) -> str | list[CommitDiff]:
         """Return the diff of a note between a reference point and HEAD.
 
@@ -2025,13 +2032,18 @@ class Collection:
             since_sha: A commit SHA (full or abbreviated, at least 4 hex
                 digits) to diff from.  Mutually exclusive with
                 *since_timestamp*.
-            since_timestamp: ISO 8601 datetime string resolved to the last
-                commit before that point via ``git rev-list``.  Mutually
-                exclusive with *since_sha*.
+            since_timestamp: ISO 8601 datetime string resolved to the most
+                recent commit at or before that point via ``git rev-list``
+                (boundary inclusive).  Mutually exclusive with *since_sha*.
             per_commit: When ``False`` (default), return a single unified diff
                 string from the reference point to HEAD.  When ``True``,
                 return one :class:`~markdown_vault_mcp.types.CommitDiff` per
                 intervening commit.
+            limit: When *per_commit* is ``True``, cap the number of
+                intervening commits returned to the *limit* most recent ones.
+                Clamped to ``[1, 100]``.  ``None`` (the default) means
+                unbounded (still bounded by the underlying ``since..HEAD``
+                range).  Silently ignored when *per_commit* is ``False``.
 
         Returns:
             A unified diff string when *per_commit* is ``False``, or a list of
@@ -2065,6 +2077,7 @@ class Collection:
             ref=since_sha,
             per_commit=per_commit,
             since_timestamp=since_timestamp,
+            limit=limit if per_commit else None,
         )
 
     def stats(self) -> CollectionStats:
