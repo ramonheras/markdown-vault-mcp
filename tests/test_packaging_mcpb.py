@@ -77,3 +77,25 @@ def test_mcpb_pyproject_template_pins_versioned_package() -> None:
     # The dep line should pin [all] extras to the same version.
     assert "markdown-vault-mcp[all]==${VERSION}" in template
     assert 'requires-python = ">=3.10"' in template
+
+
+def _load_plugin_json() -> dict:
+    """Load the Claude Code plugin.json metadata file."""
+    path = PLUGIN_DIR / ".claude-plugin" / "plugin.json"
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def test_claude_code_plugin_json_shape() -> None:
+    """plugin.json must carry the expected name, repo, and a concrete version."""
+    plugin = _load_plugin_json()
+    assert plugin["name"] == "markdown-vault-mcp"
+    assert plugin["repository"] == "https://github.com/pvliesdonk/markdown-vault-mcp"
+    assert plugin["license"] == "MIT"
+
+    # Version must look like a real semver — not a template literal.
+    version = plugin["version"]
+    assert version != "${VERSION}"
+    parts = version.split(".")
+    assert len(parts) == 3 and all(p.isdigit() for p in parts), (
+        f"expected X.Y.Z semver, got {version!r}"
+    )
