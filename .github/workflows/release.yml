@@ -354,6 +354,43 @@ jobs:
             --clobber \
             --repo "${{ github.repository }}"
 
+  publish-claude-plugin-pr:
+    needs: release
+    if: needs.release.outputs.released == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout catalog repo
+        uses: actions/checkout@v4
+        with:
+          repository: pvliesdonk/claude-plugins
+          token: ${{ secrets.CLAUDE_PLUGINS_PAT }}
+          path: catalog
+      - name: Bump marketplace.json entry
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
+        run: |
+          cd catalog
+          jq --arg v "$VERSION" --arg ref "v$VERSION" '
+            .plugins |= map(
+              if .name == "markdown-vault-mcp"
+              then .version = $v | .source.ref = $ref
+              else . end
+            )
+          ' .claude-plugin/marketplace.json > marketplace.json.tmp
+          mv marketplace.json.tmp .claude-plugin/marketplace.json
+      - name: Create pull request
+        uses: peter-evans/create-pull-request@v7
+        with:
+          path: catalog
+          token: ${{ secrets.CLAUDE_PLUGINS_PAT }}
+          branch: bump/markdown-vault-mcp-${{ needs.release.outputs.version }}
+          title: "chore: bump markdown-vault-mcp to v${{ needs.release.outputs.version }}"
+          body: |
+            Auto-generated bump from [markdown-vault-mcp ${{ needs.release.outputs.tag }}](https://github.com/pvliesdonk/markdown-vault-mcp/releases/tag/${{ needs.release.outputs.tag }}).
+          commit-message: "chore: bump markdown-vault-mcp to v${{ needs.release.outputs.version }}"
+          committer: "github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>"
+          author: "github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>"
+
   publish-registry:
     needs: [release, publish-pypi, publish-docker]
     if: needs.release.outputs.released == 'true'
