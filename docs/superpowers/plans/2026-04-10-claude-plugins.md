@@ -10,6 +10,15 @@
 
 **Spec:** `docs/superpowers/specs/2026-04-10-claude-plugins-design.md` (commit `d824ee4`). Section references (§N) in this plan point at that spec.
 
+## Risk verification results (2026-04-10)
+
+- `manifest_version 0.4` + `server.type: "uv"`: **supported** — documented in the authoritative MANIFEST.md spec under "UV Runtime (v0.4+)"; spec current version is 0.3 for stable, but `uv` type explicitly requires `manifest_version: "0.4"` and is documented as a production feature (not experimental).
+- Minimum Claude Desktop version for mcpb v0.4: **`>=0.10.0`** — the MANIFEST.md spec uses `"claude_desktop": ">=0.10.0"` in all its canonical examples for Python, Node.js, and binary extension types. No newer minimum is documented for the `uv` type specifically.
+- mcpb CLI version installed: **2.1.2** (installed via `npm install --prefix /tmp/mcpb-install @anthropic-ai/mcpb@latest`)
+- `mcpb validate` with `server.type: "uv"`: **passed** — validation passes when `mcp_config` is included. Note: `mcp_config` is required by the validator even for `uv` type (the spec says "optional" but the CLI enforces it). Pack produces a 3-file archive: `manifest.json`, `pyproject.toml`, `src/server.py` — no `server/lib/` or `server/venv/`.
+- Claude Code `${VAR:-default}` in .mcp.json: **supported** — Claude Code docs explicitly document both `${VAR}` and `${VAR:-default}` as supported expansion syntax in `.mcp.json` env blocks (source: https://code.claude.com/docs/en/mcp.md, "Environment variable expansion in `.mcp.json`" section). Expansion works in `command`, `args`, `env` values, and `url` fields.
+- Fallback taken: **one adjustment** — `mcp_config` must be present in the manifest even for `server.type: "uv"` (the spec says optional but `mcpb validate` v2.1.2 rejects manifests without it). The manifest template in Task 4 must include `mcp_config` with `"command": "uv"` and `"args": ["run", ...]`.
+
 ---
 
 ## Prerequisites and context for the implementing engineer
