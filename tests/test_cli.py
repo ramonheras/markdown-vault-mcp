@@ -784,6 +784,25 @@ class TestBuildCollectionConfigFields:
         assert collection._is_path_excluded("notes/alpha.md") is False
         assert collection._is_path_excluded("decisions/2026-04-09-auth.md") is False
 
+    def test_index_path_override_propagated(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """``--index-path`` CLI override reaches the Collection."""
+        from markdown_vault_mcp.cli import _build_collection
+
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        custom_index = tmp_path / "custom.sqlite"
+
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", str(vault))
+
+        args = _build_parser().parse_args(["index", "--index-path", str(custom_index)])
+        collection = _build_collection(args)
+
+        assert collection._index_path == custom_index
+
 
 class TestCmdSearchJsonOutput:
     """Verify --json flag in _cmd_search produces valid parseable output."""
