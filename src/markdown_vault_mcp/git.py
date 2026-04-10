@@ -1107,7 +1107,12 @@ class GitWriteStrategy:
         # When the git root is a parent of repo_path, git reports paths
         # relative to the git root (e.g. "vault/note.md").  We strip the
         # leading prefix so callers always receive vault-relative paths.
-        vault_rel = repo_path.relative_to(git_root)
+        # Resolve repo_path to handle symlinks: git rev-parse --show-toplevel
+        # always returns the real (resolved) path, so we must match it.
+        try:
+            vault_rel = repo_path.resolve().relative_to(git_root)
+        except ValueError:
+            vault_rel = Path()
         vault_prefix = "" if vault_rel == Path() else str(vault_rel) + "/"
 
         # \x1e (ASCII Record Separator) is the sentinel used to split commit
@@ -1295,6 +1300,7 @@ class GitWriteStrategy:
                         "-C",
                         str(git_root),
                         "log",
+                        "--follow",
                         "--format=%H%x00%h%x00%aI%x00%s",
                         f"{ref}..HEAD",
                         "--",
@@ -1316,23 +1322,28 @@ class GitWriteStrategy:
                 if len(parts) < 4:
                     continue
                 sha, short_sha, timestamp, message = parts[:4]
-                show_result = subprocess.run(
-                    [
-                        "git",
-                        "-C",
-                        str(git_root),
-                        "show",
-                        "--format=",
-                        "-p",
-                        sha,
-                        "--",
-                        path_str,
-                    ],
-                    capture_output=True,
-                    text=True,
-                    check=True,
-                    env=env,
-                )
+                try:
+                    show_result = subprocess.run(
+                        [
+                            "git",
+                            "-C",
+                            str(git_root),
+                            "show",
+                            "--format=",
+                            "-p",
+                            sha,
+                            "--",
+                            path_str,
+                        ],
+                        capture_output=True,
+                        text=True,
+                        check=True,
+                        env=env,
+                    )
+                except subprocess.CalledProcessError as exc:
+                    raise ValueError(
+                        f"Could not retrieve diff for commit {sha!r}"
+                    ) from exc
                 commit_diff = show_result.stdout.lstrip("\n")
                 if len(commit_diff.encode()) > _DIFF_MAX_BYTES:
                     omitted = len(commit_diff.encode()) - _DIFF_MAX_BYTES

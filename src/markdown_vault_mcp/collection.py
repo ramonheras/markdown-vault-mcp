@@ -1977,8 +1977,9 @@ class Collection:
     ) -> list[HistoryEntry]:
         """Return commits that touched a note or the whole vault.
 
-        Requires a git-backed vault (``git_strategy`` set on the collection).
-        When *path* is ``None``, queries the full vault history.
+        When *path* is ``None``, queries the full vault history.  Returns an
+        empty list for vaults whose source directory is not inside a git
+        repository.
 
         Args:
             path: Vault-relative path of the note to filter on (e.g.
@@ -1992,15 +1993,14 @@ class Collection:
 
         Returns:
             List of :class:`~markdown_vault_mcp.types.HistoryEntry` ordered
-            newest-first.  Empty list when the note has no history in the
-            given range.
+            newest-first.  Empty list when the vault has no git history or
+            the note has no commits in the given range.
 
         Raises:
-            ValueError: If git is not configured for this vault, or if
-                *path* is provided but fails path validation.
+            ValueError: If *path* is provided but fails path validation.
         """
         if self._git_strategy is None:
-            raise ValueError("Git is not configured for this vault")
+            return []
         abs_path: Path | None = None
         if path is not None:
             abs_path = self._validate_path(path)
@@ -2040,12 +2040,12 @@ class Collection:
             no changes in the given range.
 
         Raises:
-            ValueError: If git is not configured, exactly one of *since_sha*
-                / *since_timestamp* is not supplied, *since_sha* contains
-                invalid characters, or the resolved ref is not found.
+            ValueError: If exactly one of *since_sha* / *since_timestamp* is
+                not supplied, *since_sha* contains invalid characters, or the
+                resolved ref is not found in history.
         """
         if self._git_strategy is None:
-            raise ValueError("Git is not configured for this vault")
+            return [] if per_commit else ""
 
         if (since_sha is None) == (since_timestamp is None):
             raise ValueError(
