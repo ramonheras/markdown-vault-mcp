@@ -2420,6 +2420,81 @@ class TestGetFileDiff:
         assert len(diffs) >= 1
         assert not diffs[0].diff.startswith("\n")
 
+    def test_per_commit_diff_across_rename(self, tmp_path: Path) -> None:
+        """Per-commit diffs are non-empty even for commits before a rename."""
+        from markdown_vault_mcp.types import CommitDiff
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        subprocess.run(
+            ["git", "-C", str(repo), "init"], capture_output=True, check=True
+        )
+        subprocess.run(
+            ["git", "-C", str(repo), "config", "user.email", "t@t.com"],
+            capture_output=True,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(repo), "config", "user.name", "T"],
+            capture_output=True,
+            check=True,
+        )
+        # Commit 1: add note.md
+        (repo / "note.md").write_text("# v1\n")
+        subprocess.run(
+            ["git", "-C", str(repo), "add", "."], capture_output=True, check=True
+        )
+        subprocess.run(
+            ["git", "-C", str(repo), "commit", "-m", "add note"],
+            capture_output=True,
+            check=True,
+        )
+        first_sha = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        # Commit 2: rename note.md -> renamed.md
+        subprocess.run(
+            ["git", "-C", str(repo), "mv", "note.md", "renamed.md"],
+            capture_output=True,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(repo), "commit", "-m", "rename to renamed.md"],
+            capture_output=True,
+            check=True,
+        )
+
+        strategy = GitWriteStrategy()
+        diffs = strategy.get_file_diff(
+            repo, repo / "renamed.md", first_sha, per_commit=True
+        )
+        assert isinstance(diffs, list)
+        assert len(diffs) == 1
+        assert isinstance(diffs[0], CommitDiff)
+        # The rename commit should produce a non-empty diff
+        assert diffs[0].diff
+
+    def test_git_log_failure_raises_value_error(self, tmp_path: Path) -> None:
+        """get_file_history converts CalledProcessError to ValueError."""
+        import unittest.mock as mock
+
+        repo, _ = self._make_repo_with_commits(tmp_path)
+        strategy = GitWriteStrategy()
+        # Prime the git-root cache so _ensure_git_root doesn't call subprocess.
+        strategy._ensure_git_root(repo)
+
+        err = subprocess.CalledProcessError(
+            128, ["git", "log"], stderr="fatal: bad date"
+        )
+        with (
+            mock.patch.object(subprocess, "run", side_effect=err),
+            pytest.raises(ValueError, match="git log failed"),
+        ):
+            strategy.get_file_history(repo, path=None, since=None, limit=20)
+
 
 class TestGetFileHistoryVaultScope:
     """Tests that vault-wide history is scoped to repo_path."""

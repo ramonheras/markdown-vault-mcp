@@ -1113,7 +1113,7 @@ class GitWriteStrategy:
             vault_rel = repo_path.resolve().relative_to(git_root)
         except ValueError:
             vault_rel = Path()
-        vault_prefix = "" if vault_rel == Path() else str(vault_rel) + "/"
+        vault_prefix = "" if vault_rel == Path() else vault_rel.as_posix() + "/"
 
         # \x1e (ASCII Record Separator) is the sentinel used to split commit
         # blocks in the output — it cannot appear in filenames or commit messages.
