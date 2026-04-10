@@ -52,11 +52,12 @@ jobs:
           git_committer_email: "actions@users.noreply.github.com"
           force: ${{ inputs.force }}
 
-      - name: Update server.json to released version
+      - name: Update versioned manifests to released version
         if: steps.release.outputs.released == 'true'
         env:
           VERSION: ${{ steps.release.outputs.version }}
         run: |
+          # server.json (existing logic)
           jq --arg v "$VERSION" '
             .version = $v |
             .packages |= map(
@@ -66,10 +67,27 @@ jobs:
             )
           ' server.json > server.json.tmp
           mv server.json.tmp server.json
+
+          # Claude Code plugin.json (new)
+          jq --arg v "$VERSION" '.version = $v' \
+            .claude-plugin/plugin/.claude-plugin/plugin.json > plugin.json.tmp
+          mv plugin.json.tmp .claude-plugin/plugin/.claude-plugin/plugin.json
+
+          # Claude Code .mcp.json — keep --from spec in lockstep with plugin.json (new)
+          jq --arg v "$VERSION" '
+            ."markdown-vault-mcp".args = [
+              "--from", ("markdown-vault-mcp[all]==" + $v),
+              "markdown-vault-mcp", "serve"
+            ]
+          ' .claude-plugin/plugin/.mcp.json > mcp.json.tmp
+          mv mcp.json.tmp .claude-plugin/plugin/.mcp.json
+
           git config user.name "github-actions"
           git config user.email "actions@users.noreply.github.com"
-          git add server.json
-          git diff --cached --quiet || git commit -m "chore: update server.json to v${VERSION} [skip ci]"
+          git add server.json \
+                  .claude-plugin/plugin/.claude-plugin/plugin.json \
+                  .claude-plugin/plugin/.mcp.json
+          git diff --cached --quiet || git commit -m "chore: update manifests to v${VERSION} [skip ci]"
           git push
 
       - name: Build package
