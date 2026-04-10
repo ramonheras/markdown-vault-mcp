@@ -2032,9 +2032,9 @@ class Collection:
             since_sha: A commit SHA (full or abbreviated, at least 4 hex
                 digits) to diff from.  Mutually exclusive with
                 *since_timestamp*.
-            since_timestamp: ISO 8601 datetime string resolved to the last
-                commit before that point via ``git rev-list``.  Mutually
-                exclusive with *since_sha*.
+            since_timestamp: ISO 8601 datetime string resolved to the most
+                recent commit at or before that point via ``git rev-list``
+                (boundary inclusive).  Mutually exclusive with *since_sha*.
             per_commit: When ``False`` (default), return a single unified diff
                 string from the reference point to HEAD.  When ``True``,
                 return one :class:`~markdown_vault_mcp.types.CommitDiff` per
