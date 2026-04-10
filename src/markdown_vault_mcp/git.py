@@ -1094,8 +1094,8 @@ class GitWriteStrategy:
             List of :class:`HistoryEntry` ordered from newest to oldest.
 
         Raises:
-            subprocess.CalledProcessError: Propagated from git subprocess
-                failures (caller should translate to ``ValueError``).
+            ValueError: If ``git log`` exits non-zero (e.g. an invalid
+                ``since`` expression).
         """
         git_root = self._ensure_git_root(repo_path)
         if git_root is None:
@@ -1221,10 +1221,8 @@ class GitWriteStrategy:
             :class:`CommitDiff` when *per_commit* is ``True``.
 
         Raises:
-            ValueError: If *ref* is not found in history or *since_timestamp*
-                cannot be resolved.
-            subprocess.CalledProcessError: Propagated from git subprocess
-                failures (caller should translate to ``ValueError``).
+            ValueError: If *ref* is not found in history, *since_timestamp*
+                cannot be resolved, or a git subprocess exits non-zero.
         """
         _DIFF_MAX_BYTES = 50 * 1024  # 50 KB
 
@@ -1249,8 +1247,10 @@ class GitWriteStrategy:
                             f"--before={since_timestamp}",
                             "-1",
                             "HEAD",
-                            "--",
-                            path_str,
+                            # No path filter: git rev-list has no --follow, so
+                            # filtering by current path silently misses pre-rename
+                            # commits.  Resolve the timestamp globally and let the
+                            # subsequent diff (which uses -- path_str) handle scope.
                         ],
                         capture_output=True,
                         text=True,
