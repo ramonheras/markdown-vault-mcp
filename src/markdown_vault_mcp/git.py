@@ -1092,9 +1092,10 @@ class GitWriteStrategy:
             limit: Maximum number of commits to return (capped at 100).
             until: Passed as ``--until`` to ``git log`` (same format as
                 *since*).  ``None`` disables the filter.  When both *since*
-                and *until* are given the window is bounded by both endpoints
-                per git's native semantics (inclusive ``since``, exclusive
-                ``until``).
+                and *until* are given the window is bounded on both sides,
+                inclusive at both endpoints (git's ``--since`` / ``--until``
+                semantics: a commit whose author date equals either boundary
+                is included).
 
         Returns:
             List of :class:`HistoryEntry` ordered from newest to oldest.
@@ -1212,7 +1213,8 @@ class GitWriteStrategy:
 
         Exactly one of *ref* or *since_timestamp* must be supplied.  When
         *since_timestamp* is given, it is resolved to the most recent commit
-        before that instant via ``git rev-list``.
+        at or before that instant via ``git rev-list`` (boundary inclusive:
+        a commit whose author date equals *since_timestamp* is selected).
 
         Args:
             repo_path: Path inside the git repository.

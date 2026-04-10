@@ -773,8 +773,8 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
                 collection.get_history,
                 path,
                 since=since,
-                limit=limit,
                 until=until,
+                limit=limit,
             )
         except ValueError as exc:
             raise ToolError(str(exc)) from exc

@@ -1973,8 +1973,8 @@ class Collection:
         self,
         path: str | None = None,
         since: str | None = None,
-        limit: int = 20,
         until: str | None = None,
+        limit: int = 20,
     ) -> list[HistoryEntry]:
         """Return commits that touched a note or the whole vault.
 
@@ -1989,13 +1989,13 @@ class Collection:
             since: ISO 8601 datetime string or git date expression (e.g.
                 ``"1 week ago"``).  Passed as ``--since`` to ``git log``.
                 ``None`` disables the filter.
-            limit: Maximum number of commits to return.  Clamped to
-                ``[1, 100]``.  Defaults to ``20``.
             until: ISO 8601 datetime string or git date expression, passed as
                 ``--until`` to ``git log``.  ``None`` disables the filter.
                 Both ``since`` and ``until`` boundaries are **inclusive**: a
                 commit whose author date equals either endpoint is included
                 in the result.
+            limit: Maximum number of commits to return.  Clamped to
+                ``[1, 100]``.  Defaults to ``20``.
 
         Returns:
             List of :class:`~markdown_vault_mcp.types.HistoryEntry` ordered

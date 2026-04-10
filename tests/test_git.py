@@ -2751,6 +2751,23 @@ class TestCollectionGitHistoryMethods:
         entries = col.get_history(until="2000-01-01T00:00:00+0000")
         assert entries == []
 
+    def test_get_history_until_boundary_inclusive(self, tmp_path: Path) -> None:
+        """A commit at exactly the `until` timestamp is included.
+
+        Git's ``--until`` (a.k.a. ``--before``) semantics are inclusive at
+        the boundary: a commit whose author date equals the cutoff is
+        returned.  This test pins a single commit at a known instant and
+        asserts that passing that exact instant as ``until`` still returns
+        it (regression guard for the documented boundary behaviour).
+        """
+        col = self._make_collection_with_dated_commits(
+            tmp_path,
+            dates=["2026-02-01T12:00:00+0000"],
+        )
+        entries = col.get_history(until="2026-02-01T12:00:00+0000")
+        assert len(entries) == 1, entries
+        assert entries[0].message == "v0"
+
     # ------------------------------------------------------------------
     # `limit` on get_diff per_commit (issue #339)
     # ------------------------------------------------------------------
