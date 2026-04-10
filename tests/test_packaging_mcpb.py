@@ -19,3 +19,12 @@ def test_cli_main_import_target_exists() -> None:
     from markdown_vault_mcp.cli import main
 
     assert callable(main)
+
+
+def test_mcpb_server_shim_calls_main_serve() -> None:
+    """The shim's only job is to invoke `cli.main(["serve"])`."""
+    shim = MCPB_DIR / "src" / "server.py"
+    assert shim.exists(), f"missing shim at {shim}"
+    content = shim.read_text(encoding="utf-8")
+    assert "from markdown_vault_mcp.cli import main" in content
+    assert 'main(["serve"])' in content
