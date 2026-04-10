@@ -50,6 +50,14 @@ def test_mcpb_manifest_template_valid_and_complete() -> None:
     assert server["type"] == "uv"
     assert server["entry_point"] == "src/server.py"
 
+    # mcp_config must NOT use --from . (local source dir) — that would fail at runtime in
+    # an installed bundle.  If command is present it must reference the PyPI package by name.
+    mcp_config = server["mcp_config"]
+    if "args" in mcp_config:
+        assert "--from" not in mcp_config["args"] or "." not in mcp_config["args"], (
+            "mcp_config.args must not use '--from .' (local source); "
+            "use '--from markdown-vault-mcp[all]==${VERSION}' instead"
+        )
     env = server["mcp_config"]["env"]
     # The one truly required env var must be wired to the form.
     assert env["MARKDOWN_VAULT_MCP_SOURCE_DIR"] == "${user_config.source_dir}"

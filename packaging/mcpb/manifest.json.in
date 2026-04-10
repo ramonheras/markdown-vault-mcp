@@ -23,7 +23,7 @@
     "entry_point": "src/server.py",
     "mcp_config": {
       "command": "uvx",
-      "args": ["--from", ".", "python", "${__dirname}/src/server.py"],
+      "args": ["--from", "markdown-vault-mcp[all]==${VERSION}", "markdown-vault-mcp", "serve"],
       "env": {
         "MARKDOWN_VAULT_MCP_SOURCE_DIR":       "${user_config.source_dir}",
         "MARKDOWN_VAULT_MCP_READ_ONLY":        "${user_config.read_only}",
