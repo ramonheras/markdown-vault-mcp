@@ -7,6 +7,7 @@ depends on (version strings, import paths) stay consistent.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -28,3 +29,34 @@ def test_mcpb_server_shim_calls_main_serve() -> None:
     content = shim.read_text(encoding="utf-8")
     assert "from markdown_vault_mcp.cli import main" in content
     assert 'main(["serve"])' in content
+
+
+def _load_manifest_template() -> dict:
+    """Load the mcpb manifest template with ${VERSION} replaced by a literal."""
+    template = (MCPB_DIR / "manifest.json.in").read_text(encoding="utf-8")
+    rendered = template.replace("${VERSION}", "0.0.0-test")
+    return json.loads(rendered)
+
+
+def test_mcpb_manifest_template_valid_and_complete() -> None:
+    """The mcpb manifest must parse and carry the fields the spec requires."""
+    manifest = _load_manifest_template()
+
+    assert manifest["manifest_version"] == "0.4"
+    assert manifest["name"] == "markdown-vault-mcp"
+    assert manifest["version"] == "0.0.0-test"
+
+    server = manifest["server"]
+    assert server["type"] == "uv"
+    assert server["entry_point"] == "src/server.py"
+
+    env = server["mcp_config"]["env"]
+    # The one truly required env var must be wired to the form.
+    assert env["MARKDOWN_VAULT_MCP_SOURCE_DIR"] == "${user_config.source_dir}"
+
+    user_config = manifest["user_config"]
+    assert user_config["source_dir"]["required"] is True
+    assert user_config["source_dir"]["type"] == "directory"
+    # Sensitive fields must be marked so the host stores them in the keychain.
+    assert user_config["openai_api_key"]["sensitive"] is True
+    assert user_config["git_token"]["sensitive"] is True
