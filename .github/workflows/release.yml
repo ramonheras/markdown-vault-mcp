@@ -302,6 +302,58 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  build-mcpb:
+    needs: release
+    if: needs.release.outputs.released == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release.outputs.tag }}
+      - name: Install mcpb CLI
+        run: npm install -g @anthropic-ai/mcpb@latest
+      - name: Render templates
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
+        run: |
+          mkdir -p build/mcpb/src
+          envsubst < packaging/mcpb/manifest.json.in  > build/mcpb/manifest.json
+          envsubst < packaging/mcpb/pyproject.toml.in > build/mcpb/pyproject.toml
+          cp packaging/mcpb/src/server.py build/mcpb/src/server.py
+      - name: Validate and pack
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
+        run: |
+          mcpb validate build/mcpb/manifest.json
+          mkdir -p dist
+          mcpb pack build/mcpb "dist/markdown-vault-mcp-${VERSION}.mcpb"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mcpb-bundle
+          path: dist/markdown-vault-mcp-*.mcpb
+          if-no-files-found: error
+
+  publish-mcpb:
+    needs: [release, build-mcpb]
+    if: needs.release.outputs.released == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: mcpb-bundle
+          path: dist/
+      - name: Upload to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload \
+            "${{ needs.release.outputs.tag }}" \
+            dist/markdown-vault-mcp-*.mcpb \
+            --clobber \
+            --repo "${{ github.repository }}"
+
   publish-registry:
     needs: [release, publish-pypi, publish-docker]
     if: needs.release.outputs.released == 'true'
