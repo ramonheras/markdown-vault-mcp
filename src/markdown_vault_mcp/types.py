@@ -270,6 +270,29 @@ class NoteContext:
     tags: dict[str, list[str]]
 
 
+@dataclass
+class HistoryEntry:
+    """A commit that touched a note or the vault, returned by get_history()."""
+
+    sha: str
+    short_sha: str
+    timestamp: str
+    author: str
+    message: str
+    paths_changed: list[str]
+
+
+@dataclass
+class CommitDiff:
+    """A per-commit diff entry, returned by get_diff() when per_commit=True."""
+
+    sha: str
+    short_sha: str
+    timestamp: str
+    message: str
+    diff: str
+
+
 WriteCallback = Callable[
     [Path, str, Literal["write", "edit", "delete", "rename"]], None
 ]

@@ -22,6 +22,8 @@ markdown-vault-mcp exposes MCP tools across several categories. Write tools are 
 | [`get_orphan_notes`](#get_orphan_notes) | Read | Find notes with no inbound or outbound links |
 | [`get_most_linked`](#get_most_linked) | Read | Find the most-linked-to notes ranked by backlink count |
 | [`get_connection_path`](#get_connection_path) | Read | Find the shortest path between two notes via link graph |
+| [`get_history`](#get_history) | Read (git) | List commits that touched a note or the whole vault |
+| [`get_diff`](#get_diff) | Read (git) | Return a unified diff of a note between two points in history |
 | [`reindex`](#reindex) | Admin | Force a full reindex of the vault |
 | [`build_embeddings`](#build_embeddings) | Admin | Build or rebuild vector embeddings |
 | [`write`](#write) | Write | Create or overwrite a document or attachment |
@@ -429,6 +431,53 @@ Find the shortest path between two notes via BFS on the undirected link graph (m
 | `max_depth` | int | `10` | Maximum hops to search (clamped to [1, 10]) |
 
 **Returns:** Object with `found` (bool), `path` (ordered list of note paths from source to target), and `hops` (number of edges, or `-1` if not found).
+
+### `get_history`
+
+List commits that touched a note (or the whole vault) since a given timestamp or for the last N commits. Only available for git-backed vaults.
+
+**Parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `path` | string | `null` | Relative vault path (e.g. `"notes/alpha.md"`). Omit for vault-wide history. Must end with `.md`. |
+| `since` | string | `null` | ISO 8601 datetime string (`"2026-04-01T00:00:00"`) or git date expression (`"1 week ago"`). Passed as `--since` to `git log`. |
+| `limit` | int | `20` | Maximum number of commits to return. Capped at 100. |
+
+**Returns:** List of commit objects, newest-first. Each entry contains:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `sha` | string | Full 40-character commit SHA |
+| `short_sha` | string | 7-character abbreviated SHA |
+| `timestamp` | string | ISO 8601 author timestamp |
+| `author` | string | Committer name and email |
+| `message` | string | First line of the commit message |
+| `paths_changed` | list[string] | Files touched (populated for vault-wide queries; empty for single-note queries) |
+
+**Raises:** `ToolError` if `path` is invalid.
+
+### `get_diff`
+
+Return the diff of a specific note between a reference point and `HEAD`. Only available for git-backed vaults.
+
+**Parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `path` | string | required | Relative vault path. Must end with `.md`. |
+| `since_sha` | string | `null` | A commit SHA (full or abbreviated, at least 4 hex digits) to diff from. Mutually exclusive with `since_timestamp`. |
+| `since_timestamp` | string | `null` | ISO 8601 datetime string. Resolved to the last commit before that point. Mutually exclusive with `since_sha`. |
+| `per_commit` | bool | `false` | When `false`, return a single unified diff. When `true`, return one diff per intervening commit. |
+
+Exactly one of `since_sha` / `since_timestamp` must be supplied.
+
+**Returns:**
+
+- `per_commit=false`: object with `diff` (string) — unified diff from reference to HEAD. May include `[diff truncated: N bytes omitted]` if output exceeds 50 KB.
+- `per_commit=true`: list of objects, each containing `sha`, `short_sha`, `timestamp`, `message`, and `diff`.
+
+**Raises:** `ToolError` if parameters are invalid or the reference commit is not found.
 
 ---
 

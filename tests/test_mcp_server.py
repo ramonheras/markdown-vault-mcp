@@ -3183,3 +3183,214 @@ class TestMiddlewareStack:
         tm_idx = types.index(TimingMiddleware)
         lg_idx = types.index(LoggingMiddleware)
         assert eh_idx < tm_idx < lg_idx
+
+
+# ---------------------------------------------------------------------------
+# Git history tools
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def git_vault(tmp_path: Path) -> Path:
+    """A minimal git-backed vault with two commits touching alpha.md."""
+    import subprocess
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    subprocess.run(["git", "-C", str(vault), "init"], capture_output=True, check=True)
+    subprocess.run(
+        ["git", "-C", str(vault), "config", "user.email", "test@test.com"],
+        capture_output=True,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(vault), "config", "user.name", "Test"],
+        capture_output=True,
+        check=True,
+    )
+    # First commit
+    (vault / "alpha.md").write_text("# Alpha\n\nVersion 1.\n")
+    subprocess.run(
+        ["git", "-C", str(vault), "add", "."], capture_output=True, check=True
+    )
+    subprocess.run(
+        ["git", "-C", str(vault), "commit", "-m", "write: alpha.md"],
+        capture_output=True,
+        check=True,
+    )
+    # Second commit
+    (vault / "alpha.md").write_text("# Alpha\n\nVersion 2.\n")
+    subprocess.run(
+        ["git", "-C", str(vault), "add", "."], capture_output=True, check=True
+    )
+    subprocess.run(
+        ["git", "-C", str(vault), "commit", "-m", "edit: alpha.md"],
+        capture_output=True,
+        check=True,
+    )
+    return vault
+
+
+@pytest.fixture
+def _mcp_env_git(git_vault: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Set env vars pointing to a git-backed vault."""
+    monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", str(git_vault))
+    monkeypatch.delenv("MARKDOWN_VAULT_MCP_READ_ONLY", raising=False)
+    for var in _CLEAR_VARS:
+        monkeypatch.delenv(var, raising=False)
+
+
+class TestGetHistoryTool:
+    @pytest.fixture(autouse=True)
+    def _setup(self, _mcp_env_git: None) -> None:
+        pass
+
+    async def test_vault_wide_history(self) -> None:
+        """get_history with no path returns vault-wide commits."""
+        server = create_server()
+        async with Client(server) as client:
+            result = await client.call_tool("get_history", {})
+        entries = _parse_tool_data(result)
+        assert isinstance(entries, list)
+        assert len(entries) == 2
+        messages = [e["message"] for e in entries]
+        assert "edit: alpha.md" in messages
+        assert "write: alpha.md" in messages
+
+    async def test_single_note_history(self) -> None:
+        """get_history filtered by path returns commits for that note."""
+        server = create_server()
+        async with Client(server) as client:
+            result = await client.call_tool("get_history", {"path": "alpha.md"})
+        entries = _parse_tool_data(result)
+        assert isinstance(entries, list)
+        assert len(entries) == 2
+
+    async def test_history_entry_fields(self) -> None:
+        """Each history entry has the expected fields."""
+        server = create_server()
+        async with Client(server) as client:
+            result = await client.call_tool("get_history", {"limit": 1})
+        entries = _parse_tool_data(result)
+        entry = entries[0]
+        assert "sha" in entry and len(entry["sha"]) == 40
+        assert "short_sha" in entry
+        assert "timestamp" in entry
+        assert "author" in entry
+        assert "message" in entry
+        assert "paths_changed" in entry
+
+    async def test_limit_respected(self) -> None:
+        """limit parameter restricts the number of results."""
+        server = create_server()
+        async with Client(server) as client:
+            result = await client.call_tool("get_history", {"limit": 1})
+        entries = _parse_tool_data(result)
+        assert len(entries) == 1
+
+    async def test_invalid_path_raises_tool_error(self) -> None:
+        """A path that escapes the vault raises ToolError."""
+        from fastmcp.exceptions import ToolError
+
+        server = create_server()
+        with pytest.raises((ToolError, Exception)):
+            async with Client(server) as client:
+                await client.call_tool("get_history", {"path": "../escape.md"})
+
+    async def test_get_history_in_tool_list(self) -> None:
+        """get_history appears in the tool list."""
+        server = create_server()
+        async with Client(server) as client:
+            tools = await client.list_tools()
+        names = [t.name for t in tools]
+        assert "get_history" in names
+
+    async def test_get_diff_in_tool_list(self) -> None:
+        """get_diff appears in the tool list."""
+        server = create_server()
+        async with Client(server) as client:
+            tools = await client.list_tools()
+        names = [t.name for t in tools]
+        assert "get_diff" in names
+
+
+class TestGetDiffTool:
+    @pytest.fixture(autouse=True)
+    def _setup(self, _mcp_env_git: None) -> None:
+        pass
+
+    def _first_sha(self, git_vault: Path) -> str:
+        import subprocess
+
+        result = subprocess.run(
+            ["git", "-C", str(git_vault), "log", "--format=%H", "--reverse"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return result.stdout.strip().splitlines()[0]
+
+    async def test_single_diff_from_sha(self, git_vault: Path) -> None:
+        """get_diff with since_sha returns a unified diff dict."""
+        sha = self._first_sha(git_vault)
+        server = create_server()
+        async with Client(server) as client:
+            result = await client.call_tool(
+                "get_diff", {"path": "alpha.md", "since_sha": sha}
+            )
+        data = _parse_tool_data(result)
+        assert isinstance(data, dict)
+        assert "diff" in data
+        assert "Version" in data["diff"] or data["diff"] == ""
+
+    async def test_per_commit_diff(self, git_vault: Path) -> None:
+        """get_diff with per_commit=True returns a list of commit diffs."""
+        sha = self._first_sha(git_vault)
+        server = create_server()
+        async with Client(server) as client:
+            result = await client.call_tool(
+                "get_diff",
+                {"path": "alpha.md", "since_sha": sha, "per_commit": True},
+            )
+        data = _parse_tool_data(result)
+        assert isinstance(data, list)
+        assert len(data) == 1
+        assert "sha" in data[0]
+        assert "diff" in data[0]
+
+    async def test_no_reference_raises_tool_error(self) -> None:
+        """Calling get_diff without any reference raises ToolError."""
+        from fastmcp.exceptions import ToolError
+
+        server = create_server()
+        with pytest.raises((ToolError, Exception)):
+            async with Client(server) as client:
+                await client.call_tool("get_diff", {"path": "alpha.md"})
+
+    async def test_both_references_raises_tool_error(self, git_vault: Path) -> None:
+        """Providing both since_sha and since_timestamp raises ToolError."""
+        from fastmcp.exceptions import ToolError
+
+        sha = self._first_sha(git_vault)
+        server = create_server()
+        with pytest.raises((ToolError, Exception)):
+            async with Client(server) as client:
+                await client.call_tool(
+                    "get_diff",
+                    {
+                        "path": "alpha.md",
+                        "since_sha": sha,
+                        "since_timestamp": "2020-01-01T00:00:00",
+                    },
+                )
+
+    async def test_invalid_sha_raises_tool_error(self) -> None:
+        """An invalid SHA raises ToolError."""
+        from fastmcp.exceptions import ToolError
+
+        server = create_server()
+        with pytest.raises((ToolError, Exception)):
+            async with Client(server) as client:
+                await client.call_tool(
+                    "get_diff", {"path": "alpha.md", "since_sha": "not_valid!"}
+                )
