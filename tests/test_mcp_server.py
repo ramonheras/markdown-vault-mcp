@@ -3394,3 +3394,65 @@ class TestGetDiffTool:
                 await client.call_tool(
                     "get_diff", {"path": "alpha.md", "since_sha": "not_valid!"}
                 )
+
+    async def test_per_commit_respects_limit(self, git_vault: Path) -> None:
+        """get_diff tool honors the new `limit` kwarg in per_commit mode."""
+        import subprocess
+
+        # Add a third and fourth commit to alpha.md.
+        for i in (3, 4):
+            (git_vault / "alpha.md").write_text(f"# Alpha\n\nVersion {i}.\n")
+            subprocess.run(
+                ["git", "-C", str(git_vault), "add", "."],
+                capture_output=True,
+                check=True,
+            )
+            subprocess.run(
+                ["git", "-C", str(git_vault), "commit", "-m", f"edit v{i}"],
+                capture_output=True,
+                check=True,
+            )
+        sha = self._first_sha(git_vault)
+        server = create_server()
+        async with Client(server) as client:
+            result = await client.call_tool(
+                "get_diff",
+                {
+                    "path": "alpha.md",
+                    "since_sha": sha,
+                    "per_commit": True,
+                    "limit": 2,
+                },
+            )
+        data = _parse_tool_data(result)
+        assert isinstance(data, list)
+        assert len(data) == 2
+        # Newest-first ordering: the two most recent commit messages.
+        assert [c["message"] for c in data] == ["edit v4", "edit v3"]
+
+
+class TestGitToolsUntilParam:
+    """Tool-level tests for the `until` param on get_history (issue #340)."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, _mcp_env_git: None) -> None:
+        pass
+
+    async def test_until_filter_passthrough(self) -> None:
+        """The tool accepts `until` and scopes results accordingly."""
+        # The existing fixture has two commits with real (recent) timestamps.
+        # A far-future cutoff must include both; a far-past cutoff must exclude
+        # both. This proves the `until` kwarg is plumbed through to git log.
+        server = create_server()
+
+        async with Client(server) as client:
+            future = await client.call_tool(
+                "get_history", {"until": "2099-01-01T00:00:00"}
+            )
+        assert len(_parse_tool_data(future)) == 2
+
+        async with Client(server) as client:
+            past = await client.call_tool(
+                "get_history", {"until": "2000-01-01T00:00:00"}
+            )
+        assert _parse_tool_data(past) == []
