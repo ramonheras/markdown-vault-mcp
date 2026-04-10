@@ -2357,3 +2357,127 @@ class TestGetFileDiff:
         strategy = GitWriteStrategy()
         with pytest.raises(ValueError, match="not found in history"):
             strategy.get_file_diff(repo, repo / "note.md", "deadbeef", per_commit=False)
+
+    def test_since_timestamp_single_diff(self, tmp_path: Path) -> None:
+        """since_timestamp resolves to a commit SHA and returns a diff string."""
+        repo, _ = self._make_repo_with_commits(tmp_path)
+        strategy = GitWriteStrategy()
+        # Get the first commit's ISO timestamp, then use it as `since_timestamp`.
+        # rev-list --before=<first-commit-time> -1 HEAD returns the first commit.
+        ts = subprocess.run(
+            ["git", "-C", str(repo), "log", "--format=%aI", "--reverse", "-1"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        diff = strategy.get_file_diff(
+            repo,
+            repo / "note.md",
+            ref=None,
+            per_commit=False,
+            since_timestamp=ts,
+        )
+        assert isinstance(diff, str)
+
+    def test_since_timestamp_no_commit_returns_empty(self, tmp_path: Path) -> None:
+        """since_timestamp before all commits returns empty result."""
+        repo, _ = self._make_repo_with_commits(tmp_path)
+        strategy = GitWriteStrategy()
+        result = strategy.get_file_diff(
+            repo,
+            repo / "note.md",
+            ref=None,
+            per_commit=False,
+            since_timestamp="1970-01-01T00:00:00+00:00",
+        )
+        assert result == ""
+
+    def test_since_timestamp_per_commit(self, tmp_path: Path) -> None:
+        """since_timestamp with per_commit=True returns CommitDiff list."""
+        from markdown_vault_mcp.types import CommitDiff
+
+        repo, _ = self._make_repo_with_commits(tmp_path)
+        strategy = GitWriteStrategy()
+        # A far-future timestamp resolves to the latest commit; diff is empty list.
+        diffs = strategy.get_file_diff(
+            repo,
+            repo / "note.md",
+            ref=None,
+            per_commit=True,
+            since_timestamp="2099-01-01T00:00:00+00:00",
+        )
+        assert isinstance(diffs, list)
+        assert all(isinstance(d, CommitDiff) for d in diffs)
+
+    def test_per_commit_diff_no_leading_blank(self, tmp_path: Path) -> None:
+        """per_commit diff entries must not start with a blank line."""
+        repo, first_sha = self._make_repo_with_commits(tmp_path)
+        strategy = GitWriteStrategy()
+        diffs = strategy.get_file_diff(
+            repo, repo / "note.md", first_sha, per_commit=True
+        )
+        assert isinstance(diffs, list)
+        assert len(diffs) >= 1
+        assert not diffs[0].diff.startswith("\n")
+
+
+class TestGetFileHistoryVaultScope:
+    """Tests that vault-wide history is scoped to repo_path."""
+
+    def _make_repo_with_subdirectory_vault(self, tmp_path: Path) -> tuple[Path, Path]:
+        """Create a repo where the vault is a subdirectory of the git root."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        vault = repo / "vault"
+        vault.mkdir()
+        subprocess.run(
+            ["git", "-C", str(repo), "init"], capture_output=True, check=True
+        )
+        subprocess.run(
+            ["git", "-C", str(repo), "config", "user.email", "test@test.com"],
+            capture_output=True,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(repo), "config", "user.name", "Test"],
+            capture_output=True,
+            check=True,
+        )
+        # Commit a file OUTSIDE the vault
+        (repo / "outside.md").write_text("outside\n")
+        subprocess.run(
+            ["git", "-C", str(repo), "add", "."], capture_output=True, check=True
+        )
+        subprocess.run(
+            ["git", "-C", str(repo), "commit", "-m", "outside commit"],
+            capture_output=True,
+            check=True,
+        )
+        # Commit a file INSIDE the vault
+        (vault / "note.md").write_text("# Inside\n")
+        subprocess.run(
+            ["git", "-C", str(repo), "add", "."], capture_output=True, check=True
+        )
+        subprocess.run(
+            ["git", "-C", str(repo), "commit", "-m", "vault commit"],
+            capture_output=True,
+            check=True,
+        )
+        return repo, vault
+
+    def test_vault_wide_history_scoped_to_vault(self, tmp_path: Path) -> None:
+        """Vault-wide history excludes commits that only touched files outside."""
+        _, vault = self._make_repo_with_subdirectory_vault(tmp_path)
+        strategy = GitWriteStrategy()
+        entries = strategy.get_file_history(vault, path=None, since=None, limit=20)
+        messages = [e.message for e in entries]
+        assert "vault commit" in messages
+        assert "outside commit" not in messages
+
+    def test_vault_wide_paths_are_vault_relative(self, tmp_path: Path) -> None:
+        """paths_changed entries are relative to the vault, not the git root."""
+        _, vault = self._make_repo_with_subdirectory_vault(tmp_path)
+        strategy = GitWriteStrategy()
+        entries = strategy.get_file_history(vault, path=None, since=None, limit=20)
+        assert len(entries) == 1
+        assert entries[0].paths_changed == ["note.md"]

@@ -17,7 +17,6 @@ import queue
 import re
 import shutil
 import sqlite3
-import subprocess
 import tempfile
 import threading
 import unicodedata
@@ -2060,53 +2059,19 @@ class Collection:
                 raise ValueError(
                     f"Invalid SHA {since_sha!r}: must be 4-40 lowercase hex digits"
                 )
-            ref = since_sha
         else:
-            # Resolve timestamp to a commit SHA via git rev-list.
-            assert since_timestamp is not None
-            git_root = self._git_strategy._ensure_git_root(self._source_dir)
-            if git_root is None:
-                if per_commit:
-                    return []
-                return ""
-            env = self._git_strategy._git_env()
-            try:
-                result = subprocess.run(
-                    [
-                        "git",
-                        "-C",
-                        str(git_root),
-                        "rev-list",
-                        f"--before={since_timestamp}",
-                        "-1",
-                        "HEAD",
-                        "--",
-                        str(abs_path),
-                    ],
-                    capture_output=True,
-                    text=True,
-                    check=True,
-                    env=env,
-                )
-            except subprocess.CalledProcessError as exc:
+            if not since_timestamp:
                 raise ValueError(
-                    f"Could not resolve timestamp {since_timestamp!r}: "
-                    f"{(exc.stderr or '').strip()}"
-                ) from exc
-            finally:
-                self._git_strategy._cleanup_git_env(env)
-            ref = result.stdout.strip()
-            if not ref:
-                if per_commit:
-                    return []
-                return ""
+                    "Exactly one of 'since_sha' or 'since_timestamp' must be provided"
+                )
 
-        try:
-            return self._git_strategy.get_file_diff(
-                self._source_dir, abs_path, ref, per_commit
-            )
-        except subprocess.CalledProcessError as exc:
-            raise ValueError(f"Commit {ref!r} not found in history") from exc
+        return self._git_strategy.get_file_diff(
+            self._source_dir,
+            abs_path,
+            ref=since_sha,
+            per_commit=per_commit,
+            since_timestamp=since_timestamp,
+        )
 
     def stats(self) -> CollectionStats:
         """Return collection-wide statistics.

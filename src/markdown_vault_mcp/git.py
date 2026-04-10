@@ -1103,6 +1103,13 @@ class GitWriteStrategy:
 
         limit = min(max(1, limit), 100)
 
+        # Compute vault-relative prefix for normalising --name-only output.
+        # When the git root is a parent of repo_path, git reports paths
+        # relative to the git root (e.g. "vault/note.md").  We strip the
+        # leading prefix so callers always receive vault-relative paths.
+        vault_rel = repo_path.relative_to(git_root)
+        vault_prefix = "" if vault_rel == Path() else str(vault_rel) + "/"
+
         # \x1e (ASCII Record Separator) is the sentinel used to split commit
         # blocks in the output — it cannot appear in filenames or commit messages.
         _SENTINEL = "\x1e"
@@ -1117,10 +1124,10 @@ class GitWriteStrategy:
         if since:
             cmd.append(f"--since={since}")
         if path is None:
-            # vault-wide: include changed file names in each block
-            cmd.append("--name-only")
+            # vault-wide: scope to repo_path to exclude commits outside the vault
+            cmd += ["--name-only", "--", str(repo_path)]
         else:
-            cmd += ["--", str(path)]
+            cmd += ["--follow", "--", str(path)]
 
         env = self._git_env()
         try:
@@ -1156,8 +1163,14 @@ class GitWriteStrategy:
             sha, short_sha, timestamp, author, message = parts[:5]
             paths_changed: list[str] = []
             if path is None and len(lines) > 1:
-                # vault-wide query: lines[1:] are the changed file paths
-                paths_changed = [ln for ln in lines[1:] if ln.strip()]
+                # vault-wide query: strip vault prefix to get vault-relative paths
+                for ln in lines[1:]:
+                    ln = ln.strip()
+                    if not ln:
+                        continue
+                    if vault_prefix and ln.startswith(vault_prefix):
+                        ln = ln[len(vault_prefix) :]
+                    paths_changed.append(ln)
             entries.append(
                 HistoryEntry(
                     sha=sha,
@@ -1174,25 +1187,34 @@ class GitWriteStrategy:
         self,
         repo_path: Path,
         path: Path,
-        ref: str,
+        ref: str | None,
         per_commit: bool,
+        since_timestamp: str | None = None,
     ) -> str | list[CommitDiff]:
         """Return a unified diff of *path* from *ref* to HEAD.
+
+        Exactly one of *ref* or *since_timestamp* must be supplied.  When
+        *since_timestamp* is given, it is resolved to the most recent commit
+        before that instant via ``git rev-list``.
 
         Args:
             repo_path: Path inside the git repository.
             path: Absolute path of the file to diff.
-            ref: The git ref (SHA or expression) to diff from.
+            ref: The git ref (SHA or expression) to diff from.  Mutually
+                exclusive with *since_timestamp*.
             per_commit: When ``False``, return a single unified diff string.
                 When ``True``, return one :class:`CommitDiff` per intervening
                 commit.
+            since_timestamp: ISO 8601 datetime string resolved to a commit SHA
+                via ``git rev-list --before``.  Mutually exclusive with *ref*.
 
         Returns:
             A unified diff string when *per_commit* is ``False``, or a list of
             :class:`CommitDiff` when *per_commit* is ``True``.
 
         Raises:
-            ValueError: If *ref* is not found in history.
+            ValueError: If *ref* is not found in history or *since_timestamp*
+                cannot be resolved.
             subprocess.CalledProcessError: Propagated from git subprocess
                 failures (caller should translate to ``ValueError``).
         """
@@ -1207,6 +1229,38 @@ class GitWriteStrategy:
         path_str = str(path)
         env = self._git_env()
         try:
+            if since_timestamp is not None:
+                # Resolve the ISO timestamp to the most recent commit before it.
+                try:
+                    rev_result = subprocess.run(
+                        [
+                            "git",
+                            "-C",
+                            str(git_root),
+                            "rev-list",
+                            f"--before={since_timestamp}",
+                            "-1",
+                            "HEAD",
+                            "--",
+                            path_str,
+                        ],
+                        capture_output=True,
+                        text=True,
+                        check=True,
+                        env=env,
+                    )
+                except subprocess.CalledProcessError as exc:
+                    raise ValueError(
+                        f"Could not resolve timestamp {since_timestamp!r}: "
+                        f"{(exc.stderr or '').strip()}"
+                    ) from exc
+                ref = rev_result.stdout.strip()
+                if not ref:
+                    return [] if per_commit else ""
+
+            if ref is None:
+                raise ValueError("Either 'ref' or 'since_timestamp' must be provided")
+
             if not per_commit:
                 try:
                     result = subprocess.run(
@@ -1279,7 +1333,7 @@ class GitWriteStrategy:
                     check=True,
                     env=env,
                 )
-                commit_diff = show_result.stdout
+                commit_diff = show_result.stdout.lstrip("\n")
                 if len(commit_diff.encode()) > _DIFF_MAX_BYTES:
                     omitted = len(commit_diff.encode()) - _DIFF_MAX_BYTES
                     commit_diff = commit_diff.encode()[:_DIFF_MAX_BYTES].decode(

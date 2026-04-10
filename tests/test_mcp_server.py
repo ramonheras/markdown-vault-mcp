@@ -3191,7 +3191,7 @@ class TestMiddlewareStack:
 
 
 @pytest.fixture
-def git_vault(tmp_path: pytest.TempPathFactory) -> Path:
+def git_vault(tmp_path: Path) -> Path:
     """A minimal git-backed vault with two commits touching alpha.md."""
     import subprocess
 
