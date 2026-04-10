@@ -68,3 +68,12 @@ def test_mcpb_manifest_template_valid_and_complete() -> None:
     # Sensitive fields must be marked so the host stores them in the keychain.
     assert user_config["openai_api_key"]["sensitive"] is True
     assert user_config["git_token"]["sensitive"] is True
+
+
+def test_mcpb_pyproject_template_pins_versioned_package() -> None:
+    """The bundle pyproject must pin markdown-vault-mcp[all] to the same VERSION."""
+    template = (MCPB_DIR / "pyproject.toml.in").read_text(encoding="utf-8")
+    assert "${VERSION}" in template, "template must use ${VERSION} placeholder"
+    # The dep line should pin [all] extras to the same version.
+    assert "markdown-vault-mcp[all]==${VERSION}" in template
+    assert 'requires-python = ">=3.10"' in template
