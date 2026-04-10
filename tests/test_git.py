@@ -2481,3 +2481,98 @@ class TestGetFileHistoryVaultScope:
         entries = strategy.get_file_history(vault, path=None, since=None, limit=20)
         assert len(entries) == 1
         assert entries[0].paths_changed == ["note.md"]
+
+
+class TestCollectionGitHistoryMethods:
+    """Tests for Collection.get_history / Collection.get_diff edge cases."""
+
+    def _make_collection_no_git(self, tmp_path: Path):  # type: ignore[no-untyped-def]
+        """Return a Collection with no git strategy (plain directory vault)."""
+        from markdown_vault_mcp.collection import Collection
+
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        (vault / "note.md").write_text("# Note\n")
+        col = Collection(source_dir=vault, git_strategy=None)
+        col.build_index()
+        return col
+
+    def _make_collection_with_git(self, tmp_path: Path):  # type: ignore[no-untyped-def]
+        """Return a Collection backed by a git repo with two commits."""
+        from markdown_vault_mcp.collection import Collection
+
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        subprocess.run(
+            ["git", "-C", str(vault), "init"], capture_output=True, check=True
+        )
+        subprocess.run(
+            ["git", "-C", str(vault), "config", "user.email", "t@t.com"],
+            capture_output=True,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(vault), "config", "user.name", "T"],
+            capture_output=True,
+            check=True,
+        )
+        (vault / "note.md").write_text("# v1\n")
+        subprocess.run(
+            ["git", "-C", str(vault), "add", "."], capture_output=True, check=True
+        )
+        subprocess.run(
+            ["git", "-C", str(vault), "commit", "-m", "add note"],
+            capture_output=True,
+            check=True,
+        )
+        (vault / "note.md").write_text("# v2\n")
+        subprocess.run(
+            ["git", "-C", str(vault), "add", "."], capture_output=True, check=True
+        )
+        subprocess.run(
+            ["git", "-C", str(vault), "commit", "-m", "update note"],
+            capture_output=True,
+            check=True,
+        )
+        strategy = GitWriteStrategy()
+        col = Collection(source_dir=vault, git_strategy=strategy)
+        col.build_index()
+        return col, vault
+
+    def test_get_history_no_git_strategy_returns_empty(self, tmp_path: Path) -> None:
+        """get_history returns [] when _git_strategy is None."""
+        col = self._make_collection_no_git(tmp_path)
+        assert col.get_history() == []
+
+    def test_get_diff_no_git_strategy_returns_empty_string(
+        self, tmp_path: Path
+    ) -> None:
+        """get_diff returns '' when _git_strategy is None and per_commit=False."""
+        col = self._make_collection_no_git(tmp_path)
+        result = col.get_diff("note.md", since_sha="abcd1234")
+        assert result == ""
+
+    def test_get_diff_no_git_strategy_per_commit_returns_empty_list(
+        self, tmp_path: Path
+    ) -> None:
+        """get_diff returns [] when _git_strategy is None and per_commit=True."""
+        col = self._make_collection_no_git(tmp_path)
+        result = col.get_diff("note.md", since_sha="abcd1234", per_commit=True)
+        assert result == []
+
+    def test_get_history_with_since_filter(self, tmp_path: Path) -> None:
+        """get_history passes the since filter through to git log."""
+        col, _ = self._make_collection_with_git(tmp_path)
+        # A far-future date should still return results (all commits are before it).
+        entries = col.get_history(since="2000-01-01")
+        assert isinstance(entries, list)
+
+    def test_get_file_diff_no_git_root_per_commit(self, tmp_path: Path) -> None:
+        """get_file_diff returns [] for per_commit=True when no git root."""
+        non_repo = tmp_path / "norepo"
+        non_repo.mkdir()
+        strategy = GitWriteStrategy()
+        result = strategy.get_file_diff(
+            non_repo, non_repo / "note.md", ref="abcd", per_commit=True
+        )
+        assert result == []

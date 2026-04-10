@@ -1129,8 +1129,9 @@ class GitWriteStrategy:
         if since:
             cmd.append(f"--since={since}")
         if path is None:
-            # vault-wide: scope to repo_path to exclude commits outside the vault
-            cmd += ["--name-only", "--", str(repo_path)]
+            # vault-wide: scope to the resolved real path so symlinked SOURCE_DIR
+            # values work correctly (git compares against the real toplevel).
+            cmd += ["--name-only", "--", str(repo_path.resolve())]
         else:
             cmd += ["--follow", "--", str(path)]
 
@@ -1143,6 +1144,8 @@ class GitWriteStrategy:
                 check=True,
                 env=env,
             )
+        except subprocess.CalledProcessError as exc:
+            raise ValueError(f"git log failed: {(exc.stderr or '').strip()}") from exc
         finally:
             self._cleanup_git_env(env)
 
@@ -1292,7 +1295,12 @@ class GitWriteStrategy:
                     diff += f"\n[diff truncated: {omitted} bytes omitted]"
                 return diff
 
-            # per_commit=True: enumerate commits in range then show each
+            # per_commit=True: enumerate commits in range then show each.
+            # Use --name-only with a sentinel so we can recover the path the
+            # file had at each commit — critical for correct diffs across
+            # renames (git show sha -- new.md returns nothing for pre-rename
+            # commits; we must pass the old filename instead).
+            _PC_SENTINEL = "\x1e"
             try:
                 log_result = subprocess.run(
                     [
@@ -1301,7 +1309,8 @@ class GitWriteStrategy:
                         str(git_root),
                         "log",
                         "--follow",
-                        "--format=%H%x00%h%x00%aI%x00%s",
+                        f"--format={_PC_SENTINEL}%H%x00%h%x00%aI%x00%s",
+                        "--name-only",
                         f"{ref}..HEAD",
                         "--",
                         path_str,
@@ -1315,13 +1324,22 @@ class GitWriteStrategy:
                 raise ValueError(f"Commit {ref!r} not found in history") from exc
 
             diffs: list[CommitDiff] = []
-            for line in log_result.stdout.strip().splitlines():
-                if not line.strip():
+            for block in log_result.stdout.split(_PC_SENTINEL):
+                block = block.strip()
+                if not block:
                     continue
-                parts = line.split("\x00")
+                lines = block.splitlines()
+                if not lines:
+                    continue
+                parts = lines[0].split("\x00")
                 if len(parts) < 4:
                     continue
                 sha, short_sha, timestamp, message = parts[:4]
+                # Recover the path the file had at this specific commit.
+                # With --follow, this will be the old name for pre-rename commits.
+                commit_path = next(
+                    (ln.strip() for ln in lines[1:] if ln.strip()), path_str
+                )
                 try:
                     show_result = subprocess.run(
                         [
@@ -1333,7 +1351,7 @@ class GitWriteStrategy:
                             "-p",
                             sha,
                             "--",
-                            path_str,
+                            commit_path,
                         ],
                         capture_output=True,
                         text=True,

@@ -2054,16 +2054,10 @@ class Collection:
 
         abs_path = self._validate_path(path)
 
-        if since_sha is not None:
-            if not re.fullmatch(r"[0-9a-f]{4,40}", since_sha):
-                raise ValueError(
-                    f"Invalid SHA {since_sha!r}: must be 4-40 lowercase hex digits"
-                )
-        else:
-            if not since_timestamp:
-                raise ValueError(
-                    "Exactly one of 'since_sha' or 'since_timestamp' must be provided"
-                )
+        if since_sha is not None and not re.fullmatch(r"[0-9a-f]{4,40}", since_sha):
+            raise ValueError(
+                f"Invalid SHA {since_sha!r}: must be 4-40 lowercase hex digits"
+            )
 
         return self._git_strategy.get_file_diff(
             self._source_dir,

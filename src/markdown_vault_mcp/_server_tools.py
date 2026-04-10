@@ -758,8 +758,7 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
               vault-wide queries; empty for single-note queries).
 
         Raises:
-            ToolError: If git is not configured for this vault, or if the
-                path is invalid.
+            ToolError: If the path is invalid.
         """
         try:
             results = await asyncio.to_thread(
@@ -820,9 +819,8 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
             - diff (str): Unified diff for this commit.
 
         Raises:
-            ToolError: If git is not configured, neither or both reference
-                parameters are supplied, the SHA is invalid, or the reference
-                commit is not found.
+            ToolError: If neither or both reference parameters are supplied,
+                the SHA is invalid, or the reference commit is not found.
         """
         try:
             result = await asyncio.to_thread(

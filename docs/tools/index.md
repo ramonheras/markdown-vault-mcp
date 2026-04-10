@@ -455,7 +455,7 @@ List commits that touched a note (or the whole vault) since a given timestamp or
 | `message` | string | First line of the commit message |
 | `paths_changed` | list[string] | Files touched (populated for vault-wide queries; empty for single-note queries) |
 
-**Raises:** `ToolError` if git is not configured for the vault, or if `path` is invalid.
+**Raises:** `ToolError` if `path` is invalid.
 
 ### `get_diff`
 
@@ -477,7 +477,7 @@ Exactly one of `since_sha` / `since_timestamp` must be supplied.
 - `per_commit=false`: object with `diff` (string) — unified diff from reference to HEAD. May include `[diff truncated: N bytes omitted]` if output exceeds 50 KB.
 - `per_commit=true`: list of objects, each containing `sha`, `short_sha`, `timestamp`, `message`, and `diff`.
 
-**Raises:** `ToolError` if git is not configured, parameters are invalid, or the reference commit is not found.
+**Raises:** `ToolError` if parameters are invalid or the reference commit is not found.
 
 ---
 
