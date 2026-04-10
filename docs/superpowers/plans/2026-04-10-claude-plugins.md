@@ -12,12 +12,12 @@
 
 ## Risk verification results (2026-04-10)
 
-- `manifest_version 0.4` + `server.type: "uv"`: **supported** — documented in the authoritative MANIFEST.md spec under "UV Runtime (v0.4+)"; spec current version is 0.3 for stable, but `uv` type explicitly requires `manifest_version: "0.4"` and is documented as a production feature (not experimental).
+- `manifest_version 0.4` + `server.type: "uv"`: **supported** — documented in the authoritative MANIFEST.md spec ([`https://raw.githubusercontent.com/anthropics/mcpb/main/MANIFEST.md`](https://raw.githubusercontent.com/anthropics/mcpb/main/MANIFEST.md)) under "UV Runtime (v0.4+)"; spec *document* version is 0.3 for the stable/GA track, but `uv` type explicitly requires `manifest_version: "0.4"` and is documented as a production feature (not experimental).
 - Minimum Claude Desktop version for mcpb v0.4: **`>=0.10.0`** — the MANIFEST.md spec uses `"claude_desktop": ">=0.10.0"` in all its canonical examples for Python, Node.js, and binary extension types. No newer minimum is documented for the `uv` type specifically.
 - mcpb CLI version installed: **2.1.2** (installed via `npm install --prefix /tmp/mcpb-install @anthropic-ai/mcpb@latest`)
 - `mcpb validate` with `server.type: "uv"`: **passed** — validation passes when `mcp_config` is included. Note: `mcp_config` is required by the validator even for `uv` type (the spec says "optional" but the CLI enforces it). Pack produces a 3-file archive: `manifest.json`, `pyproject.toml`, `src/server.py` — no `server/lib/` or `server/venv/`.
 - Claude Code `${VAR:-default}` in .mcp.json: **supported** — Claude Code docs explicitly document both `${VAR}` and `${VAR:-default}` as supported expansion syntax in `.mcp.json` env blocks (source: https://code.claude.com/docs/en/mcp.md, "Environment variable expansion in `.mcp.json`" section). Expansion works in `command`, `args`, `env` values, and `url` fields.
-- Fallback taken: **one adjustment** — `mcp_config` must be present in the manifest even for `server.type: "uv"` (the spec says optional but `mcpb validate` v2.1.2 rejects manifests without it). The manifest template in Task 4 must include `mcp_config` with `"command": "uv"` and `"args": ["run", ...]`.
+- Fallback taken: **one adjustment** — `mcp_config` must be present in the manifest even for `server.type: "uv"` (the spec says optional but `mcpb validate` v2.1.2 rejects manifests without it). The manifest template in Task 4 must include `mcp_config` with `"command": "uv"` and `"args": ["run", "--with", "markdown-vault-mcp[all]==${VERSION}", "python", "src/server.py"]`.
 
 ---
 
@@ -80,7 +80,7 @@ This is the **§10 Risk 1** + **§10 Risk 2** verification gate. Do this *before
 
 **Files:** none (research task).
 
-- [ ] **Step 1: Confirm `manifest_version 0.4` with `server.type: "uv"` is supported in a shipping Claude Desktop.**
+- [x] **Step 1: Confirm `manifest_version 0.4` with `server.type: "uv"` is supported in a shipping Claude Desktop.**
 
   Fetch the authoritative mcpb MANIFEST spec:
 
@@ -94,7 +94,7 @@ This is the **§10 Risk 1** + **§10 Risk 2** verification gate. Do this *before
 
   Expected outcome: a concrete minimum Claude Desktop version number to use in §4.2 / Task 4 of this plan (e.g. `>=0.10.0` or whatever the spec reveals).
 
-- [ ] **Step 2: Install the mcpb CLI locally and run `mcpb --version`.**
+- [x] **Step 2: Install the mcpb CLI locally and run `mcpb --version`.**
 
   ```bash
   npm install -g @anthropic-ai/mcpb@latest
@@ -103,7 +103,7 @@ This is the **§10 Risk 1** + **§10 Risk 2** verification gate. Do this *before
 
   Expected: a version string (for example `0.4.x`). If `npm install` fails, that is a blocker — escalate before continuing.
 
-- [ ] **Step 3: Scratch-test the `.mcpb` path manually.**
+- [x] **Step 3: Scratch-test the `.mcpb` path manually.**
 
   Create a throwaway manifest in `/tmp`:
 
@@ -142,7 +142,7 @@ This is the **§10 Risk 1** + **§10 Risk 2** verification gate. Do this *before
 
   If `mcpb validate` rejects `server.type: "uv"`, that is the Risk 1 fallback signal — stop and update the design to use `server.type: "python"` with documented FastEmbed exclusion.
 
-- [ ] **Step 4: Verify Claude Code env-var substitution syntax.**
+- [x] **Step 4: Verify Claude Code env-var substitution syntax.**
 
   Open the Claude Code plugins reference and find the section on `.mcp.json` env substitution:
 
@@ -155,7 +155,7 @@ This is the **§10 Risk 1** + **§10 Risk 2** verification gate. Do this *before
 
   Expected outcome: a definitive yes/no. If yes, the `.mcp.json` in Task 8 uses `${VAR:-default}` as designed. If no, Task 8 drops the default and Task 10 (plugin README) adds a prominent "set this env var first" block.
 
-- [ ] **Step 5: Record findings.**
+- [x] **Step 5: Record findings.**
 
   Add a short note at the top of this plan file under "Risk verification results":
 
