@@ -106,6 +106,7 @@ All known pending ports have been filed as issues:
 
 - **MV → IG**: [image-generation-mcp#110](https://github.com/pvliesdonk/image-generation-mcp/issues/110) — server.json, httpx guard, auth logging, CI diff-cover, release job deps
 - **MV → IG**: [image-generation-mcp#137](https://github.com/pvliesdonk/image-generation-mcp/issues/137) — persistent EventStore for HTTP session persistence (MV#278)
+- **MV → IG**: [image-generation-mcp#170](https://github.com/pvliesdonk/image-generation-mcp/issues/170) — prerelease mode for release.yml (\`:unstable\` Docker channel, skip PyPI/linux/registry on rc) (MV#353)
 - **IG → MV**: [markdown-vault-mcp#270](https://github.com/pvliesdonk/markdown-vault-mcp/issues/270) — diff-cover cleanup, versionless package copies
 - **MV → IG**: *(issue not yet filed)* — FastMCP middleware stack (ErrorHandling, Timing, Logging/Structured), `FASTMCP_LOG_LEVEL` env-sync on `-v`, `FASTMCP_ENABLE_RICH_LOGGING` toggle, CLAUDE.md PR gates + logging standard (MV#331, adapted from scholar-mcp#99)
 - **MV → scholar-mcp**: *(issue not yet filed)* — middleware stack wiring and `FASTMCP_ENABLE_RICH_LOGGING` toggle; scholar-mcp#99 established the logging standard but did not wire the middleware (MV#331)
