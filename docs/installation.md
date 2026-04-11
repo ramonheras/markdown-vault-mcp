@@ -58,6 +58,12 @@ docker pull ghcr.io/pvliesdonk/markdown-vault-mcp:latest
 
 The Docker image uses `[all]` (MCP + FastEmbed + API embeddings). Semantic search is available by default with FastEmbed and can switch to Ollama/OpenAI when configured.
 
+For early adopters who want to test unreleased changes, an `:unstable` tag is published by the release workflow's pre-release mode. It tracks the latest release candidate and may include in-progress features. The floating `:latest`, `:vN`, and `:vN.M` tags only move on stable releases.
+
+```bash
+docker pull ghcr.io/pvliesdonk/markdown-vault-mcp:unstable
+```
+
 See [Docker deployment](deployment/docker.md) for compose setup and volume configuration.
 
 ## Linux Packages (.deb / .rpm)

@@ -1511,6 +1511,38 @@ Safety branch mode for push failures is tracked separately (see #119).
 
 Both methods use the existing `_git_env()` / `_cleanup_git_env()` pattern for credential forwarding and cleanup. Path arguments are always validated via `Collection._validate_path()` before being passed to the git layer. No shell injection is possible because all subprocess calls use list arguments with `shell=False`.
 
+### Release channels
+
+The release workflow (`.github/workflows/release.yml`) publishes two
+distinct channels via a single `workflow_dispatch` trigger:
+
+- **Stable** (`prerelease: false`): full pipeline. semantic-release
+  cuts a `vX.Y.Z` tag, PyPI receives the wheel + sdist, the Docker
+  image publishes `:latest`, `:vX.Y.Z`, `:vX.Y`, `:vX`, `.deb`/`.rpm`
+  packages attach to the GitHub Release, the Claude Code catalog PR
+  opens in `pvliesdonk/claude-plugins`, and the MCP Registry receives
+  the new `server.json`. Intended for promoting a verified build to
+  every distribution surface.
+
+- **Pre-release** (`prerelease: true`, the dispatch default):
+  exercises the full pipeline without touching public catalogs.
+  semantic-release cuts a `vX.Y.Z-rc.N` tag and marks the GitHub
+  Release as a pre-release. The Docker image publishes `:unstable`
+  and `:vX.Y.Z-rc.N` only — `:latest`, `:vX.Y`, `:vX` never move on
+  a pre-release. The mcpb bundle is built and attached to the
+  pre-release for manual smoke-test in Claude Desktop. PyPI, linux
+  packages, the Claude Code catalog PR, and the MCP Registry publish
+  are all skipped. This is the default dispatch mode so real releases
+  require an explicit opt-out.
+
+The `build-mcpb` and `publish-mcpb` jobs run unchanged in both modes:
+`build-mcpb` reads `needs.release.outputs.version` (which already
+carries the rc suffix on pre-release) and threads it through
+`envsubst '${VERSION}'` into `packaging/mcpb/manifest.json.in` and
+`pyproject.toml.in`, then `publish-mcpb` uploads the resulting
+`.mcpb` to the GitHub Release. No committed manifest bump is needed
+for the bundle.
+
 ### Future Work
 
 - **FastMCP OAuth**: implemented via `OIDCProxy` — see OIDC Authentication section above.
