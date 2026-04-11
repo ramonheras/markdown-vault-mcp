@@ -75,7 +75,7 @@ Claude Desktop opens a GUI wizard that prompts for required env vars — no manu
 
 ```
 /plugin marketplace add pvliesdonk/claude-plugins
-/plugin install markdown-vault-mcp
+/plugin install markdown-vault-mcp@pvliesdonk
 ```
 
 Installs the MCP server and the `vault-workflow` skill. See the [Claude Code plugin guide](https://pvliesdonk.github.io/markdown-vault-mcp/guides/claude-code-plugin/) for details.

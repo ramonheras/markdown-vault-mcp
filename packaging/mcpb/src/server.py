@@ -1,12 +1,17 @@
 """Entry shim for the markdown-vault-mcp .mcpb bundle.
 
-Claude Desktop invokes this file through the host-provided uv runtime. The
-bundle's pyproject.toml pins ``markdown-vault-mcp[all]==<version>``; uv
-resolves the dependency tree on install and this shim just delegates to the
-package's CLI.
+This file is only executed when the host uses the ``uv run src/server.py``
+code path (``server.type: "uv"`` + ``entry_point``).  The primary launch path
+is ``mcp_config.command: "uvx"`` which fetches markdown-vault-mcp directly
+from PyPI and bypasses this shim entirely.
+
+The shim injects ``serve`` into ``sys.argv`` because ``cli.main()`` delegates
+to argparse which reads ``sys.argv``; the bundle host does not pass subcommands.
 """
+
+import sys
 
 from markdown_vault_mcp.cli import main
 
-if __name__ == "__main__":
-    main(["serve"])
+sys.argv = [sys.argv[0], "serve"]
+main()

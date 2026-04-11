@@ -24,18 +24,35 @@ def test_cli_main_import_target_exists() -> None:
 
 
 def test_mcpb_server_shim_calls_main_serve() -> None:
-    """The shim's only job is to invoke `cli.main(["serve"])`."""
+    """The shim must import cli.main and ensure 'serve' is in sys.argv."""
     shim = MCPB_DIR / "src" / "server.py"
     assert shim.exists(), f"missing shim at {shim}"
     content = shim.read_text(encoding="utf-8")
     assert "from markdown_vault_mcp.cli import main" in content
-    assert 'main(["serve"])' in content
+    # cli.main() parses sys.argv; the shim must inject "serve" rather than
+    # passing it as a positional argument (main takes no positional args).
+    assert "serve" in content
+    assert "sys.argv" in content
 
 
 def _load_manifest_template() -> dict:
     """Load the mcpb manifest template with ${VERSION} replaced by a literal."""
     template = (MCPB_DIR / "manifest.json.in").read_text(encoding="utf-8")
+    # Guard: ${DOCUMENTS} is a runtime placeholder for the host's document
+    # directory. It must NOT be consumed by envsubst during the build (which
+    # only substitutes ${VERSION}). If someone accidentally adds envsubst
+    # without the variable-list argument, ${DOCUMENTS} becomes empty and
+    # the default vault path in every released bundle becomes "/Vault".
+    assert "${DOCUMENTS}" in template, (
+        "manifest template must contain ${DOCUMENTS} as a runtime placeholder; "
+        "if it was removed, restore it or this test is no longer needed"
+    )
     rendered = template.replace("${VERSION}", "0.0.0-test")
+    # After the VERSION substitution, ${DOCUMENTS} must still be present.
+    assert "${DOCUMENTS}" in rendered, (
+        "${DOCUMENTS} was lost during template rendering — "
+        "envsubst must be called with '${VERSION}' argument to restrict substitution"
+    )
     return json.loads(rendered)
 
 

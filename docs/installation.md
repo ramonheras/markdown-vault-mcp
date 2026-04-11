@@ -102,7 +102,7 @@ Install markdown-vault-mcp directly in Claude Code using the plugin marketplace:
 
 ```
 /plugin marketplace add pvliesdonk/claude-plugins
-/plugin install markdown-vault-mcp
+/plugin install markdown-vault-mcp@pvliesdonk
 ```
 
 See the [Claude Code plugin guide](guides/claude-code-plugin.md) for configuration and usage details.

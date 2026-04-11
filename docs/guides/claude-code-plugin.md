@@ -17,7 +17,7 @@ Run these two commands in Claude Code:
 
 ```
 /plugin marketplace add pvliesdonk/claude-plugins
-/plugin install markdown-vault-mcp
+/plugin install markdown-vault-mcp@pvliesdonk
 ```
 
 The first command adds the `pvliesdonk/claude-plugins` marketplace to your Claude Code configuration. The second installs the markdown-vault-mcp plugin from that marketplace.
@@ -26,7 +26,7 @@ The first command adds the `pvliesdonk/claude-plugins` marketplace to your Claud
     By default, `/plugin install` installs into the current project. To install globally for all projects, add the `--global` flag:
 
     ```
-    /plugin install --global markdown-vault-mcp
+    /plugin install --global markdown-vault-mcp@pvliesdonk
     ```
 
 ## Configure

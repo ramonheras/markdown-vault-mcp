@@ -51,7 +51,7 @@ docker compose up -d
 
 ```
 /plugin marketplace add pvliesdonk/claude-plugins
-/plugin install markdown-vault-mcp
+/plugin install markdown-vault-mcp@pvliesdonk
 ```
 
 See [Installation](installation.md) for all installation methods (PyPI, uv, Docker, Linux packages, Claude Code plugin) and [Configuration](configuration.md) for all available options.

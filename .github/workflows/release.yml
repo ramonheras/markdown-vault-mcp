@@ -90,6 +90,12 @@ jobs:
           git diff --cached --quiet || git commit -m "chore: update manifests to v${VERSION} [skip ci]"
           git push
 
+          # Re-point the release tag to the manifest-bump commit so that
+          # marketplace installs (which checkout .claude-plugin/plugin at
+          # ref: vVERSION) get the updated plugin.json and .mcp.json.
+          git tag -f "v${VERSION}"
+          git push --force origin "refs/tags/v${VERSION}"
+
       - name: Build package
         if: steps.release.outputs.released == 'true'
         run: uv build
@@ -311,14 +317,17 @@ jobs:
         with:
           ref: ${{ needs.release.outputs.tag }}
       - name: Install mcpb CLI
-        run: npm install -g @anthropic-ai/mcpb@latest
+        run: npm install -g @anthropic-ai/mcpb@2.1.2
       - name: Render templates
         env:
           VERSION: ${{ needs.release.outputs.version }}
         run: |
           mkdir -p build/mcpb/src
-          envsubst < packaging/mcpb/manifest.json.in  > build/mcpb/manifest.json
-          envsubst < packaging/mcpb/pyproject.toml.in > build/mcpb/pyproject.toml
+          # Restrict substitution to ${VERSION} only — other ${...} tokens
+          # (e.g. ${DOCUMENTS}, ${user_config.*}) are runtime placeholders
+          # for the mcpb host and must survive intact.
+          envsubst '${VERSION}' < packaging/mcpb/manifest.json.in  > build/mcpb/manifest.json
+          envsubst '${VERSION}' < packaging/mcpb/pyproject.toml.in > build/mcpb/pyproject.toml
           cp packaging/mcpb/src/server.py build/mcpb/src/server.py
       - name: Validate and pack
         env:

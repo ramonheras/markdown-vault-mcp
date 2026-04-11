@@ -15,16 +15,18 @@ DIST_DIR="${REPO_ROOT}/packaging/mcpb/dist"
 
 command -v mcpb >/dev/null 2>&1 || {
   echo "error: mcpb CLI not found. Install with:" >&2
-  echo "  npm install -g @anthropic-ai/mcpb@latest" >&2
+  echo "  npm install -g @anthropic-ai/mcpb@2.1.2" >&2
   exit 1
 }
 
 rm -rf "${BUILD_DIR}"
 mkdir -p "${BUILD_DIR}/src" "${DIST_DIR}"
 
-VERSION="${VERSION}" envsubst < "${SCRIPT_DIR}/manifest.json.in" \
+# Restrict substitution to ${VERSION} only — other ${...} tokens in the template
+# (e.g. ${DOCUMENTS}, ${user_config.*}) are runtime placeholders for the host.
+VERSION="${VERSION}" envsubst '${VERSION}' < "${SCRIPT_DIR}/manifest.json.in" \
   > "${BUILD_DIR}/manifest.json"
-VERSION="${VERSION}" envsubst < "${SCRIPT_DIR}/pyproject.toml.in" \
+VERSION="${VERSION}" envsubst '${VERSION}' < "${SCRIPT_DIR}/pyproject.toml.in" \
   > "${BUILD_DIR}/pyproject.toml"
 cp "${SCRIPT_DIR}/src/server.py" "${BUILD_DIR}/src/server.py"
 
