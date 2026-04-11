@@ -7,7 +7,31 @@ This guide walks through four progressive setups for using markdown-vault-mcp wi
 3. **Semantic search** — add embedding-based search for better results
 4. **MCP Apps views** — browse your vault visually with Context Card, Graph Explorer, and more
 
-Each step builds on the previous one. Start with Step 1 and add features as needed.
+Each step builds on the previous one. Start with Step 0 (easiest) or Step 1 (full control) and add features as needed.
+
+## Step 0: Install via .mcpb bundle
+
+**Goal:** Install markdown-vault-mcp in Claude Desktop with a guided wizard — no JSON editing required.
+
+**Prerequisites:** Claude Desktop >= 0.10.0.
+
+This is the easiest option for non-technical users.
+
+### Install
+
+1. Download the `.mcpb` file from the [GitHub Releases](https://github.com/pvliesdonk/markdown-vault-mcp/releases) page.
+2. Double-click the downloaded `.mcpb` file, or run:
+
+    ```bash
+    mcpb install <file>.mcpb
+    ```
+
+3. Claude Desktop opens a GUI wizard that prompts for the required env vars. No manual JSON editing needed.
+
+!!! note "Fewer configurable env vars"
+    The `.mcpb` bundle exposes a curated set of env vars (vault path, read-only mode, embedding provider, and exclude patterns). For full control over all configuration options, use Step 1 instead.
+
+---
 
 ## Step 1: Basic read-only setup
 

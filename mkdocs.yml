@@ -66,6 +66,7 @@ plugins:
           - guides/obsidian-everywhere.md: Reference architecture for desktop + mobile + Claude on one vault
           - guides/zettelkasten.md: Zettelkasten workflow (fleeting → literature → permanent notes, MOCs, graph navigation)
           - guides/mcp-apps.md: MCP Apps — Context Card, Graph Explorer, Vault Browser, and Note Preview views
+          - guides/claude-code-plugin.md: Claude Code plugin — install via /plugin marketplace
         MCP Interface:
           - tools/index.md: MCP tools with parameters and examples (search, read, write, link graph, MCP Apps)
           - resources.md: MCP resources with URI patterns (config, stats, tags, folders, toc, similar, recent, ui)
@@ -128,6 +129,7 @@ nav:
       - Obsidian Everywhere: guides/obsidian-everywhere.md
       - Zettelkasten: guides/zettelkasten.md
       - MCP Apps: guides/mcp-apps.md
+      - Claude Code Plugin: guides/claude-code-plugin.md
   - MCP Interface:
       - Tools: tools/index.md
       - Resources: resources.md
