@@ -61,6 +61,25 @@ The Docker image uses `[all]` (MCP + FastEmbed + API embeddings). By default, se
 
 Download `.deb` or `.rpm` packages from the [GitHub Releases](https://github.com/pvliesdonk/markdown-vault-mcp/releases) page. These install a systemd service with security hardening. See the [systemd deployment guide](https://pvliesdonk.github.io/markdown-vault-mcp/deployment/systemd/) for details.
 
+### Claude Desktop (.mcpb bundle)
+
+Download the `.mcpb` bundle from the [GitHub Releases](https://github.com/pvliesdonk/markdown-vault-mcp/releases) page. Double-click to install, or run:
+
+```bash
+mcpb install markdown-vault-mcp-<version>.mcpb
+```
+
+Claude Desktop opens a GUI wizard that prompts for required env vars — no manual JSON editing needed. See [Step 0 of the Claude Desktop guide](https://pvliesdonk.github.io/markdown-vault-mcp/guides/claude-desktop/#step-0-install-via-mcpb-bundle-easiest) for details.
+
+### Claude Code plugin
+
+```
+/plugin marketplace add pvliesdonk/claude-plugins
+/plugin install markdown-vault-mcp
+```
+
+Installs the MCP server and the `vault-workflow` skill. See the [Claude Code plugin guide](https://pvliesdonk.github.io/markdown-vault-mcp/guides/claude-code-plugin/) for details.
+
 ## Quick Start
 
 ### As a library
