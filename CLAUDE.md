@@ -41,6 +41,7 @@ Every PR must pass **all** of the following before merge. Do not open or push a 
 3. **Type-check passes** — `uv run mypy src/` reports no errors
 4. **Patch coverage ≥ 80%** — Codecov measures only lines added/changed in the PR diff. Run `uv run pytest --cov=<changed_module> --cov-report=term-missing` and verify new code is exercised. Add tests for every uncovered branch before pushing.
 5. **Docs updated** — `README.md` and `docs/**` reflect any user-facing changes in the same commit
+6. **Manifest version lockstep** — `server.json`, `.claude-plugin/plugin/.claude-plugin/plugin.json`, and `.claude-plugin/plugin/.mcp.json` must all carry the same version. The release workflow bumps them atomically, but if you manually touch any of them, update all three.
 
 ## GitHub Review Types
 
@@ -71,6 +72,8 @@ Every issue, PR, and code change must consider documentation impact. Before clos
     - `docs/index.md` — feature list and architecture overview
 - **`examples/`** — example env files. New env vars or changed defaults should be reflected in relevant examples.
 - **`CHANGELOG.md`** — managed by semantic-release from conventional commits, but verify entries are meaningful.
+- **`.claude-plugin/plugin/README.md`** — if the env vars wired in `.mcp.json` change or new installation steps are needed
+- **`docs/guides/claude-code-plugin.md`** — new guide for the Claude Code plugin channel; update when wired env vars or plugin behavior changes
 - **Inline docstrings** — new or changed public API methods need accurate docstrings.
 
 **Rule: code without matching docs is incomplete.** When writing issues, include a "Documentation" section listing which docs need updating. When reviewing PRs, verify documentation is included. A PR that adds a tool, env var, resource, or user-facing feature without updating the corresponding docs/ page and README section should not be merged.

@@ -47,7 +47,14 @@ cp examples/obsidian-readonly.env .env
 docker compose up -d
 ```
 
-See [Installation](installation.md) for detailed setup instructions and [Configuration](configuration.md) for all available options.
+### As a Claude Code plugin
+
+```
+/plugin marketplace add pvliesdonk/claude-plugins
+/plugin install markdown-vault-mcp@pvliesdonk
+```
+
+See [Installation](installation.md) for all installation methods (PyPI, uv, Docker, Linux packages, Claude Code plugin) and [Configuration](configuration.md) for all available options.
 
 ## Architecture
 

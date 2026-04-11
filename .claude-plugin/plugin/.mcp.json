@@ -1,0 +1,15 @@
+{
+  "markdown-vault-mcp": {
+    "command": "uvx",
+    "args": [
+      "--from", "markdown-vault-mcp[all]==1.20.1",
+      "markdown-vault-mcp", "serve"
+    ],
+    "env": {
+      "MARKDOWN_VAULT_MCP_SOURCE_DIR": "${MARKDOWN_VAULT_MCP_SOURCE_DIR}",
+      "MARKDOWN_VAULT_MCP_READ_ONLY": "${MARKDOWN_VAULT_MCP_READ_ONLY:-true}",
+      "EMBEDDING_PROVIDER": "${EMBEDDING_PROVIDER:-}",
+      "MARKDOWN_VAULT_MCP_EXCLUDE": "${MARKDOWN_VAULT_MCP_EXCLUDE:-.obsidian/**,.trash/**,.git/**}"
+    }
+  }
+}

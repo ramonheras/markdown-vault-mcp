@@ -96,6 +96,17 @@ sudo systemctl enable --now markdown-vault-mcp
 
 See the [systemd deployment guide](deployment/systemd.md) for full configuration and troubleshooting.
 
+## Claude Code Plugin
+
+Install markdown-vault-mcp directly in Claude Code using the plugin marketplace:
+
+```
+/plugin marketplace add pvliesdonk/claude-plugins
+/plugin install markdown-vault-mcp@pvliesdonk
+```
+
+See the [Claude Code plugin guide](guides/claude-code-plugin.md) for configuration and usage details.
+
 ## Verify Installation
 
 ```bash

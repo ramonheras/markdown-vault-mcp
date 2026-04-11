@@ -109,3 +109,4 @@ All known pending ports have been filed as issues:
 - **IG → MV**: [markdown-vault-mcp#270](https://github.com/pvliesdonk/markdown-vault-mcp/issues/270) — diff-cover cleanup, versionless package copies
 - **MV → IG**: *(issue not yet filed)* — FastMCP middleware stack (ErrorHandling, Timing, Logging/Structured), `FASTMCP_LOG_LEVEL` env-sync on `-v`, `FASTMCP_ENABLE_RICH_LOGGING` toggle, CLAUDE.md PR gates + logging standard (MV#331, adapted from scholar-mcp#99)
 - **MV → scholar-mcp**: *(issue not yet filed)* — middleware stack wiring and `FASTMCP_ENABLE_RICH_LOGGING` toggle; scholar-mcp#99 established the logging standard but did not wire the middleware (MV#331)
+- **Claude Code plugin** (`feat/claude-plugins`, PR #TBD): `.claude-plugin/plugin/` layout, `packaging/mcpb/`, release workflow mcpb build/publish + catalog PR jobs. Not applicable to image-generation-mcp (different distribution model), but consider if a Claude Code plugin is also useful there.

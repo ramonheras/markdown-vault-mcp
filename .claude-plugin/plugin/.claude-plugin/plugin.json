@@ -1,0 +1,10 @@
+{
+  "name": "markdown-vault-mcp",
+  "description": "MCP server for markdown vaults: FTS5 + semantic search, link graph, write/edit/git.",
+  "version": "1.20.1",
+  "author": { "name": "Peter van Liesdonk" },
+  "homepage": "https://pvliesdonk.github.io/markdown-vault-mcp/",
+  "repository": "https://github.com/pvliesdonk/markdown-vault-mcp",
+  "license": "MIT",
+  "keywords": ["markdown", "vault", "obsidian", "search", "mcp"]
+}
