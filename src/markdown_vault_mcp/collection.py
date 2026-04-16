@@ -6,42 +6,18 @@ LangChain wrappers, and CLI commands all go through this class.
 
 from __future__ import annotations
 
-import base64
 import contextlib
-import fnmatch
-import json
 import logging
-import mimetypes
-import os.path as osp
 import queue
 import re
-import shutil
-import sqlite3
-import tempfile
 import threading
-import unicodedata
-from collections import defaultdict
-from difflib import SequenceMatcher
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
-import frontmatter as fm
-
-from markdown_vault_mcp.exceptions import (
-    ConcurrentModificationError,
-    DocumentExistsError,
-    DocumentNotFoundError,
-    EditConflictError,
-    ReadOnlyError,
-)
-from markdown_vault_mcp.fts_index import FTSIndex, _derive_folder
-from markdown_vault_mcp.hashing import compute_etag, compute_file_hash
+from markdown_vault_mcp.fts_index import FTSIndex
 from markdown_vault_mcp.scanner import (
     ChunkStrategy,
     HeadingChunker,
     WholeDocumentChunker,
-    parse_note,
-    scan_directory,
 )
 from markdown_vault_mcp.tracker import ChangeTracker
 from markdown_vault_mcp.types import (
@@ -60,17 +36,17 @@ from markdown_vault_mcp.types import (
     NoteContext,
     NoteInfo,
     OutlinkInfo,
-    ParsedNote,
     ReindexResult,
     RenameResult,
     SearchResult,
-    SimilarItem,
     WriteCallback,
     WriteResult,
 )
+from markdown_vault_mcp.utils import effective_attachment_extensions
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+    from pathlib import Path
 
     from markdown_vault_mcp.git import GitWriteStrategy
     from markdown_vault_mcp.providers import EmbeddingProvider
@@ -80,352 +56,6 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_STATE_SUBDIR = ".markdown_vault_mcp"
 _DEFAULT_STATE_FILENAME = "state.json"
-_CONTEXT_FOLDER_PEERS_LIMIT = 20
-
-# ---------------------------------------------------------------------------
-# Edit helpers
-# ---------------------------------------------------------------------------
-
-# Direct single-character substitutions applied during normalization.
-# Used by _build_position_map to avoid calling _normalize_text() per
-# character, which would (a) be O(n²) and (b) incorrectly strip a lone
-# space/tab as "trailing whitespace" of a one-char string.
-_CHAR_SUBS: dict[str, str] = {
-    "\u2013": "-",  # en-dash
-    "\u2014": "-",  # em-dash
-    "\u201c": '"',  # left double quotation mark
-    "\u201d": '"',  # right double quotation mark
-    "\u2018": "'",  # left single quotation mark
-    "\u2019": "'",  # right single quotation mark
-}
-
-
-def _normalize_text(text: str) -> str:
-    """Normalize text for fuzzy edit matching.
-
-    Applied to both old_text and file content for comparison only — the
-    actual file replacement uses original bytes.
-
-    Steps:
-        1. Unicode NFC normalization.
-        2. En-dash / em-dash → hyphen.
-        3. Smart quotes → straight quotes.
-        4. Collapse whitespace runs within lines (not across newlines).
-        5. Strip trailing whitespace per line.
-    """
-    text = unicodedata.normalize("NFC", text)
-    text = text.replace("\u2013", "-").replace("\u2014", "-")
-    text = text.replace("\u201c", '"').replace("\u201d", '"')
-    text = text.replace("\u2018", "'").replace("\u2019", "'")
-    lines = text.split("\n")
-    lines = [re.sub(r"[ \t]+", " ", line).rstrip() for line in lines]
-    return "\n".join(lines)
-
-
-def _build_position_map(original: str, normalized: str) -> list[int]:
-    """Map each normalized character index to its original character index.
-
-    Walks both strings in parallel, advancing the original pointer past
-    characters that were removed or merged by normalization.
-
-    Args:
-        original: The original (un-normalized) text.
-        normalized: The result of ``_normalize_text(original)``.
-
-    Returns:
-        A list of *len(normalized) + 1* entries where ``pos_map[i]`` is the
-        index in *original* corresponding to ``normalized[i]``, and the final
-        sentinel ``pos_map[len(normalized)]`` equals ``len(original)``.  The
-        sentinel lets callers compute the original end-position of a match
-        as ``pos_map[norm_end]`` without special-casing the last character.
-    """
-    pos_map: list[int] = []
-    orig_idx = 0
-    norm_idx = 0
-    orig_len = len(original)
-    norm_len = len(normalized)
-
-    while norm_idx < norm_len:
-        if orig_idx >= orig_len:
-            # Safety: normalized should never be longer.
-            break
-
-        norm_char = normalized[norm_idx]
-        orig_char = original[orig_idx]
-
-        # Newlines anchor both streams.
-        if norm_char == "\n" and orig_char == "\n":
-            pos_map.append(orig_idx)
-            orig_idx += 1
-            norm_idx += 1
-            continue
-
-        # Trailing whitespace was stripped: skip original trailing ws
-        # before a newline or end-of-string.
-        if norm_char == "\n" or (norm_idx == norm_len - 1 and norm_char != "\n"):
-            if norm_char != "\n":
-                # last char of normalized, not a newline — emit it first
-                pos_map.append(orig_idx)
-                orig_idx += 1
-                norm_idx += 1
-            # skip trailing whitespace in original before newline/end
-            while orig_idx < orig_len and original[orig_idx] in " \t":
-                orig_idx += 1
-            continue
-
-        # Whitespace collapse: normalized has single space, original has one or
-        # more spaces/tabs. Checked before the direct-match step so that runs
-        # of whitespace are always consumed in full (a single space would pass
-        # the direct-match test below, leaving trailing spaces unadvanced).
-        if norm_char == " " and orig_char in " \t":
-            pos_map.append(orig_idx)
-            orig_idx += 1
-            # skip remaining whitespace in original
-            while orig_idx < orig_len and original[orig_idx] in " \t":
-                orig_idx += 1
-            norm_idx += 1
-            continue
-
-        # Direct character match (possibly after NFC + char substitution).
-        # Using _normalize_text(orig_char) would be O(n²) and would also
-        # incorrectly strip a lone space as "trailing whitespace", so we
-        # apply NFC and _CHAR_SUBS directly instead.
-        nfc_char = unicodedata.normalize("NFC", orig_char)
-        sub_char = _CHAR_SUBS.get(nfc_char, nfc_char)
-        if sub_char == norm_char:
-            pos_map.append(orig_idx)
-            orig_idx += 1
-            norm_idx += 1
-            continue
-
-        # Unicode NFC: original may have multiple chars for one normalized.
-        # Try expanding original chars until they normalize to norm_char.
-        consumed = 1
-        while orig_idx + consumed <= orig_len:
-            chunk = original[orig_idx : orig_idx + consumed]
-            if unicodedata.normalize("NFC", chunk) == norm_char:
-                pos_map.append(orig_idx)
-                orig_idx += consumed
-                norm_idx += 1
-                break
-            consumed += 1
-        else:
-            # Fallback: advance both by one.
-            pos_map.append(orig_idx)
-            orig_idx += 1
-            norm_idx += 1
-
-    # Sentinel: pos_map[norm_len] = orig_len so callers can compute
-    # orig_end = pos_map[norm_end] for any norm_end including norm_len.
-    pos_map.append(orig_len)
-    return pos_map
-
-
-def _find_closest_match(old_text: str, file_content: str) -> dict[str, Any]:
-    """Find the closest fuzzy match for diagnostic error reporting.
-
-    Compares the first line of *old_text* against every line in the file
-    using ``difflib.SequenceMatcher``.  If a match with ratio >= 0.6 is
-    found, returns diagnostic info about the first character divergence.
-
-    Args:
-        old_text: The text the caller tried to match.
-        file_content: The full file content.
-
-    Returns:
-        A dict with ``closest_match_line``, ``first_diff_char``,
-        ``expected_snippet``, and ``found_snippet``; or an empty dict
-        if no match with ratio >= 0.6 is found.
-    """
-    first_line = old_text.split("\n", 1)[0]
-    file_lines = file_content.split("\n")
-    best_ratio = 0.0
-    best_line_num = 0
-    best_line_text = ""
-
-    for i, line in enumerate(file_lines, 1):
-        ratio = SequenceMatcher(None, first_line, line).ratio()
-        if ratio > best_ratio:
-            best_ratio = ratio
-            best_line_num = i
-            best_line_text = line
-
-    if best_ratio < 0.6:
-        return {}
-
-    # Find first character difference.
-    diff_pos = 0
-    min_len = min(len(first_line), len(best_line_text))
-    while diff_pos < min_len and first_line[diff_pos] == best_line_text[diff_pos]:
-        diff_pos += 1
-
-    ctx = 30
-    return {
-        "closest_match_line": best_line_num,
-        "first_diff_char": diff_pos,
-        "expected_snippet": first_line[max(0, diff_pos - ctx) : diff_pos + ctx],
-        "found_snippet": best_line_text[max(0, diff_pos - ctx) : diff_pos + ctx],
-    }
-
-
-# ---------------------------------------------------------------------------
-# Link-update helpers (used by Collection.rename update_links logic)
-# ---------------------------------------------------------------------------
-
-
-def _compute_new_raw_target(
-    link_type: str,
-    raw_target: str,
-    fragment: str | None,
-    new_path: str,
-    source_path: str = "",
-    old_path: str = "",
-) -> str:
-    """Compute the replacement raw_target string when a file is renamed.
-
-    Args:
-        link_type: One of ``"markdown"``, ``"reference"``, ``"wikilink"``.
-        raw_target: The literal link string stored in the source file.
-        fragment: The heading fragment (``#heading``) of the link, if any.
-        new_path: The vault-relative path of the renamed file (e.g.
-            ``"notes/new-name.md"``).
-        source_path: Vault-relative path of the file that contains the link.
-            Required for correct relative-path handling in markdown and
-            reference links (cross-directory links would otherwise be silently
-            broken).
-        old_path: Vault-relative path of the file being renamed.  Used to
-            detect whether *raw_target* was written as a vault-root-relative
-            or source-directory-relative path.
-
-    Returns:
-        The replacement raw_target string to write into the source file.
-    """
-    if link_type == "wikilink":
-        # Determine whether the original wikilink included the .md extension.
-        old_path_part = raw_target.split("#")[0]
-        if old_path_part.lower().endswith(".md"):
-            new_path_part = new_path
-        else:
-            new_path_part = new_path[:-3]
-        return new_path_part + ("#" + fragment if fragment else "")
-    else:
-        # markdown and reference links.
-        # Detect whether the link was written as vault-root-relative (raw_target
-        # matches old_path) or as a path relative to the source file's directory
-        # (raw_target != old_path, e.g. "../archive/target.md" from docs/).
-        raw_path_part = raw_target.split("#")[0]
-        if source_path and old_path and raw_path_part != old_path:
-            # Relative-to-source link: compute the correct new relative path so
-            # cross-directory links continue to resolve after the rename.
-            source_dir = str(Path(source_path).parent)
-            new_rel = osp.relpath(new_path, source_dir)
-            # os.path.relpath uses OS separators on Windows; normalise to /.
-            new_path_part = new_rel.replace("\\", "/")
-        else:
-            new_path_part = new_path
-        return new_path_part + ("#" + fragment if fragment else "")
-
-
-def _apply_link_replacement(
-    content: str, link_type: str, old_raw: str, new_raw: str
-) -> str:
-    """Replace a single link target occurrence in file content.
-
-    Args:
-        content: Full file content to modify.
-        link_type: One of ``"markdown"``, ``"reference"``, ``"wikilink"``.
-        old_raw: The original raw_target string to find.
-        new_raw: The replacement raw_target string.
-
-    Returns:
-        Updated content with all occurrences of *old_raw* replaced.
-    """
-    if link_type == "markdown":
-        # Negative lookbehind (?<!!) excludes image links ![](url) — the `!`
-        # immediately before `[` is the discriminator. Anchored to [text]( so
-        # bare (old_raw) occurrences in plain text are also excluded.
-        # Captures and preserves optional link title (e.g. "title" or 'title').
-        # NOTE: operates on raw file content; occurrences inside backtick code
-        # spans would also be rewritten. Risk is low in practice.
-        return re.sub(
-            r"(?<!!)(\[[^\]]*?\])\(" + re.escape(old_raw) + r"((?:\s[^)]*)?)\)",
-            lambda m: m.group(1) + "(" + new_raw + m.group(2) + ")",
-            content,
-        )
-    elif link_type == "reference":
-        # Match reference definition lines: [id]: url optional-title
-        # Anchored to line start with MULTILINE so we don't match inline text.
-        return re.sub(
-            r"^(\[.*?\]:\s+)" + re.escape(old_raw) + r"([ \t].*|$)",
-            lambda m: m.group(1) + new_raw + m.group(2),
-            content,
-            flags=re.MULTILINE,
-        )
-    elif link_type == "wikilink":
-        return re.sub(
-            r"\[\[" + re.escape(old_raw) + r"(\|[^\]]*)?\]\]",
-            lambda m: "[[" + new_raw + (m.group(1) or "") + "]]",
-            content,
-        )
-    return content
-
-
-# RRF constant — standard value recommended in the original paper.
-_RRF_K = 60
-
-# Maximum chunks per embedding provider call.  Keeps memory bounded during
-# build_embeddings() — FastEmbed/ONNX can allocate pathologically large buffers
-# when the entire corpus is sent in one batch (see issue #159).
-_EMBEDDING_BATCH_SIZE = 4
-
-# Seconds between automatic background flushes of dirty embeddings to disk.
-# Write operations mark documents as dirty; the flush re-embeds them in bulk.
-_EMBEDDING_FLUSH_INTERVAL = 30
-
-# Default set of allowed attachment extensions (without leading dot, lower-case).
-# .md is always excluded — it is always handled as a markdown note.
-_DEFAULT_ATTACHMENT_EXTENSIONS: frozenset[str] = frozenset(
-    [
-        # Documents
-        "pdf",
-        "docx",
-        "xlsx",
-        "pptx",
-        "odt",
-        "ods",
-        "odp",
-        # Images
-        "png",
-        "jpg",
-        "jpeg",
-        "gif",
-        "webp",
-        "svg",
-        "bmp",
-        "tiff",
-        # Archives
-        "zip",
-        "tar",
-        "gz",
-        # Audio / Video
-        "mp3",
-        "mp4",
-        "wav",
-        "ogg",
-        # Text and data
-        "txt",
-        "csv",
-        "tsv",
-        "json",
-        "yaml",
-        "toml",
-        "xml",
-        "html",
-        "css",
-        "js",
-        "ts",
-    ]
-)
 
 
 def _resolve_chunk_strategy(strategy: str | ChunkStrategy) -> ChunkStrategy:
@@ -451,34 +81,6 @@ def _resolve_chunk_strategy(strategy: str | ChunkStrategy) -> ChunkStrategy:
             "Valid string values: 'heading', 'whole'."
         )
     return strategy
-
-
-def _fts_row_to_note_info(row: dict) -> NoteInfo:
-    """Convert an FTSIndex list_notes() row dict to a :class:`NoteInfo`.
-
-    Args:
-        row: Dict returned by :meth:`FTSIndex.list_notes` or
-            :meth:`FTSIndex.get_note`.
-
-    Returns:
-        A populated :class:`NoteInfo` instance.
-    """
-    frontmatter: dict = {}
-    raw_json = row.get("frontmatter_json")
-    if raw_json:
-        try:
-            frontmatter = json.loads(raw_json)
-        except (json.JSONDecodeError, TypeError):
-            logger.warning(
-                "Could not parse frontmatter_json for path %s", row.get("path")
-            )
-    return NoteInfo(
-        path=row["path"],
-        title=row["title"],
-        folder=row["folder"],
-        frontmatter=frontmatter,
-        modified_at=row["modified_at"],
-    )
 
 
 class Collection:
@@ -567,9 +169,6 @@ class Collection:
         )
         self._tracker = ChangeTracker(self._state_path)
 
-        # Vector index is loaded lazily (only if embeddings_path is set).
-        self._vectors: VectorIndex | None = None
-
         # Lazy initialisation flag.
         self._initialized = False
 
@@ -578,13 +177,61 @@ class Collection:
         # this lock again for its mutation phase.
         self._write_lock = threading.RLock()
 
-        # Deferred embedding updates (issue #175).  Write operations add
-        # document paths here instead of re-embedding inline.  A background
-        # timer flushes the set periodically; semantic_search() and close()
-        # flush synchronously.
-        self._dirty_embeddings: set[str] = set()
-        self._embedding_flush_timer: threading.Timer | None = None
-        self._embedding_flush_lock = threading.Lock()
+        # Manager modules (dependency-injected, no back-reference).
+        from markdown_vault_mcp.managers.document import DocumentManager
+        from markdown_vault_mcp.managers.index import IndexManager
+        from markdown_vault_mcp.managers.link import LinkManager
+        from markdown_vault_mcp.managers.search import SearchManager
+
+        # 1. LinkManager (no deps)
+        self._link_mgr = LinkManager(fts=self._fts, source_dir=self._source_dir)
+        # 2. IndexManager (needs fts, tracker, write_lock — NOT search_mgr)
+        #    get_vectors/set_vectors use late-binding lambdas that capture
+        #    self._search_mgr; they are only called at runtime after all
+        #    managers are constructed.
+        self._index_mgr = IndexManager(
+            fts=self._fts,
+            tracker=self._tracker,
+            source_dir=self._source_dir,
+            embeddings_path=self._embeddings_path,
+            embedding_provider=self._embedding_provider,
+            write_lock=self._write_lock,
+            chunk_strategy=self._chunk_strategy,
+            exclude_patterns=self._exclude_patterns,
+            required_frontmatter=self._required_frontmatter,
+            indexed_frontmatter_fields=self._indexed_frontmatter_fields,
+            # Late-binding closures: self._search_mgr is assigned below and
+            # only accessed at call-time, not during IndexManager.__init__.
+            get_vectors=lambda: self._search_mgr.vectors,
+            set_vectors=lambda v: setattr(self._search_mgr, "vectors", v),
+        )
+        # 3. SearchManager (receives IndexManager callbacks via constructor)
+        self._search_mgr = SearchManager(
+            fts=self._fts,
+            source_dir=self._source_dir,
+            embeddings_path=self._embeddings_path,
+            embedding_provider=self._embedding_provider,
+            indexed_frontmatter_fields=self._indexed_frontmatter_fields,
+            exclude_patterns=self._exclude_patterns,
+            attachment_extensions=self._attachment_extensions,
+            link_manager=self._link_mgr,
+            flush_embeddings=self._index_mgr.flush_dirty_embeddings,
+            rebuild_embeddings=lambda: self._index_mgr.build_embeddings(force=True),
+        )
+        # 4. DocumentManager (needs index_mgr callbacks)
+        self._doc_mgr = DocumentManager(
+            fts=self._fts,
+            source_dir=self._source_dir,
+            write_lock=self._write_lock,
+            chunk_strategy=self._chunk_strategy,
+            read_only=self._read_only,
+            exclude_patterns=self._exclude_patterns,
+            attachment_extensions=self._attachment_extensions,
+            max_attachment_size_mb=self._max_attachment_size_mb,
+            on_write_callback=self._fire_write_callback,
+            on_vector_update=self._index_mgr.update_vector_index,
+            on_vector_dirty=self._index_mgr.mark_dirty,
+        )
 
         # Deferred write callback queue (issue #175).  Git commit (on_write
         # callback) runs in a background worker thread so write methods
@@ -646,7 +293,7 @@ class Collection:
         closes the SQLite connection and git strategy.
         """
         # 1. Flush any deferred embedding updates.
-        self._flush_dirty_embeddings()
+        self._index_mgr.flush_dirty_embeddings()
 
         # 2. Drain the write-callback queue (git commits).
         if self._callback_worker is not None and self._callback_worker.is_alive():
@@ -679,6 +326,15 @@ class Collection:
         """Build the FTS index on first access if it has not been built yet."""
         if not self._initialized:
             self.build_index()
+
+    @property
+    def _vectors(self) -> VectorIndex | None:
+        """Bridge property: vector index is owned by SearchManager."""
+        return self._search_mgr.vectors
+
+    @_vectors.setter
+    def _vectors(self, value: VectorIndex | None) -> None:
+        self._search_mgr.vectors = value
 
     # ------------------------------------------------------------------
     # Search
@@ -714,292 +370,9 @@ class Collection:
                 embedding provider or embeddings path is configured.
         """
         self._ensure_initialized()
-
-        if mode == "keyword":
-            return self._keyword_search(
-                query, limit=limit, filters=filters, folder=folder
-            )
-
-        if mode == "semantic":
-            self._require_vectors()
-            return self._semantic_search(
-                query, limit=limit, filters=filters, folder=folder
-            )
-
-        # hybrid
-        self._require_vectors()
-        return self._hybrid_search(query, limit=limit, filters=filters, folder=folder)
-
-    def _require_vectors(self) -> None:
-        """Raise ValueError if semantic search is not configured."""
-        if self._embedding_provider is None or self._embeddings_path is None:
-            raise ValueError(
-                "Semantic search requires both 'embedding_provider' and "
-                "'embeddings_path' to be configured."
-            )
-
-    def _load_vectors(self) -> VectorIndex:
-        """Load or return the cached VectorIndex.
-
-        Returns:
-            A :class:`~markdown_vault_mcp.vector_index.VectorIndex` instance.
-        """
-        if self._vectors is not None:
-            return self._vectors
-
-        from markdown_vault_mcp.vector_index import (
-            VectorIndex,
-            VectorIndexCompatibilityError,
+        return self._search_mgr.search(
+            query, limit=limit, mode=mode, filters=filters, folder=folder
         )
-
-        assert self._embeddings_path is not None
-        assert self._embedding_provider is not None
-
-        npy_path = Path(str(self._embeddings_path) + ".npy")
-        if npy_path.exists():
-            try:
-                self._vectors = VectorIndex.load(
-                    self._embeddings_path, self._embedding_provider
-                )
-                logger.info("Loaded vector index from %s", self._embeddings_path)
-            except VectorIndexCompatibilityError as exc:
-                logger.warning("%s Rebuilding embeddings.", exc)
-                self.build_embeddings(force=True)
-                assert self._vectors is not None
-        else:
-            self._vectors = VectorIndex(self._embedding_provider)
-            logger.info("No vector index on disk; created empty VectorIndex")
-
-        return self._vectors
-
-    def _keyword_search(
-        self,
-        query: str,
-        *,
-        limit: int,
-        filters: dict[str, str] | None,
-        folder: str | None,
-    ) -> list[SearchResult]:
-        fts_results = self._fts.search(
-            query, limit=limit, filters=filters, folder=folder
-        )
-        return [
-            SearchResult(
-                path=r.path,
-                title=r.title,
-                folder=r.folder,
-                heading=r.heading,
-                content=r.content,
-                score=r.score,
-                search_type="keyword",
-                frontmatter=self._get_frontmatter(r.path),
-            )
-            for r in fts_results
-        ]
-
-    def _semantic_search(
-        self,
-        query: str,
-        *,
-        limit: int,
-        filters: dict[str, str] | None = None,
-        folder: str | None = None,
-    ) -> list[SearchResult]:
-        # Flush deferred embedding updates so results are consistent.
-        self._flush_dirty_embeddings()
-        vectors = self._load_vectors()
-        # Fetch extra candidates so post-filtering still yields *limit* results.
-        candidate_limit = max(limit * 3, 30) if (folder or filters) else limit
-        raw = vectors.search(query, limit=candidate_limit)
-
-        results: list[SearchResult] = []
-        for r in raw:
-            if len(results) >= limit:
-                break
-
-            # Apply folder prefix filter.
-            if folder is not None:
-                r_folder = r.get("folder", "")
-                if r_folder != folder and not r_folder.startswith(folder + "/"):
-                    continue
-
-            # Apply tag filters: check FTS index for each required tag.
-            if filters:
-                note_row = self._fts.get_note(r["path"])
-                if note_row is None:
-                    continue
-                fm_raw = note_row.get("frontmatter_json")
-                fm: dict = {}
-                if fm_raw:
-                    with contextlib.suppress(ValueError, TypeError):
-                        fm = json.loads(fm_raw)
-                match = True
-                for key, value in filters.items():
-                    fm_val = fm.get(key)
-                    if fm_val is None:
-                        match = False
-                        break
-                    # Support both scalar and list values.
-                    if isinstance(fm_val, list):
-                        if str(value) not in [str(v) for v in fm_val]:
-                            match = False
-                            break
-                    else:
-                        if str(fm_val) != str(value):
-                            match = False
-                            break
-                if not match:
-                    continue
-
-            results.append(
-                SearchResult(
-                    path=r["path"],
-                    title=r["title"],
-                    folder=r["folder"],
-                    heading=r.get("heading"),
-                    content=r["content"],
-                    score=r["score"],
-                    search_type="semantic",
-                    frontmatter=self._get_frontmatter(r["path"]),
-                )
-            )
-        return results
-
-    def _hybrid_search(
-        self,
-        query: str,
-        *,
-        limit: int,
-        filters: dict[str, str] | None,
-        folder: str | None,
-    ) -> list[SearchResult]:
-        """RRF merge of keyword and semantic results.
-
-        Each result set is ranked independently.  Merged score:
-        ``1 / (k + rank)`` where k=60.  Results appearing in both sets have
-        their scores summed.  Returns top *limit* by total RRF score.
-        """
-        # Fetch more candidates than needed so RRF has enough to rank.
-        candidate_limit = max(limit * 2, 20)
-
-        # Flush deferred embedding updates so results are consistent.
-        self._flush_dirty_embeddings()
-
-        fts_results = self._fts.search(
-            query, limit=candidate_limit, filters=filters, folder=folder
-        )
-        vectors = self._load_vectors()
-        vec_results = vectors.search(query, limit=candidate_limit)
-
-        # Build a key for deduplication: (path, heading) identifies a chunk.
-        # Use a dict to accumulate RRF scores and store metadata.
-        rrf_scores: dict[tuple[str, str | None], float] = {}
-        # Store the best metadata dict keyed by (path, heading).
-        chunk_meta: dict[tuple[str, str | None], dict] = {}
-
-        for rank, r in enumerate(fts_results, start=1):
-            key = (r.path, r.heading)
-            rrf_scores[key] = rrf_scores.get(key, 0.0) + 1.0 / (_RRF_K + rank)
-            if key not in chunk_meta:
-                chunk_meta[key] = {
-                    "path": r.path,
-                    "title": r.title,
-                    "folder": r.folder,
-                    "heading": r.heading,
-                    "content": r.content,
-                    "search_type": "keyword",
-                }
-
-        for rank, r in enumerate(vec_results, start=1):
-            # Apply folder prefix filter to semantic results.
-            if folder is not None:
-                r_folder = r.get("folder", "")
-                if r_folder != folder and not r_folder.startswith(folder + "/"):
-                    continue
-
-            # Apply tag filters to semantic results via frontmatter lookup.
-            if filters:
-                note_row = self._fts.get_note(r["path"])
-                if note_row is None:
-                    continue
-                fm_raw = note_row.get("frontmatter_json")
-                fm: dict = {}
-                if fm_raw:
-                    with contextlib.suppress(json.JSONDecodeError, TypeError):
-                        fm = json.loads(fm_raw)
-                skip = False
-                for key, value in filters.items():
-                    fm_val = fm.get(key)
-                    if fm_val is None:
-                        skip = True
-                        break
-                    if isinstance(fm_val, list):
-                        if str(value) not in [str(v) for v in fm_val]:
-                            skip = True
-                            break
-                    else:
-                        if str(fm_val) != str(value):
-                            skip = True
-                            break
-                if skip:
-                    continue
-
-            heading = r.get("heading")
-            key = (r["path"], heading)
-            rrf_scores[key] = rrf_scores.get(key, 0.0) + 1.0 / (_RRF_K + rank)
-            if key not in chunk_meta:
-                chunk_meta[key] = {
-                    "path": r["path"],
-                    "title": r["title"],
-                    "folder": r["folder"],
-                    "heading": heading,
-                    "content": r["content"],
-                    "search_type": "semantic",
-                }
-
-        # Sort by descending RRF score, take top limit.
-        sorted_keys = sorted(rrf_scores, key=lambda k: rrf_scores[k], reverse=True)[
-            :limit
-        ]
-
-        return [
-            SearchResult(
-                path=chunk_meta[k]["path"],
-                title=chunk_meta[k]["title"],
-                folder=chunk_meta[k]["folder"],
-                heading=chunk_meta[k]["heading"],
-                content=chunk_meta[k]["content"],
-                score=rrf_scores[k],
-                search_type=chunk_meta[k]["search_type"],
-                frontmatter=self._get_frontmatter(chunk_meta[k]["path"]),
-            )
-            for k in sorted_keys
-        ]
-
-    def _get_frontmatter(self, path: str) -> dict:
-        """Return the frontmatter dict for a document from the FTS index.
-
-        Falls back to an empty dict if the document is not found.
-
-        Args:
-            path: Relative document path.
-
-        Returns:
-            Parsed frontmatter dict.
-        """
-        row = self._fts.get_note(path)
-        if row is None:
-            return {}
-        raw = row.get("frontmatter_json")
-        if not raw:
-            return {}
-        try:
-            return json.loads(raw)
-        except (json.JSONDecodeError, TypeError) as exc:
-            logger.warning(
-                "_get_frontmatter: invalid JSON for %s — %s", row.get("path"), exc
-            )
-            return {}
 
     # ------------------------------------------------------------------
     # Read / list
@@ -1016,36 +389,7 @@ class Collection:
             if the file does not exist.
         """
         self._ensure_initialized()
-
-        abs_path = (self._source_dir / path).resolve()
-        if not abs_path.is_relative_to(self._source_dir.resolve()):
-            return None
-        if not abs_path.is_file():
-            return None
-
-        try:
-            note = parse_note(abs_path, self._source_dir, self._chunk_strategy)
-        except (UnicodeDecodeError, OSError) as exc:
-            logger.warning("read(%s): could not parse file — %s", path, exc)
-            return None
-
-        raw_content = abs_path.read_text(encoding="utf-8")
-        etag = (
-            note.content_hash
-        )  # already computed by parse_note (SHA-256 of raw bytes)
-        folder = str(Path(path).parent)
-        if folder == ".":
-            folder = ""
-
-        return NoteContent(
-            path=note.path,
-            title=note.title,
-            folder=folder,
-            content=raw_content,
-            frontmatter=note.frontmatter,
-            modified_at=note.modified_at,
-            etag=etag,
-        )
+        return self._doc_mgr.read(path)
 
     def list(
         self,
@@ -1072,78 +416,9 @@ class Collection:
             objects.
         """
         self._ensure_initialized()
-
-        rows = self._fts.list_notes(folder=folder)
-        notes: list[NoteInfo | AttachmentInfo] = [
-            _fts_row_to_note_info(row) for row in rows
-        ]
-
-        if pattern:
-            notes = [n for n in notes if fnmatch.fnmatch(n.path, pattern)]
-
-        if not include_attachments:
-            return notes
-
-        exts = self._effective_attachment_extensions()
-        source_resolved = self._source_dir.resolve()
-        attachments: list[AttachmentInfo] = []
-
-        # Attachment scan runs outside _write_lock — result is a best-effort
-        # snapshot and is not atomic with the FTS note listing above.
-        for abs_path in self._source_dir.rglob("*"):
-            if not abs_path.is_file():
-                continue
-            if abs_path.suffix.lower() == ".md":
-                continue
-            suffix = abs_path.suffix.lstrip(".").lower()
-            if "*" not in exts and suffix not in exts:
-                continue
-            try:
-                rel = abs_path.relative_to(source_resolved)
-            except ValueError as exc:
-                logger.warning(
-                    "_list_attachments: skipping %s — outside source_dir (%s)",
-                    abs_path,
-                    exc,
-                )
-                continue
-            rel_path = str(rel)
-            # Skip files where any path component (including the filename itself) starts with ".".
-            if any(part.startswith(".") for part in rel.parts):
-                continue
-            # Apply exclude_patterns — mirrors scan_directory behaviour.
-            if self._is_path_excluded(rel.as_posix()):
-                continue
-            if pattern and not fnmatch.fnmatch(rel_path, pattern):
-                continue
-            rel_folder = str(Path(rel_path).parent)
-            if rel_folder == ".":
-                rel_folder = ""
-            if (
-                folder is not None
-                and rel_folder != folder
-                and not rel_folder.startswith(folder + "/")
-            ):
-                continue
-            try:
-                stat = abs_path.stat()
-            except OSError as exc:
-                logger.warning(
-                    "_list_attachments: skipping %s — stat error (%s)", abs_path, exc
-                )
-                continue
-            mime_type, _ = mimetypes.guess_type(rel_path)
-            attachments.append(
-                AttachmentInfo(
-                    path=rel_path,
-                    folder=rel_folder,
-                    mime_type=mime_type,
-                    size_bytes=stat.st_size,
-                    modified_at=stat.st_mtime,
-                )
-            )
-
-        return notes + attachments
+        return self._search_mgr.list(
+            folder=folder, pattern=pattern, include_attachments=include_attachments
+        )
 
     # ------------------------------------------------------------------
     # Index management
@@ -1176,264 +451,19 @@ class Collection:
                     skipped=0,
                 )
 
-        if force:
-            # Drop all data by rebuilding from an empty scan then re-populate.
-            logger.info("build_index(force=True): dropping and rebuilding index")
-            # Delete all existing documents.
-            for row in self._fts.list_notes():
-                self._fts.delete_by_path(row["path"])
-
-        logger.info("build_index: scanning %s", self._source_dir)
-
-        notes = list(
-            scan_directory(
-                self._source_dir,
-                required_frontmatter=self._required_frontmatter,
-                chunk_strategy=self._chunk_strategy,
-                exclude_patterns=self._exclude_patterns,
-            )
-        )
-
-        total_chunks = 0
-        errored = 0
-        for note in notes:
-            try:
-                total_chunks += self._fts.upsert_note(note)
-            except Exception:
-                errored += 1
-                logger.warning(
-                    "build_index: failed to index %s", note.path, exc_info=True
-                )
-
-        # Purge stale excluded docs from a persistent index that was built
-        # before exclude_patterns were configured (upgrade scenario, #255).
-        indexed_paths = {note.path for note in notes}
-        if self._exclude_patterns:
-            # Load persisted vectors so stale entries are purged from the
-            # .npy sidecar too (build_embeddings skips if count > 0).
-            if (
-                self._vectors is None
-                and self._embedding_provider is not None
-                and self._embeddings_path is not None
-            ):
-                self._load_vectors()
-
-            purged = 0
-            for row in self._fts.list_notes():
-                if row["path"] not in indexed_paths and self._is_path_excluded(
-                    row["path"]
-                ):
-                    self._fts.delete_by_path(row["path"])
-                    if self._vectors is not None:
-                        self._vectors.delete_by_path(row["path"])
-                    purged += 1
-
-            if (
-                purged
-                and self._vectors is not None
-                and self._embeddings_path is not None
-            ):
-                self._vectors.save(self._embeddings_path)
-
-        # Count how many files were skipped due to required_frontmatter.
-        # scan_directory logs skipped counts itself; we compute it by comparing
-        # indexed count to total files on disk.
-        all_files = list(self._source_dir.glob("**/*.md"))
-        skipped = len(all_files) - len(notes)
-
-        # Resolve vault-wide wikilinks now that all documents are indexed.
-        self._fts.resolve_vault_wikilinks()
-
-        # Update tracker state so reindex() knows the baseline.
-        self._tracker.update_state(notes)
-
+        result = self._index_mgr.build_index(force=force)
         self._initialized = True
-        if errored:
-            logger.warning(
-                "build_index: indexed %d documents, %d chunks (%d skipped, %d errors)",
-                len(notes) - errored,
-                total_chunks,
-                skipped,
-                errored,
-            )
-        else:
-            logger.info(
-                "build_index: indexed %d documents, %d chunks (%d skipped)",
-                len(notes),
-                total_chunks,
-                skipped,
-            )
-        return IndexStats(
-            documents_indexed=len(notes) - errored,
-            chunks_indexed=total_chunks,
-            skipped=max(skipped, 0),
-        )
+        return result
 
     def reindex(self) -> ReindexResult:
         """Incrementally update the index based on file changes.
-
-        Uses :class:`~markdown_vault_mcp.tracker.ChangeTracker` to detect which
-        files have been added, modified, or deleted since the last scan.
-        Only changed files are re-parsed and re-indexed.  Files matching
-        ``exclude_patterns`` are skipped, and any previously indexed documents
-        that now match the patterns are purged from the FTS and vector indexes.
-
-        Thread-safety: the filesystem scan runs without holding ``_write_lock``
-        (read-only), then the mutation phase acquires the lock to prevent races
-        with concurrent write/edit/delete/rename operations.
 
         Returns:
             :class:`~markdown_vault_mcp.types.ReindexResult` with counts of changes
             applied.
         """
         self._ensure_initialized()
-
-        # Phase 1: scan (outside lock — read-only filesystem walk + hashing).
-        changes = self._tracker.detect_changes(self._source_dir)
-        logger.info(
-            "reindex: %d added, %d modified, %d deleted, %d unchanged",
-            len(changes.added),
-            len(changes.modified),
-            len(changes.deleted),
-            changes.unchanged,
-        )
-
-        # Pre-parse notes outside the lock to minimise lock hold time.
-        # NOTE: there is an inherent TOCTOU window between detecting a change
-        # in Phase 1 (hash comparison) and re-reading the file for indexing
-        # here.  If the file is modified again in that window, the newly
-        # written content is indexed rather than the version that triggered
-        # the change.  This is acceptable — the next reindex() call will
-        # reconcile the difference.
-        parsed: list[tuple[str, ParsedNote]] = []
-        for path in changes.added + changes.modified:
-            # Apply exclude_patterns — mirrors scan_directory behaviour.
-            if self._is_path_excluded(path):
-                logger.debug("reindex: excluding %s (matched exclude pattern)", path)
-                continue
-
-            abs_path = self._source_dir / path
-            try:
-                note = parse_note(abs_path, self._source_dir, self._chunk_strategy)
-            except (UnicodeDecodeError, OSError) as exc:
-                logger.warning("reindex: skipping %s — %s", path, exc)
-                continue
-            except Exception as exc:
-                logger.warning(
-                    "reindex: skipping %s — parse error (%s)",
-                    path,
-                    exc,
-                    exc_info=True,
-                )
-                continue
-
-            # Apply required_frontmatter filter.
-            if self._required_frontmatter:
-                missing = [
-                    f for f in self._required_frontmatter if f not in note.frontmatter
-                ]
-                if missing:
-                    logger.info(
-                        "reindex: skipping %s — missing frontmatter: %s", path, missing
-                    )
-                    continue
-
-            parsed.append((path, note))
-
-        # Phase 2: apply mutations (inside lock — prevents races with writes).
-        with self._write_lock:
-            # Delete removed documents.
-            for path in changes.deleted:
-                self._fts.delete_by_path(path)
-                if self._vectors is not None:
-                    self._vectors.delete_by_path(path)
-
-            # Purge stale excluded docs that were indexed before
-            # exclude_patterns were enforced in reindex() (issue #255).
-            stale_excluded = 0
-            if self._exclude_patterns:
-                # Load persisted vectors so stale entries are purged from
-                # the .npy sidecar too (not just FTS).
-                if (
-                    self._vectors is None
-                    and self._embedding_provider is not None
-                    and self._embeddings_path is not None
-                ):
-                    self._load_vectors()
-
-                for row in self._fts.list_notes():
-                    if self._is_path_excluded(row["path"]):
-                        self._fts.delete_by_path(row["path"])
-                        if self._vectors is not None:
-                            self._vectors.delete_by_path(row["path"])
-                        stale_excluded += 1
-                if stale_excluded:
-                    logger.info(
-                        "reindex: purged %d stale excluded document(s)",
-                        stale_excluded,
-                    )
-
-            # Upsert parsed notes.
-            indexed_added = 0
-            indexed_modified = 0
-            added_set = set(changes.added)
-
-            for path, note in parsed:
-                try:
-                    self._fts.upsert_note(note)
-                except Exception:
-                    logger.warning("reindex: failed to index %s", path, exc_info=True)
-                    continue
-                if path in added_set:
-                    indexed_added += 1
-                else:
-                    indexed_modified += 1
-
-                # Update vector index for changed notes if loaded.
-                if self._vectors is not None and self._embeddings_path is not None:
-                    self._vectors.delete_by_path(note.path)
-                    texts = [c.content for c in note.chunks]
-                    meta = [
-                        {
-                            "path": note.path,
-                            "title": note.title,
-                            "folder": _derive_folder(note.path),
-                            "heading": c.heading,
-                            "content": c.content,
-                        }
-                        for c in note.chunks
-                    ]
-                    if texts:
-                        self._vectors.add(texts, meta)
-
-            # Persist updated vector index.
-            if self._vectors is not None and self._embeddings_path is not None:
-                self._vectors.save(self._embeddings_path)
-
-            # Re-resolve vault-wide wikilinks: adding/removing documents may
-            # fix previously broken links or expose new ones.
-            self._fts.resolve_vault_wikilinks()
-
-            # Update tracker state: rebuild from current FTS index contents.
-            state_notes: list[ParsedNote] = [
-                ParsedNote(
-                    path=r["path"],
-                    frontmatter={},
-                    title=r["title"],
-                    chunks=[],
-                    content_hash=r["content_hash"],
-                    modified_at=r["modified_at"],
-                )
-                for r in self._fts.list_notes()
-            ]
-            self._tracker.update_state(state_notes)
-
-        return ReindexResult(
-            added=indexed_added,
-            modified=indexed_modified,
-            deleted=len(changes.deleted),
-            unchanged=changes.unchanged,
-        )
+        return self._index_mgr.reindex()
 
     def build_embeddings(self, *, force: bool = False) -> int:
         """Build the vector index from all chunks currently in the FTS index.
@@ -1450,83 +480,7 @@ class Collection:
                 not configured.
         """
         self._ensure_initialized()
-        self._require_vectors()
-
-        assert self._embeddings_path is not None
-        assert self._embedding_provider is not None
-
-        from markdown_vault_mcp.vector_index import VectorIndex
-
-        if force:
-            self._vectors = VectorIndex(self._embedding_provider)
-        else:
-            # Load persisted vectors (or create empty) so we can check count.
-            self._load_vectors()
-            if self._vectors.count > 0:
-                logger.info(
-                    "build_embeddings: index already exists (%d chunks), skipping",
-                    self._vectors.count,
-                )
-                return self._vectors.count
-            # Empty index — fall through to build from scratch.
-
-        rows = self._fts.list_notes()
-        num_notes = len(rows)
-        logger.info("build_embeddings: parsing %d notes into chunks", num_notes)
-        texts: list[str] = []
-        meta: list[dict] = []
-
-        for i, row in enumerate(rows, 1):
-            path = row["path"]
-            title = row["title"]
-            folder = row["folder"]
-            # Re-parse to get chunks with content.
-            abs_path = self._source_dir / path
-            try:
-                note = parse_note(abs_path, self._source_dir, self._chunk_strategy)
-            except (UnicodeDecodeError, OSError) as exc:
-                logger.warning("build_embeddings: skipping %s — %s", path, exc)
-                continue
-            for chunk in note.chunks:
-                texts.append(chunk.content)
-                meta.append(
-                    {
-                        "path": path,
-                        "title": title,
-                        "folder": folder,
-                        "heading": chunk.heading,
-                        "content": chunk.content,
-                    }
-                )
-            if i % 100 == 0 or i == num_notes:
-                logger.info(
-                    "build_embeddings: parsed %d/%d notes (%d chunks so far)",
-                    i,
-                    num_notes,
-                    len(texts),
-                )
-
-        # Embed in bounded batches to avoid pathological memory allocation
-        # (see issue #159 -- FastEmbed/ONNX can request >200 GB for a single
-        # oversized batch).  Save once at the end so a mid-run crash does not
-        # leave a partial index that the skip-if-exists check treats as complete.
-        total = len(texts)
-        for start in range(0, total, _EMBEDDING_BATCH_SIZE):
-            end = min(start + _EMBEDDING_BATCH_SIZE, total)
-            self._vectors.add(texts[start:end], meta[start:end])
-            logger.info(
-                "build_embeddings: embedded chunks %d-%d of %d",
-                start + 1,
-                end,
-                total,
-            )
-
-        if total > 0:
-            self._vectors.save(self._embeddings_path)
-            logger.info("build_embeddings: embedded and saved %d chunks", total)
-        else:
-            logger.info("build_embeddings: nothing to embed")
-        return total
+        return self._index_mgr.build_embeddings(force=force)
 
     def embeddings_status(self) -> dict:
         """Return status information about the vector index.
@@ -1535,43 +489,7 @@ class Collection:
             Dict with keys ``provider``, ``chunk_count``, ``path``,
             ``available``.
         """
-        if self._embedding_provider is None or self._embeddings_path is None:
-            return {
-                "available": False,
-                "provider": None,
-                "chunk_count": 0,
-                "path": None,
-            }
-
-        count = 0
-        if self._vectors is not None:
-            count = self._vectors.count
-        else:
-            npy_path = Path(str(self._embeddings_path) + ".npy")
-            if npy_path.exists():
-                # Peek at metadata file for count without loading full matrix.
-                json_path = Path(str(self._embeddings_path) + ".json")
-                if json_path.exists():
-                    try:
-                        with json_path.open(encoding="utf-8") as fh:
-                            loaded_meta = json.load(fh)
-                        if isinstance(loaded_meta, list):
-                            count = len(loaded_meta)
-                        else:
-                            count = len(loaded_meta.get("rows", []))
-                    except (OSError, json.JSONDecodeError) as exc:
-                        logger.warning(
-                            "embeddings_status: could not read metadata from %s — %s",
-                            json_path,
-                            exc,
-                        )
-
-        return {
-            "available": True,
-            "provider": type(self._embedding_provider).__name__,
-            "chunk_count": count,
-            "path": str(self._embeddings_path),
-        }
+        return self._index_mgr.embeddings_status()
 
     # ------------------------------------------------------------------
     # Metadata
@@ -1584,7 +502,7 @@ class Collection:
             Sorted list of folder strings (``""`` for the collection root).
         """
         self._ensure_initialized()
-        return self._fts.list_folders()
+        return self._search_mgr.list_folders()
 
     def list_tags(self, field: str = "tags") -> list[str]:
         """Return all distinct values indexed for a given frontmatter field.
@@ -1598,7 +516,7 @@ class Collection:
             Sorted list of distinct value strings.
         """
         self._ensure_initialized()
-        return self._fts.list_field_values(field)
+        return self._search_mgr.list_tags(field)
 
     def get_toc(self, path: str) -> list[dict[str, Any]]:
         """Return table of contents for a document.
@@ -1617,22 +535,7 @@ class Collection:
             ValueError: If no document exists at the given path.
         """
         self._ensure_initialized()
-        self._validate_path(path)
-
-        row = self._fts.get_note(path)
-        if row is None:
-            raise ValueError(f"Document not found: {path}")
-
-        title: str = row["title"]
-        headings = self._fts.get_toc(path)
-
-        # Prepend a synthetic H1 for the document title, filtering out any
-        # real H1 that duplicates it (common when docs start with ``# Title``).
-        toc: list[dict[str, Any]] = [{"heading": title, "level": 1}]
-        toc.extend(
-            h for h in headings if not (h["level"] == 1 and h["heading"] == title)
-        )
-        return toc
+        return self._doc_mgr.get_toc(path)
 
     def get_backlinks(self, path: str) -> list[BacklinkInfo]:
         """Return all documents that link to the given document.
@@ -1649,21 +552,7 @@ class Collection:
             ValueError: If no document exists at the given path.
         """
         self._ensure_initialized()
-        self._validate_path(path)
-        if self._fts.get_note(path) is None:
-            raise ValueError(f"Document not found: {path}")
-        rows = self._fts.get_backlinks(path)
-        return [
-            BacklinkInfo(
-                source_path=row["source_path"],
-                source_title=row["source_title"],
-                link_text=row["link_text"],
-                link_type=row["link_type"],
-                fragment=row["fragment"],
-                raw_target=row["raw_target"],
-            )
-            for row in rows
-        ]
+        return self._link_mgr.get_backlinks(path)
 
     def get_outlinks(self, path: str) -> list[OutlinkInfo]:
         """Return all links from the given document to other documents.
@@ -1683,21 +572,7 @@ class Collection:
             ValueError: If no document exists at the given path.
         """
         self._ensure_initialized()
-        self._validate_path(path)
-        if self._fts.get_note(path) is None:
-            raise ValueError(f"Document not found: {path}")
-        rows = self._fts.get_outlinks(path)
-        return [
-            OutlinkInfo(
-                target_path=row["target_path"],
-                link_text=row["link_text"],
-                link_type=row["link_type"],
-                fragment=row["fragment"],
-                exists=bool(row["target_exists"]),
-                raw_target=row["raw_target"],
-            )
-            for row in rows
-        ]
+        return self._link_mgr.get_outlinks(path)
 
     def get_broken_links(self, *, folder: str | None = None) -> list[BrokenLinkInfo]:
         """Return all links whose target does not exist in the collection.
@@ -1710,19 +585,7 @@ class Collection:
             List of :class:`~markdown_vault_mcp.types.BrokenLinkInfo` objects.
         """
         self._ensure_initialized()
-        rows = self._fts.get_broken_links(folder=folder)
-        return [
-            BrokenLinkInfo(
-                source_path=row["source_path"],
-                source_title=row["source_title"],
-                target_path=row["target_path"],
-                link_text=row["link_text"],
-                link_type=row["link_type"],
-                fragment=row["fragment"],
-                raw_target=row["raw_target"],
-            )
-            for row in rows
-        ]
+        return self._link_mgr.get_broken_links(folder=folder)
 
     def get_similar(self, path: str, *, limit: int = 10) -> list[SearchResult]:
         """Return the most semantically similar chunks from other documents.
@@ -1745,31 +608,7 @@ class Collection:
             ValueError: If no document exists at the given path.
         """
         self._ensure_initialized()
-        self._validate_path(path)
-        if self._fts.get_note(path) is None:
-            raise ValueError(f"Document not found: {path}")
-
-        if self._embedding_provider is None or self._embeddings_path is None:
-            return []
-
-        self._load_vectors()
-        if self._vectors is None or self._vectors.count == 0:
-            return []
-
-        raw_results = self._vectors.search_by_path(path, limit=limit)
-        return [
-            SearchResult(
-                path=r["path"],
-                title=r.get("title", ""),
-                folder=r.get("folder", ""),
-                heading=r.get("heading"),
-                content=r.get("content", ""),
-                score=r.get("score", 0.0),
-                search_type="semantic",
-                frontmatter=self._get_frontmatter(r["path"]),
-            )
-            for r in raw_results
-        ]
+        return self._search_mgr.get_similar(path, limit=limit)
 
     def get_recent(
         self, *, limit: int = 20, folder: str | None = None
@@ -1786,8 +625,7 @@ class Collection:
             ordered by modification time (most recent first).
         """
         self._ensure_initialized()
-        rows = self._fts.get_recent(limit=limit, folder=folder)
-        return [_fts_row_to_note_info(row) for row in rows]
+        return self._search_mgr.get_recent(limit=limit, folder=folder)
 
     def get_context(
         self,
@@ -1814,102 +652,8 @@ class Collection:
             ValueError: If no document exists at the given path.
         """
         self._ensure_initialized()
-        self._validate_path(path)
-        row = self._fts.get_note(path)
-        if row is None:
-            raise ValueError(f"Document not found: {path}")
-
-        frontmatter = self._get_frontmatter(path)
-
-        # Backlinks — capped at link_limit; graceful if links table absent.
-        try:
-            backlinks = self._fts.get_backlinks(path, limit=link_limit)
-            backlink_objs = [
-                BacklinkInfo(
-                    source_path=r["source_path"],
-                    source_title=r["source_title"],
-                    link_text=r["link_text"],
-                    link_type=r["link_type"],
-                    fragment=r["fragment"],
-                    raw_target=r["raw_target"],
-                )
-                for r in backlinks
-            ]
-        except sqlite3.OperationalError as exc:
-            logger.warning(
-                "get_context: failed to retrieve backlinks for %s: %s", path, exc
-            )
-            backlink_objs = []
-
-        # Outlinks — capped at link_limit; graceful if links table absent.
-        try:
-            outlinks = self._fts.get_outlinks(path, limit=link_limit)
-            outlink_objs = [
-                OutlinkInfo(
-                    target_path=r["target_path"],
-                    link_text=r["link_text"],
-                    link_type=r["link_type"],
-                    fragment=r["fragment"],
-                    exists=bool(r["target_exists"]),
-                    raw_target=r["raw_target"],
-                )
-                for r in outlinks
-            ]
-        except sqlite3.OperationalError as exc:
-            logger.warning(
-                "get_context: failed to retrieve outlinks for %s: %s", path, exc
-            )
-            outlink_objs = []
-
-        # Similar notes — empty if embeddings not configured or similar_limit is 0.
-        similar_dicts: list[SimilarItem] = []
-        if (
-            similar_limit > 0
-            and self._embedding_provider is not None
-            and self._embeddings_path is not None
-        ):
-            self._load_vectors()
-            if self._vectors is not None and self._vectors.count > 0:
-                raw = self._vectors.search_by_path(path, limit=similar_limit)
-                similar_dicts = [
-                    SimilarItem(
-                        path=r["path"],
-                        title=r["title"],
-                        score=r["score"],
-                    )
-                    for r in raw
-                ]
-
-        # Folder peers — other notes in the same folder, capped at limit.
-        # folder is always a str (empty string for root-level docs) — never None.
-        folder = row["folder"]
-        folder_rows = self._fts.list_notes(folder=folder)
-        folder_notes = [r["path"] for r in folder_rows if r["path"] != path][
-            :_CONTEXT_FOLDER_PEERS_LIMIT
-        ]
-
-        # Tags — indexed frontmatter fields present on this document.
-        tags: dict[str, list[str]] = {}
-        for field in self._indexed_frontmatter_fields:
-            value = frontmatter.get(field)
-            if value is None:
-                continue
-            if isinstance(value, list):
-                tags[field] = [str(v) for v in value]
-            else:
-                tags[field] = [str(value)]
-
-        return NoteContext(
-            path=path,
-            title=row["title"],
-            folder=folder,
-            frontmatter=frontmatter,
-            modified_at=row["modified_at"],
-            backlinks=backlink_objs,
-            outlinks=outlink_objs,
-            similar=similar_dicts,
-            folder_notes=folder_notes,
-            tags=tags,
+        return self._search_mgr.get_context(
+            path, similar_limit=similar_limit, link_limit=link_limit
         )
 
     def get_orphan_notes(self) -> list[NoteInfo]:
@@ -1923,8 +667,7 @@ class Collection:
             ordered by path.
         """
         self._ensure_initialized()
-        rows = self._fts.get_orphan_notes()
-        return [_fts_row_to_note_info(r) for r in rows]
+        return self._link_mgr.get_orphan_notes()
 
     def get_most_linked(self, *, limit: int = 10) -> list[MostLinkedNote]:
         """Return the documents with the most inbound links.
@@ -1937,7 +680,7 @@ class Collection:
             by backlink_count descending.
         """
         self._ensure_initialized()
-        return [MostLinkedNote(**row) for row in self._fts.get_most_linked(limit=limit)]
+        return self._link_mgr.get_most_linked(limit=limit)
 
     def get_connection_path(
         self, source: str, target: str, max_depth: int = 10
@@ -1961,9 +704,7 @@ class Collection:
             ValueError: If *source* or *target* is not found in the index.
         """
         self._ensure_initialized()
-        self._validate_path(source)
-        self._validate_path(target)
-        return self._fts.get_connection_path(source, target, max_depth=max_depth)
+        return self._link_mgr.get_connection_path(source, target, max_depth=max_depth)
 
     # ------------------------------------------------------------------
     # Git history query methods
@@ -2101,7 +842,7 @@ class Collection:
             self._embedding_provider is not None and self._embeddings_path is not None
         )
 
-        exts = self._effective_attachment_extensions()
+        exts = effective_attachment_extensions(self._attachment_extensions)
         attachment_extensions = ["*"] if "*" in exts else sorted(exts)
 
         return CollectionStats(
@@ -2117,59 +858,8 @@ class Collection:
         )
 
     # ------------------------------------------------------------------
-    # Write operations
+    # Write operations (delegated to DocumentManager)
     # ------------------------------------------------------------------
-
-    def _check_writable(self) -> None:
-        """Raise ReadOnlyError if the collection is configured as read-only.
-
-        Raises:
-            ReadOnlyError: If ``read_only=True``.
-        """
-        if self._read_only:
-            raise ReadOnlyError(
-                "Collection is read-only; write operations are not permitted."
-            )
-
-    def _effective_attachment_extensions(self) -> frozenset[str]:
-        """Return the effective set of allowed attachment extensions.
-
-        Returns:
-            Frozenset of lower-case extension strings (without leading dot).
-            The special value ``frozenset(["*"])`` means all non-.md files.
-        """
-        if self._attachment_extensions is None:
-            return _DEFAULT_ATTACHMENT_EXTENSIONS
-        return frozenset(self._attachment_extensions)
-
-    def _is_attachment(self, path: str) -> bool:
-        """Return True if *path* is an allowed non-.md attachment.
-
-        Args:
-            path: Relative path to check.
-
-        Returns:
-            ``True`` when the extension is in the allowlist and is not ``.md``.
-        """
-        if path.endswith(".md"):
-            return False
-        suffix = Path(path).suffix.lstrip(".").lower()
-        exts = self._effective_attachment_extensions()
-        return "*" in exts or suffix in exts
-
-    def _is_path_excluded(self, path: str) -> bool:
-        """Check whether *path* matches any configured exclude pattern.
-
-        Args:
-            path: Relative POSIX path string.
-
-        Returns:
-            ``True`` if the path matches any pattern in
-            ``self._exclude_patterns``.
-        """
-        if not self._exclude_patterns:
-            return False
-        return any(fnmatch.fnmatch(path, pat) for pat in self._exclude_patterns)
 
     def _validate_path(self, path: str) -> Path:
         """Resolve a relative path and validate it is inside source_dir.
@@ -2184,150 +874,13 @@ class Collection:
             ValueError: If the path escapes the source directory or does
                 not end with ``.md``.
         """
-        if not path.endswith(".md"):
-            raise ValueError(f"Path must end with '.md': {path}")
-        abs_path = (self._source_dir / path).resolve()
-        if not abs_path.is_relative_to(self._source_dir.resolve()):
-            raise ValueError(f"Path traversal detected: {path}")
-        return abs_path
+        from markdown_vault_mcp.utils import validate_path
+
+        return validate_path(path, self._source_dir)
 
     def _validate_attachment_path(self, path: str) -> Path:
-        """Resolve and validate a non-.md attachment path.
-
-        Args:
-            path: Relative attachment path.
-
-        Returns:
-            The resolved absolute path.
-
-        Raises:
-            ValueError: If the path escapes the source directory, ends with
-                ``.md``, or has an extension not in the attachment allowlist.
-        """
-        if path.endswith(".md"):
-            raise ValueError(
-                f"Path ends with '.md' — use the note read/write methods instead: {path}"
-            )
-        exts = self._effective_attachment_extensions()
-        suffix = Path(path).suffix.lstrip(".").lower()
-        if "*" not in exts and suffix not in exts:
-            allowed_str = ", ".join(f".{e}" for e in sorted(exts))
-            raise ValueError(
-                f"Extension '.{suffix}' is not in the attachment allowlist. "
-                f"Allowed: {allowed_str}. "
-                "Set MARKDOWN_VAULT_MCP_ATTACHMENT_EXTENSIONS=* to allow all non-.md files."
-            )
-        abs_path = (self._source_dir / path).resolve()
-        if not abs_path.is_relative_to(self._source_dir.resolve()):
-            raise ValueError(f"Path traversal detected: {path}")
-        return abs_path
-
-    def _update_vector_index(self, note: ParsedNote) -> None:
-        """Mark a document for deferred embedding update.
-
-        The actual re-embedding and save happen during the next flush
-        (periodic timer, semantic search, or close).
-
-        Args:
-            note: Parsed document to index.
-        """
-        if self._embeddings_path is None or self._embedding_provider is None:
-            return
-        with self._embedding_flush_lock:
-            self._dirty_embeddings.add(note.path)
-        self._schedule_embedding_flush()
-
-    def _schedule_embedding_flush(self) -> None:
-        """Schedule a deferred flush of dirty embeddings."""
-        with self._embedding_flush_lock:
-            if self._embedding_flush_timer is not None:
-                self._embedding_flush_timer.cancel()
-            self._embedding_flush_timer = threading.Timer(
-                _EMBEDDING_FLUSH_INTERVAL,
-                self._flush_dirty_embeddings,
-            )
-            self._embedding_flush_timer.daemon = True
-            self._embedding_flush_timer.start()
-
-    def _flush_dirty_embeddings(self) -> None:
-        """Re-embed all dirty documents and save the vector index once.
-
-        Called by the periodic timer, before semantic search, and on close.
-        Thread-safe: the dirty-set swap is atomic under ``_embedding_flush_lock``;
-        Phase 2 vector mutations are serialised by ``_write_lock``.
-
-        Two-phase design to minimise lock hold time:
-
-        1. **Outside** ``_write_lock``: parse each dirty document and call
-           the (potentially slow) embedding provider.
-        2. **Inside** ``_write_lock``: apply the fast numpy mutations
-           (delete old rows, append pre-computed vectors, save).
-
-        This prevents the embedding provider from blocking foreground
-        write operations for the duration of CPU/network embedding work.
-        """
-        if self._embeddings_path is None or self._embedding_provider is None:
-            return
-
-        with self._embedding_flush_lock:
-            # Cancel pending timer (we're flushing now).
-            if self._embedding_flush_timer is not None:
-                self._embedding_flush_timer.cancel()
-                self._embedding_flush_timer = None
-
-            # Atomically swap the dirty set.
-            if not self._dirty_embeddings:
-                return
-            paths = self._dirty_embeddings.copy()
-            self._dirty_embeddings.clear()
-
-        # Phase 1: parse and embed OUTSIDE _write_lock.
-        # provider.embed() can be slow (seconds on CPU) — don't hold the
-        # write lock during it.  Collect (path, raw_vectors, meta) tuples
-        # for paths that still exist; paths that have been deleted will
-        # have raw_vectors=None so only a delete_by_path is applied.
-        pre_embedded: list[tuple[str, list[list[float]] | None, list[dict] | None]] = []
-        for path in paths:
-            abs_path = self._source_dir / path
-            if abs_path.is_file() and path.endswith(".md"):
-                try:
-                    note = parse_note(abs_path, self._source_dir, self._chunk_strategy)
-                    texts = [c.content for c in note.chunks]
-                    meta = [
-                        {
-                            "path": note.path,
-                            "title": note.title,
-                            "folder": _derive_folder(note.path),
-                            "heading": c.heading,
-                            "content": c.content,
-                        }
-                        for c in note.chunks
-                    ]
-                    if texts:
-                        raw_vecs = self._embedding_provider.embed(texts)
-                        pre_embedded.append((path, raw_vecs, meta))
-                    else:
-                        pre_embedded.append((path, None, None))
-                except (UnicodeDecodeError, OSError) as exc:
-                    logger.warning("Deferred embedding failed for %s: %s", path, exc)
-                    # Preserve original semantics: still delete stale vectors.
-                    pre_embedded.append((path, None, None))
-            else:
-                # File deleted or non-.md — remove stale vectors only.
-                pre_embedded.append((path, None, None))
-
-        # Phase 2: mutate vector index under _write_lock.
-        # All operations here are fast numpy mutations — no I/O or embedding.
-        with self._write_lock:
-            vectors = self._load_vectors()
-
-            for path, raw_vecs, meta in pre_embedded:
-                vectors.delete_by_path(path)
-                if raw_vecs is not None and meta:
-                    vectors.add_vectors(raw_vecs, meta)
-
-            vectors.save(self._embeddings_path)
-            logger.debug("Flushed deferred embeddings for %d paths", len(paths))
+        """Resolve and validate a non-.md attachment path."""
+        return self._doc_mgr._validate_attachment_path(path)
 
     def _ensure_callback_worker(self) -> None:
         """Start the background write-callback worker if not running."""
@@ -2375,115 +928,19 @@ class Collection:
     def read_attachment(self, path: str) -> AttachmentContent:
         """Read the binary content of a non-.md attachment.
 
-        Args:
-            path: Relative attachment path (e.g. ``"assets/diagram.pdf"``).
-
-        Returns:
-            :class:`~markdown_vault_mcp.types.AttachmentContent` with
-            base64-encoded content and MIME type.
-
-        Raises:
-            ValueError: If the path escapes the source directory, has an
-                extension not in the allowlist, or the file does not exist.
-            ValueError: If the file exceeds the configured size limit.
+        Delegates to :meth:`DocumentManager.read_attachment`.
         """
-        abs_path = self._validate_attachment_path(path)
-        if not abs_path.is_file():
-            raise ValueError(f"Attachment not found: {path}")
-
-        stat = abs_path.stat()
-        size_bytes = stat.st_size
-        if self._max_attachment_size_mb > 0:
-            limit_bytes = int(self._max_attachment_size_mb * 1024 * 1024)
-            if size_bytes > limit_bytes:
-                raise ValueError(
-                    f"Attachment {path!r} is {size_bytes} bytes, which exceeds "
-                    f"the limit of {self._max_attachment_size_mb} MB "
-                    f"({limit_bytes} bytes). "
-                    "Raise MARKDOWN_VAULT_MCP_MAX_ATTACHMENT_SIZE_MB or set it "
-                    "to 0 to disable the limit."
-                )
-
-        mime_type, _ = mimetypes.guess_type(path)
-        raw = abs_path.read_bytes()
-        content_base64 = base64.b64encode(raw).decode("ascii")
-        etag = compute_etag(raw)
-        return AttachmentContent(
-            path=path,
-            mime_type=mime_type,
-            size_bytes=size_bytes,
-            content_base64=content_base64,
-            modified_at=stat.st_mtime,
-            etag=etag,
-        )
+        return self._doc_mgr.read_attachment(path)
 
     def write_attachment(
         self, path: str, content: bytes, if_match: str | None = None
     ) -> WriteResult:
         """Create or overwrite a non-.md attachment.
 
-        Args:
-            path: Relative attachment path (e.g. ``"assets/diagram.pdf"``).
-            content: Raw bytes to write.
-            if_match: Optional etag from a previous :meth:`read_attachment`
-                call. When provided, the write is only performed if the
-                current file hash matches this value, preventing overwrites
-                of concurrent modifications. Pass ``None`` (default) to skip
-                the check.
-
-        Returns:
-            :class:`~markdown_vault_mcp.types.WriteResult`.
-
-        Raises:
-            ReadOnlyError: If the collection is read-only.
-            ConcurrentModificationError: If *if_match* is provided and does
-                not match the current file hash.
-            ValueError: If the path escapes the source directory, has an
-                extension not in the allowlist, or the content exceeds the
-                size limit.
+        Delegates to :meth:`DocumentManager.write_attachment`.
         """
-        self._check_writable()
-        with self._write_lock:
-            self._ensure_initialized()
-            abs_path = self._validate_attachment_path(path)
-            if if_match is not None:
-                if not abs_path.is_file():
-                    raise ConcurrentModificationError(
-                        path, expected=if_match, actual="(file does not exist)"
-                    )
-                current_hash = compute_file_hash(abs_path)
-                if current_hash != if_match:
-                    raise ConcurrentModificationError(
-                        path, expected=if_match, actual=current_hash
-                    )
-            if self._max_attachment_size_mb > 0:
-                limit_bytes = int(self._max_attachment_size_mb * 1024 * 1024)
-                if len(content) > limit_bytes:
-                    raise ValueError(
-                        f"Content ({len(content)} bytes) exceeds the limit of "
-                        f"{self._max_attachment_size_mb} MB ({limit_bytes} bytes). "
-                        "Raise MARKDOWN_VAULT_MCP_MAX_ATTACHMENT_SIZE_MB or set "
-                        "it to 0 to disable the limit."
-                    )
-            created = not abs_path.is_file()
-            abs_path.parent.mkdir(parents=True, exist_ok=True)
-            with tempfile.NamedTemporaryFile(
-                dir=abs_path.parent, mode="wb", suffix=".tmp", delete=False
-            ) as tmp:
-                tmp.write(content)
-                tmp_name = tmp.name
-            if abs_path.is_file():
-                shutil.copymode(abs_path, tmp_name)
-            try:
-                Path(tmp_name).replace(abs_path)
-            except Exception:
-                Path(tmp_name).unlink(missing_ok=True)
-                raise
-            result = WriteResult(path=path, created=created)
-
-        self._fire_write_callback(abs_path, "", "write")
-
-        return result
+        self._ensure_initialized()
+        return self._doc_mgr.write_attachment(path, content, if_match=if_match)
 
     def write(
         self,
@@ -2494,87 +951,12 @@ class Collection:
     ) -> WriteResult:
         """Create or overwrite a document.
 
-        Creates intermediate directories as needed.  If *frontmatter* is
-        provided, it is serialised as a YAML header at the top of the file.
-
-        Args:
-            path: Relative document path.
-            content: Markdown body (excluding frontmatter).
-            frontmatter: Optional frontmatter dict serialised as YAML header.
-            if_match: Optional etag from a previous :meth:`read` call.
-                When provided, the write is only performed if the current
-                file hash matches this value, preventing overwrites of
-                concurrent modifications. Supplying *if_match* for a file
-                that does not yet exist raises
-                :exc:`~markdown_vault_mcp.exceptions.ConcurrentModificationError`.
-                Pass ``None`` (default) to skip the check.
-
-        Returns:
-            :class:`~markdown_vault_mcp.types.WriteResult`.
-
-        Raises:
-            ReadOnlyError: If the collection is read-only.
-            ConcurrentModificationError: If *if_match* is provided and does
-                not match the current file hash (or the file does not exist).
-            ValueError: If *path* escapes the source directory.
+        Delegates to :meth:`DocumentManager.write`.
         """
-        self._check_writable()
-        with self._write_lock:
-            self._ensure_initialized()
-
-            abs_path = self._validate_path(path)
-            if if_match is not None:
-                if not abs_path.is_file():
-                    raise ConcurrentModificationError(
-                        path, expected=if_match, actual="(file does not exist)"
-                    )
-                current_hash = compute_file_hash(abs_path)
-                if current_hash != if_match:
-                    raise ConcurrentModificationError(
-                        path, expected=if_match, actual=current_hash
-                    )
-            created = not abs_path.is_file()
-
-            # Create intermediate directories.
-            abs_path.parent.mkdir(parents=True, exist_ok=True)
-
-            # Build file content with optional frontmatter.
-            if frontmatter is not None:
-                post = fm.Post(content, **frontmatter)
-                file_content = fm.dumps(post)
-            else:
-                file_content = content
-
-            with tempfile.NamedTemporaryFile(
-                dir=abs_path.parent,
-                mode="w",
-                encoding="utf-8",
-                suffix=".tmp",
-                delete=False,
-            ) as tmp:
-                tmp.write(file_content)
-                tmp_name = tmp.name
-            if abs_path.is_file():
-                shutil.copymode(abs_path, tmp_name)
-            try:
-                Path(tmp_name).replace(abs_path)
-            except Exception:
-                Path(tmp_name).unlink(missing_ok=True)
-                raise
-
-            # Update FTS index.
-            note = parse_note(abs_path, self._source_dir, self._chunk_strategy)
-            self._fts.upsert_note(note)
-
-            # Mark for deferred embedding update.
-            self._update_vector_index(note)
-
-            result = WriteResult(path=path, created=created)
-
-        # Fire git callback in background thread.
-        self._fire_write_callback(abs_path, file_content, "write")
-
-        return result
+        self._ensure_initialized()
+        return self._doc_mgr.write(
+            path, content, frontmatter=frontmatter, if_match=if_match
+        )
 
     def edit(
         self,
@@ -2587,417 +969,25 @@ class Collection:
     ) -> EditResult:
         """Patch a section of a document.
 
-        Supports three modes:
-
-        - **Exact match** (``old_text`` only): verifies *old_text* exists
-          exactly once in the full file content (including frontmatter),
-          replaces it with *new_text*.
-        - **Line-range** (``line_start``/``line_end`` only): replaces the
-          specified line range with *new_text*.
-        - **Scoped match** (both): searches for *old_text* only within the
-          specified line range, allowing disambiguation of repeated text.
-
-        When exact match fails, a normalized comparison is attempted
-        (Unicode NFC, dash/quote normalization, whitespace collapsing).
-        If a unique normalized match is found, it is used and
-        ``match_type="normalized"`` is returned.
-
-        Args:
-            path: Relative document path.
-            old_text: Text to replace. Required for exact-match and
-                scoped-match modes.  Must appear exactly once (in the
-                file or in the line range).
-            new_text: Replacement text. When using line-range mode with an
-                empty string (``""``), the selected lines are replaced with a
-                single blank line. To delete lines entirely, pass the literal
-                content of those lines as *old_text* (scoped-match mode) and
-                supply an empty *new_text*, which removes that text span
-                without inserting a blank line.
-            if_match: Optional etag from a previous :meth:`read` call.
-                When provided, the edit is only performed if the current
-                file hash matches this value, preventing edits based on
-                stale content. Pass ``None`` (default) to skip the check.
-            line_start: First line to replace (1-based, inclusive).
-                Must be provided together with *line_end*.
-            line_end: Last line to replace (1-based, inclusive).
-                Must be provided together with *line_start*.
-
-        Returns:
-            :class:`~markdown_vault_mcp.types.EditResult`.
-
-        Raises:
-            ReadOnlyError: If the collection is read-only.
-            DocumentNotFoundError: If the file does not exist.
-            ConcurrentModificationError: If *if_match* is provided and does
-                not match the current file hash.
-            EditConflictError: If *old_text* is not found or appears
-                more than once.
-            ValueError: If parameter combination is invalid, or line
-                numbers are out of range.
+        Delegates to :meth:`DocumentManager.edit`.
         """
-        self._check_writable()
-
-        # --- Parameter validation ---
-        if old_text is not None and not old_text:
-            raise ValueError("old_text must not be empty")
-        has_lines = line_start is not None or line_end is not None
-        if old_text is None and not has_lines:
-            raise ValueError("Must provide old_text, line_start/line_end, or both")
-        if (line_start is None) != (line_end is None):
-            raise ValueError("Must provide both line_start and line_end, not just one")
-        if line_start is not None and line_end is not None:
-            if line_start < 1:
-                raise ValueError("line_start must be >= 1 (lines are 1-based)")
-            if line_start > line_end:
-                raise ValueError(
-                    f"line_start ({line_start}) must be <= line_end ({line_end})"
-                )
-
-        with self._write_lock:
-            self._ensure_initialized()
-
-            abs_path = self._validate_path(path)
-            if not abs_path.is_file():
-                raise DocumentNotFoundError(f"Document not found: {path}")
-
-            if if_match is not None:
-                current_hash = compute_file_hash(abs_path)
-                if current_hash != if_match:
-                    raise ConcurrentModificationError(
-                        path, expected=if_match, actual=current_hash
-                    )
-
-            file_content = abs_path.read_text(encoding="utf-8")
-
-            if has_lines:
-                assert line_start is not None and line_end is not None
-                new_content, match_type = self._edit_with_lines(
-                    file_content, old_text, new_text, line_start, line_end, path
-                )
-            else:
-                assert old_text is not None
-                new_content, match_type = self._edit_with_text(
-                    file_content, old_text, new_text, path
-                )
-
-            with tempfile.NamedTemporaryFile(
-                dir=abs_path.parent,
-                mode="w",
-                encoding="utf-8",
-                suffix=".tmp",
-                delete=False,
-            ) as tmp:
-                tmp.write(new_content)
-                tmp_name = tmp.name
-            shutil.copymode(abs_path, tmp_name)
-            try:
-                Path(tmp_name).replace(abs_path)
-            except Exception:
-                Path(tmp_name).unlink(missing_ok=True)
-                raise
-
-            # Update FTS index.
-            note = parse_note(abs_path, self._source_dir, self._chunk_strategy)
-            self._fts.upsert_note(note)
-
-            # Mark for deferred embedding update.
-            self._update_vector_index(note)
-
-        # Fire git callback in background thread.
-        self._fire_write_callback(abs_path, new_content, "edit")
-
-        return EditResult(path=path, replacements=1, match_type=match_type)
-
-    def _edit_with_lines(
-        self,
-        file_content: str,
-        old_text: str | None,
-        new_text: str,
-        line_start: int,
-        line_end: int,
-        path: str,
-    ) -> tuple[str, str]:
-        """Handle line-range and scoped-match edit modes.
-
-        Returns:
-            Tuple of (new_file_content, match_type).
-        """
-        lines = file_content.split("\n")
-        # The split produces an extra empty string after a trailing newline.
-        # Total addressable lines = len(lines) if last is non-empty, else
-        # len(lines) - 1 (the trailing empty element isn't a real line).
-        total_lines = len(lines) - 1 if lines and lines[-1] == "" else len(lines)
-        if line_end > total_lines:
-            raise ValueError(
-                f"line_end ({line_end}) out of range (file has {total_lines} lines)"
-            )
-
-        # Convert to 0-based indices for slicing.
-        start_idx = line_start - 1
-        end_idx = line_end  # exclusive for slice
-
-        if old_text is not None:
-            # Scoped match: search within the line range only.
-            scope = "\n".join(lines[start_idx:end_idx])
-            context_desc = f"lines {line_start}-{line_end} of {path}"
-            new_scope, match_type = self._match_and_replace(
-                scope, old_text, new_text, path, context_desc=context_desc
-            )
-            lines[start_idx:end_idx] = new_scope.split("\n")
-        else:
-            # Pure line-range replacement.
-            match_type = "exact"
-            # Reconstruct: new_text replaces lines, preserving structure.
-            # Strip trailing newline from new_text if present to avoid
-            # double-newline when rejoining.
-            replacement_lines = new_text.rstrip("\n").split("\n") if new_text else [""]
-            lines[start_idx:end_idx] = replacement_lines
-
-        return "\n".join(lines), match_type
-
-    def _edit_with_text(
-        self,
-        file_content: str,
-        old_text: str,
-        new_text: str,
-        path: str,
-    ) -> tuple[str, str]:
-        """Handle exact-match edit mode (with normalized fallback).
-
-        Thin wrapper so ``edit()`` has a symmetric call site for both modes
-        (line-range via ``_edit_with_lines``, text via this method).
-
-        Returns:
-            Tuple of (new_file_content, match_type).
-        """
-        return self._match_and_replace(file_content, old_text, new_text, path)
-
-    def _match_and_replace(
-        self,
-        content: str,
-        old_text: str,
-        new_text: str,
-        path: str,
-        context_desc: str | None = None,
-    ) -> tuple[str, str]:
-        """Try exact match, then normalized match, then raise with diagnostics.
-
-        Args:
-            content: The text to search within (full file or a line-range scope).
-            old_text: Text to find and replace.
-            new_text: Replacement text.
-            path: Vault-relative file path, used in error messages.
-            context_desc: Optional human-readable context for error messages
-                (e.g. ``"lines 5-10 of notes/foo.md"``). When omitted, errors
-                refer to *path* directly.
-
-        Returns:
-            Tuple of (new_content, match_type).
-        """
-        location = context_desc or path
-        count = content.count(old_text)
-
-        if count == 1:
-            return content.replace(old_text, new_text, 1), "exact"
-
-        if count > 1:
-            raise EditConflictError(
-                f"old_text appears {count} times in {location}; must appear exactly once"
-            )
-
-        # count == 0: try normalized matching.
-        normalized_content = _normalize_text(content)
-        normalized_old = _normalize_text(old_text)
-        norm_count = normalized_content.count(normalized_old)
-
-        if norm_count == 1:
-            pos_map = _build_position_map(content, normalized_content)
-            norm_start = normalized_content.index(normalized_old)
-            norm_end = norm_start + len(normalized_old)
-            orig_start = pos_map[norm_start]
-            orig_end = pos_map[norm_end]
-            new_content = content[:orig_start] + new_text + content[orig_end:]
-            return new_content, "normalized"
-
-        if norm_count > 1:
-            raise EditConflictError(
-                f"old_text appears {norm_count} times in {location} after "
-                f"normalization; must appear exactly once"
-            )
-
-        # norm_count == 0: raise with diagnostics.
-        diag = _find_closest_match(old_text, content)
-        raise EditConflictError(f"old_text not found in {location}", **diag)
+        self._ensure_initialized()
+        return self._doc_mgr.edit(
+            path,
+            old_text=old_text,
+            new_text=new_text,
+            if_match=if_match,
+            line_start=line_start,
+            line_end=line_end,
+        )
 
     def delete(self, path: str, if_match: str | None = None) -> DeleteResult:
         """Delete a document or attachment.
 
-        Removes the file from disk.  For ``.md`` documents, also removes all
-        FTS and embedding index entries.  For attachments, only the file is
-        deleted (no index update).
-
-        Args:
-            path: Relative document or attachment path.
-            if_match: Optional etag from a previous :meth:`read` or
-                :meth:`read_attachment` call. When provided, the deletion is
-                only performed if the current file hash matches this value.
-                Pass ``None`` (default) to skip the check.
-
-        Returns:
-            :class:`~markdown_vault_mcp.types.DeleteResult`.
-
-        Raises:
-            ReadOnlyError: If the collection is read-only.
-            DocumentNotFoundError: If the file does not exist.
-            ConcurrentModificationError: If *if_match* is provided and does
-                not match the current file hash.
-            ValueError: If the path escapes the source directory, or (for
-                non-.md paths) has an extension not in the attachment allowlist.
+        Delegates to :meth:`DocumentManager.delete`.
         """
-        self._check_writable()
-        with self._write_lock:
-            self._ensure_initialized()
-
-            if path.endswith(".md"):
-                abs_path = self._validate_path(path)
-                if not abs_path.is_file():
-                    raise DocumentNotFoundError(f"Document not found: {path}")
-                if if_match is not None:
-                    current_hash = compute_file_hash(abs_path)
-                    if current_hash != if_match:
-                        raise ConcurrentModificationError(
-                            path, expected=if_match, actual=current_hash
-                        )
-                abs_path.unlink()
-                self._fts.delete_by_path(path)
-                # Mark for deferred vector index cleanup.
-                if (
-                    self._embeddings_path is not None
-                    and self._embedding_provider is not None
-                ):
-                    with self._embedding_flush_lock:
-                        self._dirty_embeddings.add(path)
-                    self._schedule_embedding_flush()
-            else:
-                abs_path = self._validate_attachment_path(path)
-                if not abs_path.is_file():
-                    raise DocumentNotFoundError(f"Attachment not found: {path}")
-                if if_match is not None:
-                    current_hash = compute_file_hash(abs_path)
-                    if current_hash != if_match:
-                        raise ConcurrentModificationError(
-                            path, expected=if_match, actual=current_hash
-                        )
-                abs_path.unlink()
-
-        # Fire git callback in background thread.
-        self._fire_write_callback(abs_path, "", "delete")
-
-        return DeleteResult(path=path)
-
-    def _update_backlinks(
-        self,
-        old_path: str,
-        new_path: str,
-        backlinks: list[dict],
-    ) -> list[tuple[Path, str]]:
-        """Rewrite every source file that links to *old_path* so it points to *new_path*.
-
-        Called by :meth:`rename` after the file has already been moved on disk
-        and the FTS index updated.  Each source file is read, all of its links
-        to *old_path* are rewritten in a single pass, then written back.
-        Per-file failures are logged at ``WARNING`` and do not abort the batch.
-
-        This method must be called while :attr:`_write_lock` is held.  It does
-        **not** fire write callbacks itself — callers must do so after releasing
-        the lock, using the returned list of ``(abs_path, content)`` pairs.
-
-        Args:
-            old_path: Vault-relative path that was renamed (the old location).
-            new_path: Vault-relative path after the rename (the new location).
-            backlinks: Rows returned by :meth:`FTSIndex.get_backlinks` before
-                the rename — each must contain ``source_path``, ``link_type``,
-                ``raw_target``, and ``fragment`` keys.
-
-        Returns:
-            List of ``(abs_path, new_content)`` pairs for every source document
-            that was successfully rewritten.  Callers should fire a write
-            callback for each pair after releasing :attr:`_write_lock`.
-        """
-        if not backlinks:
-            return []
-
-        by_source: dict[str, list[dict]] = defaultdict(list)
-        for row in backlinks:
-            by_source[row["source_path"]].append(row)
-
-        # If the renamed file self-links, its source key is
-        # old_path — but the file now lives at new_path.  Remap
-        # before iterating so we read/write the correct file.
-        if old_path in by_source:
-            by_source[new_path] = by_source.pop(old_path)
-
-        pending_callbacks: list[tuple[Path, str]] = []
-        for source_path, rows in by_source.items():
-            try:
-                source_abs = self._validate_path(source_path)
-                if not source_abs.is_file():
-                    logger.warning(
-                        "_update_backlinks: skipping %s — file not found",
-                        source_path,
-                    )
-                    continue
-                content = source_abs.read_text(encoding="utf-8")
-                for row in rows:
-                    new_raw = _compute_new_raw_target(
-                        row["link_type"],
-                        row["raw_target"],
-                        row["fragment"],
-                        new_path,
-                        source_path=source_path,
-                        old_path=old_path,
-                    )
-                    content = _apply_link_replacement(
-                        content,
-                        row["link_type"],
-                        row["raw_target"],
-                        new_raw,
-                    )
-                with tempfile.NamedTemporaryFile(
-                    dir=source_abs.parent,
-                    mode="w",
-                    encoding="utf-8",
-                    suffix=".tmp",
-                    delete=False,
-                ) as tmp:
-                    tmp.write(content)
-                    tmp_name = tmp.name
-                shutil.copymode(source_abs, tmp_name)
-                try:
-                    Path(tmp_name).replace(source_abs)
-                except Exception:
-                    Path(tmp_name).unlink(missing_ok=True)
-                    raise
-                updated_note = parse_note(
-                    source_abs, self._source_dir, self._chunk_strategy
-                )
-                self._fts.upsert_note(updated_note)
-                self._update_vector_index(updated_note)
-                pending_callbacks.append((source_abs, content))
-            except (OSError, UnicodeDecodeError, ValueError, sqlite3.Error) as exc:
-                logger.warning(
-                    "_update_backlinks: failed to update %s: %s",
-                    source_path,
-                    exc,
-                )
-            except Exception as exc:
-                logger.warning(
-                    "_update_backlinks: unexpected error updating %s: %s",
-                    source_path,
-                    exc,
-                    exc_info=True,
-                )
-        return pending_callbacks
+        self._ensure_initialized()
+        return self._doc_mgr.delete(path, if_match=if_match)
 
     def rename(
         self,
@@ -3009,117 +999,9 @@ class Collection:
     ) -> RenameResult:
         """Rename or move a document or attachment.
 
-        Renames the file on disk.  For ``.md`` documents, also updates FTS
-        and embedding index entries.  For attachments, only the file is moved
-        (no index update).  Creates intermediate directories for *new_path*
-        as needed.
-
-        When *update_links* is ``True`` and *old_path* is a ``.md`` document,
-        every document that links to *old_path* is also updated so its links
-        point to *new_path*.  Replacement is best-effort: failures are logged
-        at ``WARNING`` but do not prevent the rename from succeeding.
-
-        Args:
-            old_path: Current relative document or attachment path.
-            new_path: Target relative document or attachment path.
-            if_match: Optional etag from a previous :meth:`read` or
-                :meth:`read_attachment` call for *old_path*. When provided,
-                the rename is only performed if the current file hash matches
-                this value. Pass ``None`` (default) to skip the check.
-            update_links: When ``True``, find all documents that link to
-                *old_path* and rewrite their link targets to point to
-                *new_path*. Only applies to ``.md`` documents.  Default
-                ``False``.
-
-        Returns:
-            :class:`~markdown_vault_mcp.types.RenameResult` with
-            *updated_links* counting source documents successfully updated.
-
-        Raises:
-            ReadOnlyError: If the collection is read-only.
-            DocumentNotFoundError: If *old_path* does not exist.
-            DocumentExistsError: If *new_path* already exists.
-            ConcurrentModificationError: If *if_match* is provided and does
-                not match the current hash of *old_path*.
-            ValueError: If either path escapes the source directory, or (for
-                non-.md paths) has an extension not in the attachment allowlist.
+        Delegates to :meth:`DocumentManager.rename`.
         """
-        self._check_writable()
-        updated_links = 0
-        backlink_callbacks: list[tuple[Path, str]] = []
-
-        with self._write_lock:
-            self._ensure_initialized()
-
-            if old_path.endswith(".md"):
-                old_abs = self._validate_path(old_path)
-                new_abs = self._validate_path(new_path)
-
-                if not old_abs.is_file():
-                    raise DocumentNotFoundError(f"Document not found: {old_path}")
-                if new_abs.is_file():
-                    raise DocumentExistsError(f"Target already exists: {new_path}")
-                if if_match is not None:
-                    current_hash = compute_file_hash(old_abs)
-                    if current_hash != if_match:
-                        raise ConcurrentModificationError(
-                            old_path, expected=if_match, actual=current_hash
-                        )
-
-                # Collect backlinks before the rename so the index still
-                # reflects old_path as the target.
-                backlinks = self._fts.get_backlinks(old_path) if update_links else []
-
-                new_abs.parent.mkdir(parents=True, exist_ok=True)
-                shutil.move(str(old_abs), str(new_abs))
-
-                self._fts.delete_by_path(old_path)
-
-                note = parse_note(new_abs, self._source_dir, self._chunk_strategy)
-                self._fts.upsert_note(note)
-
-                # Mark both paths for deferred vector update: old_path
-                # entries are deleted (file gone), new_path re-embedded.
-                if (
-                    self._embeddings_path is not None
-                    and self._embedding_provider is not None
-                ):
-                    with self._embedding_flush_lock:
-                        self._dirty_embeddings.add(old_path)
-                        self._dirty_embeddings.add(note.path)
-                    self._schedule_embedding_flush()
-
-                callback_content = new_abs.read_text(encoding="utf-8")
-
-                backlink_callbacks = self._update_backlinks(
-                    old_path, new_path, backlinks
-                )
-                updated_links = len(backlink_callbacks)
-            else:
-                old_abs = self._validate_attachment_path(old_path)
-                new_abs = self._validate_attachment_path(new_path)
-
-                if not old_abs.is_file():
-                    raise DocumentNotFoundError(f"Attachment not found: {old_path}")
-                if new_abs.is_file():
-                    raise DocumentExistsError(f"Target already exists: {new_path}")
-                if if_match is not None:
-                    current_hash = compute_file_hash(old_abs)
-                    if current_hash != if_match:
-                        raise ConcurrentModificationError(
-                            old_path, expected=if_match, actual=current_hash
-                        )
-
-                new_abs.parent.mkdir(parents=True, exist_ok=True)
-                shutil.move(str(old_abs), str(new_abs))
-
-                callback_content = ""
-
-        # Fire git callbacks in background thread (outside write lock).
-        self._fire_write_callback(new_abs, callback_content, "rename")
-        for src_abs, src_content in backlink_callbacks:
-            self._fire_write_callback(src_abs, src_content, "edit")
-
-        return RenameResult(
-            old_path=old_path, new_path=new_path, updated_links=updated_links
+        self._ensure_initialized()
+        return self._doc_mgr.rename(
+            old_path, new_path, if_match=if_match, update_links=update_links
         )

@@ -11,12 +11,7 @@ from unittest.mock import patch
 
 import pytest
 
-from markdown_vault_mcp.collection import (
-    Collection,
-    _build_position_map,
-    _find_closest_match,
-    _normalize_text,
-)
+from markdown_vault_mcp.collection import Collection
 from markdown_vault_mcp.exceptions import (
     ConcurrentModificationError,
     DocumentExistsError,
@@ -35,6 +30,15 @@ from markdown_vault_mcp.types import (
     NoteInfo,
     RenameResult,
     WriteResult,
+)
+from markdown_vault_mcp.utils.text import (
+    build_position_map as _build_position_map,
+)
+from markdown_vault_mcp.utils.text import (
+    find_closest_match as _find_closest_match,
+)
+from markdown_vault_mcp.utils.text import (
+    normalize_text as _normalize_text,
 )
 
 if TYPE_CHECKING:
@@ -1940,25 +1944,25 @@ class TestAttachmentHelpers:
     def test_is_attachment_pdf(self, vault_path: Path) -> None:
         """_is_attachment() returns True for a .pdf path with default allowlist."""
         col = Collection(source_dir=vault_path)
-        assert col._is_attachment("assets/report.pdf") is True
+        assert col._doc_mgr._is_attachment("assets/report.pdf") is True
 
     def test_is_attachment_md_always_false(self, vault_path: Path) -> None:
         """_is_attachment() always returns False for .md paths."""
         col = Collection(source_dir=vault_path)
-        assert col._is_attachment("notes/note.md") is False
+        assert col._doc_mgr._is_attachment("notes/note.md") is False
 
     def test_is_attachment_disallowed_extension(self, vault_path: Path) -> None:
         """_is_attachment() returns False for extensions not in the default list."""
         col = Collection(source_dir=vault_path)
         # .xyz is not in the default list
-        assert col._is_attachment("file.xyz") is False
+        assert col._doc_mgr._is_attachment("file.xyz") is False
 
     def test_is_attachment_wildcard_allows_all(self, vault_path: Path) -> None:
         """_is_attachment() returns True for any non-.md extension when '*' is set."""
         col = Collection(source_dir=vault_path, attachment_extensions=["*"])
-        assert col._is_attachment("file.xyz") is True
-        assert col._is_attachment("file.bin") is True
-        assert col._is_attachment("notes/note.md") is False
+        assert col._doc_mgr._is_attachment("file.xyz") is True
+        assert col._doc_mgr._is_attachment("file.bin") is True
+        assert col._doc_mgr._is_attachment("notes/note.md") is False
 
     def test_validate_attachment_path_rejects_md(self, vault_path: Path) -> None:
         """_validate_attachment_path() raises ValueError for .md paths."""
@@ -2512,7 +2516,7 @@ class TestSemanticSearch:
         # Confirm no .npy file exists before loading.
         assert not (tmp_path / "embeddings.npy").exists()
 
-        vectors = col._load_vectors()
+        vectors = col._search_mgr._load_vectors()
 
         assert vectors is not None
         assert vectors.count == 0
@@ -2545,7 +2549,7 @@ class TestSemanticSearch:
         col2.build_index()
         assert col2._vectors is None  # not yet loaded
 
-        vectors = col2._load_vectors()
+        vectors = col2._search_mgr._load_vectors()
 
         assert vectors.count == chunk_count
 
@@ -2583,7 +2587,7 @@ class TestSemanticSearch:
         )
         col2.build_index()
 
-        vectors = col2._load_vectors()
+        vectors = col2._search_mgr._load_vectors()
         assert vectors.count == expected_count
 
         with (tmp_path / "embeddings.json").open(encoding="utf-8") as fh:
@@ -2596,7 +2600,7 @@ class TestSemanticSearch:
         col = _make_collection(vault_path)
 
         with pytest.raises(ValueError, match="embedding_provider"):
-            col._require_vectors()
+            col._search_mgr._require_vectors()
 
 
 # ---------------------------------------------------------------------------
@@ -2888,7 +2892,7 @@ class TestBuildEmbeddings:
         mock_provider: MockEmbeddingProvider,
     ) -> None:
         """build_embeddings() calls the provider in batches, not one giant call."""
-        from markdown_vault_mcp.collection import _EMBEDDING_BATCH_SIZE
+        from markdown_vault_mcp.managers.index import _EMBEDDING_BATCH_SIZE
 
         embeddings_path = tmp_path / "embeddings"
         col = Collection(
@@ -2921,7 +2925,7 @@ class TestBuildEmbeddings:
         mock_provider: MockEmbeddingProvider,
     ) -> None:
         """build_embeddings() handles a corpus spanning multiple batches."""
-        from markdown_vault_mcp.collection import _EMBEDDING_BATCH_SIZE
+        from markdown_vault_mcp.managers.index import _EMBEDDING_BATCH_SIZE
 
         # Create a vault with enough chunks to span multiple batches.
         vault = tmp_path / "vault"
@@ -2977,16 +2981,16 @@ class TestBuildIndexNoOp:
         col.build_index()
 
         # Intercept scan_directory to confirm it is NOT called again.
-        import markdown_vault_mcp.collection as col_mod
+        import markdown_vault_mcp.managers.index as idx_mod
 
-        original_scan = col_mod.scan_directory
+        original_scan = idx_mod.scan_directory
         scan_calls: list = []
 
         def tracking_scan(*args, **kwargs):
             scan_calls.append(args)
             return original_scan(*args, **kwargs)
 
-        with patch.object(col_mod, "scan_directory", side_effect=tracking_scan):
+        with patch.object(idx_mod, "scan_directory", side_effect=tracking_scan):
             stats2 = col.build_index()
 
         # scan_directory must not have been invoked on the second call.
@@ -3020,7 +3024,7 @@ class TestReindexWithVectors:
         col.build_index()
         col.build_embeddings()
         # Trigger vector load so _vectors is not None.
-        col._load_vectors()
+        col._search_mgr._load_vectors()
         return col
 
     def test_reindex_adds_vector_entries_for_new_files(
@@ -3128,7 +3132,9 @@ class TestResolveChunkStrategy:
 class TestFtsRowToNoteInfoMalformedJson:
     def test_invalid_frontmatter_json_returns_empty_dict(self) -> None:
         """_fts_row_to_note_info with invalid JSON returns NoteInfo with empty frontmatter."""
-        from markdown_vault_mcp.collection import _fts_row_to_note_info
+        from markdown_vault_mcp.utils.fts import (
+            fts_row_to_note_info as _fts_row_to_note_info,
+        )
 
         row = {
             "path": "x.md",
@@ -3145,7 +3151,9 @@ class TestFtsRowToNoteInfoMalformedJson:
 
     def test_none_frontmatter_json_returns_empty_dict(self) -> None:
         """_fts_row_to_note_info with frontmatter_json=None returns empty frontmatter."""
-        from markdown_vault_mcp.collection import _fts_row_to_note_info
+        from markdown_vault_mcp.utils.fts import (
+            fts_row_to_note_info as _fts_row_to_note_info,
+        )
 
         row = {
             "path": "y.md",
@@ -3160,7 +3168,9 @@ class TestFtsRowToNoteInfoMalformedJson:
 
     def test_empty_string_frontmatter_json_returns_empty_dict(self) -> None:
         """_fts_row_to_note_info with frontmatter_json='' returns empty frontmatter."""
-        from markdown_vault_mcp.collection import _fts_row_to_note_info
+        from markdown_vault_mcp.utils.fts import (
+            fts_row_to_note_info as _fts_row_to_note_info,
+        )
 
         row = {
             "path": "z.md",
@@ -3764,14 +3774,14 @@ class TestDeferredEmbeddings:
             "# Deferred Embedding\n\nUniqueContentForTest.\n",
         )
         # The dirty set should contain this path.
-        assert "deferred_doc.md" in col._dirty_embeddings
+        assert "deferred_doc.md" in col._index_mgr._dirty_embeddings
 
         # Semantic search triggers flush.
         results = col.search("UniqueContentForTest", mode="semantic")
         paths = [r.path for r in results]
         assert "deferred_doc.md" in paths
         # Dirty set should now be empty.
-        assert len(col._dirty_embeddings) == 0
+        assert len(col._index_mgr._dirty_embeddings) == 0
 
     def test_dirty_docs_flushed_on_close(
         self,
@@ -3794,10 +3804,10 @@ class TestDeferredEmbeddings:
             "close_flush.md",
             "# Close Flush\n\nContent to be flushed on close.\n",
         )
-        assert "close_flush.md" in col._dirty_embeddings
+        assert "close_flush.md" in col._index_mgr._dirty_embeddings
 
         col.close()
-        assert len(col._dirty_embeddings) == 0
+        assert len(col._index_mgr._dirty_embeddings) == 0
 
     def test_git_callback_fires_eventually(self, vault_path: Path) -> None:
         """Git callback fires in the background after write returns."""
@@ -3897,10 +3907,12 @@ class TestLoggingAuditSilentPaths:
             "modified_at": 0.0,
         }
         with (
-            caplog.at_level(logging.WARNING, logger="markdown_vault_mcp.collection"),
-            patch.object(col._fts, "get_note", return_value=bad_row),
+            caplog.at_level(
+                logging.WARNING, logger="markdown_vault_mcp.managers.search"
+            ),
+            patch.object(col._search_mgr._fts, "get_note", return_value=bad_row),
         ):
-            result = col._get_frontmatter("note.md")
+            result = col._search_mgr._get_frontmatter("note.md")
         assert result == {}
         assert any(
             "_get_frontmatter: invalid JSON" in rec.message for rec in caplog.records
