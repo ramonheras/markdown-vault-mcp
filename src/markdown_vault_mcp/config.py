@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -89,6 +90,40 @@ class CollectionConfig:
             strategy initialisation so LFS pointers are resolved before reads.
         git_pull_interval_s: Interval in seconds for periodic git fetch +
             fast-forward-only updates (default ``600``). Set to ``0`` to disable.
+        server_name: Display name for the MCP server (default
+            ``"markdown-vault-mcp"``).
+        instructions: Optional server-level instructions surfaced to clients.
+        auth_mode: Explicit OIDC mode override: ``"oidc-proxy"`` or
+            ``"remote"``.  ``None`` (default) means auto-detect from which
+            OIDC env vars are present.  Bearer and multi-auth are determined
+            automatically by the presence of ``bearer_token`` and OIDC fields.
+        base_url: Public base URL of the server, required for OIDC remote mode.
+        oidc_config_url: OIDC discovery endpoint URL.
+        oidc_client_id: OIDC client identifier.
+        oidc_client_secret: OIDC client secret (logged as set/not set).
+        oidc_audience: Expected ``aud`` claim in OIDC tokens.
+        oidc_required_scopes: Comma-separated OIDC scopes to require.
+        oidc_jwt_signing_key: Key for signing session JWTs (logged as
+            set/not set).
+        oidc_verify_access_token: When ``True``, verify the OIDC access
+            token instead of the id_token (default ``False``).
+        bearer_token: Static bearer token for simple auth (logged as
+            set/not set).
+        embedding_provider: Name of the embedding provider to use (e.g.
+            ``"ollama"``, ``"openai"``, ``"fastembed"``).  ``None`` disables
+            semantic search.
+        ollama_host: Base URL for the Ollama API (default
+            ``"http://localhost:11434"``).
+        ollama_model: Ollama model name for embeddings (default
+            ``"nomic-embed-text"``).
+        ollama_cpu_only: When ``True``, request CPU-only inference from
+            Ollama (default ``False``).
+        openai_api_key: OpenAI API key for embeddings (logged as set/not
+            set).
+        fastembed_model: FastEmbed model name (default
+            ``"BAAI/bge-small-en-v1.5"``).
+        fastembed_cache_dir: Directory for FastEmbed model cache.  ``None``
+            uses the library default.
 
     Example::
 
@@ -118,12 +153,42 @@ class CollectionConfig:
     prompts_folder: str | None = None
     event_store_url: str | None = None
 
+    # Server identity
+    server_name: str = "markdown-vault-mcp"
+    instructions: str | None = None
+
+    # Auth
+    auth_mode: str | None = None
+    base_url: str | None = None
+    oidc_config_url: str | None = None
+    oidc_client_id: str | None = None
+    oidc_client_secret: str | None = None
+    oidc_audience: str | None = None
+    oidc_required_scopes: str | None = None
+    oidc_jwt_signing_key: str | None = None
+    oidc_verify_access_token: bool = False
+    bearer_token: str | None = None
+
+    # Embedding providers
+    embedding_provider: str | None = None
+    ollama_host: str = "http://localhost:11434"
+    ollama_model: str = "nomic-embed-text"
+    ollama_cpu_only: bool = False
+    openai_api_key: str | None = None
+    fastembed_model: str = "BAAI/bge-small-en-v1.5"
+    fastembed_cache_dir: str | None = None
+
+    def __post_init__(self) -> None:
+        """Normalize fields that must not be empty strings."""
+        if not self.ollama_host:
+            self.ollama_host = "http://localhost:11434"
+        self.ollama_host = self.ollama_host.rstrip("/")
+
     def to_collection_kwargs(self) -> dict[str, Any]:
         """Return keyword arguments suitable for ``Collection(**kwargs)``.
 
-        Creates a
-        :class:`~markdown_vault_mcp.git.GitWriteStrategy` and includes
-        it as the ``on_write`` parameter.
+        Resolves the embedding provider (when ``embeddings_path`` is set)
+        and creates a :class:`~markdown_vault_mcp.git.GitWriteStrategy`.
 
         Returns:
             Dict of keyword arguments accepted by
@@ -147,6 +212,21 @@ class CollectionConfig:
             "max_attachment_size_mb": self.max_attachment_size_mb,
             "git_pull_interval_s": 0,
         }
+
+        # Resolve embedding provider if embeddings_path is configured.
+        # ValueError propagates — it means the user set an invalid provider
+        # name, which is a config mistake that should not be silenced.
+        if self.embeddings_path is not None:
+            try:
+                from markdown_vault_mcp.providers import get_embedding_provider
+
+                kwargs["embedding_provider"] = get_embedding_provider(self)
+            except (ImportError, RuntimeError):
+                logger.warning(
+                    "Could not load embedding provider; semantic search disabled",
+                    exc_info=True,
+                )
+
         from markdown_vault_mcp.git import GitWriteStrategy
 
         if self.git_repo_url is not None:
@@ -211,6 +291,8 @@ def load_config() -> CollectionConfig:
 
     Reads the following environment variables:
 
+    **Core:**
+
     - ``MARKDOWN_VAULT_MCP_SOURCE_DIR`` (required): path to markdown files.
     - ``MARKDOWN_VAULT_MCP_READ_ONLY``: disable write tools; default ``true``.
     - ``MARKDOWN_VAULT_MCP_INDEX_PATH``: SQLite index path; default in-memory.
@@ -224,6 +306,9 @@ def load_config() -> CollectionConfig:
       frontmatter fields; default none.
     - ``MARKDOWN_VAULT_MCP_EXCLUDE``: comma-separated glob patterns to
       exclude; default none.
+
+    **Git:**
+
     - ``MARKDOWN_VAULT_MCP_GIT_TOKEN``: token for git write strategy; default
       disabled.
     - ``MARKDOWN_VAULT_MCP_GIT_REPO_URL``: HTTPS remote URL for managed git mode;
@@ -240,6 +325,9 @@ def load_config() -> CollectionConfig:
       init to resolve LFS pointers; default ``true``.
     - ``MARKDOWN_VAULT_MCP_GIT_PULL_INTERVAL_S``: seconds between periodic
       git fetch + ff-only updates (default ``600``). Set to ``0`` to disable.
+
+    **Attachments and templates:**
+
     - ``MARKDOWN_VAULT_MCP_ATTACHMENT_EXTENSIONS``: comma-separated list of
       allowed attachment extensions (without dot, e.g. ``pdf,png,jpg``); use
       ``*`` to allow all non-.md files; default: common document and image types.
@@ -253,9 +341,47 @@ def load_config() -> CollectionConfig:
       persistence; ``file:///path`` (default ``/data/state/events``) or
       ``memory://`` (in-memory, lost on restart).
 
-    The ``EMBEDDING_PROVIDER`` variable is intentionally **not** resolved here;
-    call :func:`~markdown_vault_mcp.providers.get_embedding_provider`
-    separately in the server layer.
+    **Server identity:**
+
+    - ``MARKDOWN_VAULT_MCP_SERVER_NAME``: display name for the MCP server;
+      default ``"markdown-vault-mcp"``.
+    - ``MARKDOWN_VAULT_MCP_INSTRUCTIONS``: server-level instructions surfaced
+      to clients; default ``None``.
+
+    **Authentication:**
+
+    - ``MARKDOWN_VAULT_MCP_AUTH_MODE``: explicit OIDC mode override
+      (``"oidc-proxy"`` or ``"remote"``); default auto-detect.  Bearer and
+      multi-auth are determined by the presence of ``BEARER_TOKEN`` and OIDC
+      fields.
+    - ``MARKDOWN_VAULT_MCP_BASE_URL``: public base URL of the server.
+    - ``MARKDOWN_VAULT_MCP_OIDC_CONFIG_URL``: OIDC discovery endpoint URL.
+    - ``MARKDOWN_VAULT_MCP_OIDC_CLIENT_ID``: OIDC client identifier.
+    - ``MARKDOWN_VAULT_MCP_OIDC_CLIENT_SECRET``: OIDC client secret.
+    - ``MARKDOWN_VAULT_MCP_OIDC_AUDIENCE``: expected ``aud`` claim in tokens.
+    - ``MARKDOWN_VAULT_MCP_OIDC_REQUIRED_SCOPES``: comma-separated required
+      OIDC scopes.
+    - ``MARKDOWN_VAULT_MCP_OIDC_JWT_SIGNING_KEY``: key for signing session
+      JWTs.
+    - ``MARKDOWN_VAULT_MCP_OIDC_VERIFY_ACCESS_TOKEN``: verify access token
+      instead of id_token; default ``false``.
+    - ``MARKDOWN_VAULT_MCP_BEARER_TOKEN``: static bearer token for simple auth.
+
+    **Embedding providers:**
+
+    - ``MARKDOWN_VAULT_MCP_EMBEDDING_PROVIDER``: embedding provider name
+      (``"ollama"``, ``"openai"``, ``"fastembed"``); default ``None``.
+    - ``OLLAMA_HOST``: Ollama API base URL (ecosystem standard, bare env var);
+      default ``"http://localhost:11434"``.
+    - ``MARKDOWN_VAULT_MCP_OLLAMA_MODEL``: Ollama model name; default
+      ``"nomic-embed-text"``.
+    - ``MARKDOWN_VAULT_MCP_OLLAMA_CPU_ONLY``: CPU-only Ollama inference;
+      default ``false``.
+    - ``OPENAI_API_KEY``: OpenAI API key (ecosystem standard, bare env var).
+    - ``MARKDOWN_VAULT_MCP_FASTEMBED_MODEL``: FastEmbed model name; default
+      ``"BAAI/bge-small-en-v1.5"``.
+    - ``MARKDOWN_VAULT_MCP_FASTEMBED_CACHE_DIR``: FastEmbed model cache
+      directory; default ``None``.
 
     Returns:
         A fully populated :class:`CollectionConfig` instance.
@@ -431,6 +557,104 @@ def load_config() -> CollectionConfig:
         "load_config: event_store_url=%s", event_store_url or "not set (file default)"
     )
 
+    # --- Server identity ---
+    raw_server_name = (_env("SERVER_NAME") or "").strip()
+    server_name: str = raw_server_name or "markdown-vault-mcp"
+    logger.debug("load_config: server_name=%s", server_name)
+
+    raw_instructions = (_env("INSTRUCTIONS") or "").strip()
+    instructions: str | None = raw_instructions or None
+    logger.debug("load_config: instructions=%s", "set" if instructions else "not set")
+
+    # --- Auth ---
+    raw_auth_mode = (_env("AUTH_MODE") or "").strip()
+    auth_mode: str | None = raw_auth_mode or None
+    logger.debug("load_config: auth_mode=%s", auth_mode or "auto-detect")
+
+    raw_base_url = (_env("BASE_URL") or "").strip()
+    base_url: str | None = raw_base_url or None
+    logger.debug("load_config: base_url=%s", base_url or "not set")
+
+    raw_oidc_config_url = (_env("OIDC_CONFIG_URL") or "").strip()
+    oidc_config_url: str | None = raw_oidc_config_url or None
+    logger.debug("load_config: oidc_config_url=%s", oidc_config_url or "not set")
+
+    raw_oidc_client_id = (_env("OIDC_CLIENT_ID") or "").strip()
+    oidc_client_id: str | None = raw_oidc_client_id or None
+    logger.debug("load_config: oidc_client_id=%s", oidc_client_id or "not set")
+
+    raw_oidc_client_secret = (_env("OIDC_CLIENT_SECRET") or "").strip()
+    oidc_client_secret: str | None = raw_oidc_client_secret or None
+    logger.debug(
+        "load_config: oidc_client_secret=%s",
+        "set" if oidc_client_secret else "not set",
+    )
+
+    raw_oidc_audience = (_env("OIDC_AUDIENCE") or "").strip()
+    oidc_audience: str | None = raw_oidc_audience or None
+    logger.debug("load_config: oidc_audience=%s", oidc_audience or "not set")
+
+    raw_oidc_required_scopes = (_env("OIDC_REQUIRED_SCOPES") or "").strip()
+    oidc_required_scopes: str | None = raw_oidc_required_scopes or None
+    logger.debug(
+        "load_config: oidc_required_scopes=%s", oidc_required_scopes or "not set"
+    )
+
+    raw_oidc_jwt_signing_key = (_env("OIDC_JWT_SIGNING_KEY") or "").strip()
+    oidc_jwt_signing_key: str | None = raw_oidc_jwt_signing_key or None
+    logger.debug(
+        "load_config: oidc_jwt_signing_key=%s",
+        "set" if oidc_jwt_signing_key else "not set",
+    )
+
+    raw_oidc_verify_access_token = _env("OIDC_VERIFY_ACCESS_TOKEN")
+    oidc_verify_access_token: bool = (
+        _parse_bool(raw_oidc_verify_access_token)
+        if raw_oidc_verify_access_token is not None
+        else False
+    )
+    logger.debug("load_config: oidc_verify_access_token=%s", oidc_verify_access_token)
+
+    raw_bearer_token = (_env("BEARER_TOKEN") or "").strip()
+    bearer_token: str | None = raw_bearer_token or None
+    logger.debug("load_config: bearer_token=%s", "set" if bearer_token else "not set")
+
+    # --- Embedding providers ---
+    raw_embedding_provider = (_env("EMBEDDING_PROVIDER") or "").strip()
+    embedding_provider: str | None = raw_embedding_provider or None
+    logger.debug("load_config: embedding_provider=%s", embedding_provider or "not set")
+
+    ollama_host: str = (
+        os.environ.get("OLLAMA_HOST") or "http://localhost:11434"
+    ).rstrip("/")
+    logger.debug("load_config: ollama_host=%s", ollama_host)
+
+    raw_ollama_model = (_env("OLLAMA_MODEL") or "").strip()
+    ollama_model: str = raw_ollama_model or "nomic-embed-text"
+    logger.debug("load_config: ollama_model=%s", ollama_model)
+
+    raw_ollama_cpu_only = _env("OLLAMA_CPU_ONLY")
+    ollama_cpu_only: bool = (
+        _parse_bool(raw_ollama_cpu_only) if raw_ollama_cpu_only is not None else False
+    )
+    logger.debug("load_config: ollama_cpu_only=%s", ollama_cpu_only)
+
+    raw_openai_api_key = (os.environ.get("OPENAI_API_KEY") or "").strip()
+    openai_api_key: str | None = raw_openai_api_key or None
+    logger.debug(
+        "load_config: openai_api_key=%s", "set" if openai_api_key else "not set"
+    )
+
+    raw_fastembed_model = (_env("FASTEMBED_MODEL") or "").strip()
+    fastembed_model: str = raw_fastembed_model or "BAAI/bge-small-en-v1.5"
+    logger.debug("load_config: fastembed_model=%s", fastembed_model)
+
+    raw_fastembed_cache_dir = (_env("FASTEMBED_CACHE_DIR") or "").strip()
+    fastembed_cache_dir: str | None = raw_fastembed_cache_dir or None
+    logger.debug(
+        "load_config: fastembed_cache_dir=%s", fastembed_cache_dir or "not set"
+    )
+
     return CollectionConfig(
         source_dir=source_dir,
         read_only=read_only,
@@ -453,4 +677,322 @@ def load_config() -> CollectionConfig:
         templates_folder=templates_folder,
         prompts_folder=prompts_folder,
         event_store_url=event_store_url,
+        server_name=server_name,
+        instructions=instructions,
+        auth_mode=auth_mode,
+        base_url=base_url,
+        oidc_config_url=oidc_config_url,
+        oidc_client_id=oidc_client_id,
+        oidc_client_secret=oidc_client_secret,
+        oidc_audience=oidc_audience,
+        oidc_required_scopes=oidc_required_scopes,
+        oidc_jwt_signing_key=oidc_jwt_signing_key,
+        oidc_verify_access_token=oidc_verify_access_token,
+        bearer_token=bearer_token,
+        embedding_provider=embedding_provider,
+        ollama_host=ollama_host,
+        ollama_model=ollama_model,
+        ollama_cpu_only=ollama_cpu_only,
+        openai_api_key=openai_api_key,
+        fastembed_model=fastembed_model,
+        fastembed_cache_dir=fastembed_cache_dir,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Auth builder functions
+# ---------------------------------------------------------------------------
+
+
+def _parse_scopes(raw: str | None) -> list[str] | None:
+    """Parse a comma-separated scopes string into a list.
+
+    Args:
+        raw: Comma-separated scopes string, or ``None``.
+
+    Returns:
+        List of non-empty scope strings, or ``None`` when *raw* is
+        ``None`` or blank.
+    """
+    if not raw:
+        return None
+    return [s.strip() for s in raw.split(",") if s.strip()] or None
+
+
+def resolve_auth_mode(config: CollectionConfig) -> str | None:
+    """Determine which OIDC auth mode to use.
+
+    Checks ``config.auth_mode`` for an explicit override.  When not set,
+    auto-detects based on which config fields are populated:
+
+    - All four OIDC fields (base_url, oidc_config_url, oidc_client_id,
+      oidc_client_secret) -> ``"oidc-proxy"``
+    - Only base_url + oidc_config_url -> ``"remote"``
+    - Otherwise -> ``None`` (no OIDC)
+
+    Args:
+        config: Populated configuration object.
+
+    Returns:
+        ``"remote"``, ``"oidc-proxy"``, or ``None``.
+    """
+    explicit = (config.auth_mode or "").strip().lower()
+    if explicit in ("remote", "oidc-proxy"):
+        logger.info("OIDC auth mode: %s (explicit via AUTH_MODE)", explicit)
+        return explicit
+    if explicit:
+        logger.warning(
+            "Unknown AUTH_MODE %r — ignoring, falling back to auto-detection",
+            explicit,
+        )
+
+    if all(
+        [
+            config.base_url,
+            config.oidc_config_url,
+            config.oidc_client_id,
+            config.oidc_client_secret,
+        ]
+    ):
+        logger.info(
+            "OIDC auth mode: oidc-proxy (auto-detected — all four OIDC vars set)"
+        )
+        return "oidc-proxy"
+
+    if config.base_url and config.oidc_config_url:
+        logger.info(
+            "OIDC auth mode: remote (auto-detected — BASE_URL + OIDC_CONFIG_URL set)"
+        )
+        return "remote"
+
+    return None
+
+
+def build_remote_auth(config: CollectionConfig) -> Any:
+    """Build a RemoteAuthProvider from OIDC discovery.
+
+    Fetches the OIDC discovery document at startup to extract ``jwks_uri``
+    and ``issuer``, then constructs a ``JWTVerifier`` for local token
+    validation via JWKS.  No client credentials are needed -- tokens are
+    validated locally.
+
+    Requires ``base_url`` and ``oidc_config_url`` on *config*.
+
+    Args:
+        config: Populated configuration object.
+
+    Returns:
+        A configured ``RemoteAuthProvider``, or ``None`` when required
+        fields are missing or the discovery fetch fails.
+    """
+    if not config.base_url or not config.oidc_config_url:
+        logger.debug("Remote auth: disabled — missing BASE_URL or OIDC_CONFIG_URL")
+        return None
+
+    audience = config.oidc_audience
+    required_scopes = _parse_scopes(config.oidc_required_scopes)
+
+    try:
+        import httpx
+    except ImportError:
+        logger.error(
+            "Remote auth: 'httpx' is not installed. "
+            "Install it with: pip install 'markdown-vault-mcp[all]' "
+            "or pip install httpx"
+        )
+        return None
+
+    try:
+        resp = httpx.get(config.oidc_config_url, timeout=10)
+        resp.raise_for_status()
+        discovery = resp.json()
+    except Exception:
+        logger.exception(
+            "Remote auth: failed to fetch OIDC discovery from %s",
+            config.oidc_config_url,
+        )
+        return None
+
+    jwks_uri = discovery.get("jwks_uri")
+    issuer = discovery.get("issuer")
+    if not jwks_uri or not issuer:
+        logger.error(
+            "Remote auth: OIDC discovery missing jwks_uri or issuer "
+            "(got jwks_uri=%s, issuer=%s)",
+            jwks_uri,
+            issuer,
+        )
+        return None
+
+    logger.debug(
+        "Remote auth config:\n"
+        "  config_url      = %s\n"
+        "  jwks_uri        = %s\n"
+        "  issuer          = %s\n"
+        "  base_url        = %s\n"
+        "  audience        = %s\n"
+        "  required_scopes = %s",
+        config.oidc_config_url,
+        jwks_uri,
+        issuer,
+        config.base_url,
+        audience or "(not set)",
+        required_scopes or "(not set)",
+    )
+
+    from fastmcp.server.auth import JWTVerifier, RemoteAuthProvider
+
+    verifier = JWTVerifier(
+        jwks_uri=jwks_uri,
+        issuer=issuer,
+        audience=audience,
+        required_scopes=required_scopes,
+    )
+    return RemoteAuthProvider(
+        token_verifier=verifier,
+        authorization_servers=[issuer],
+        base_url=config.base_url,
+    )
+
+
+def build_bearer_auth(config: CollectionConfig) -> Any:
+    """Build a StaticTokenVerifier from ``config.bearer_token``.
+
+    When the bearer token is set (non-empty), returns a
+    :class:`~fastmcp.server.auth.StaticTokenVerifier` that validates
+    ``Authorization: Bearer <token>`` headers against the configured
+    static token.
+
+    Args:
+        config: Populated configuration object.
+
+    Returns:
+        A configured ``StaticTokenVerifier``, or ``None`` when the
+        bearer token is absent or empty.
+    """
+    token = (config.bearer_token or "").strip()
+    if not token:
+        logger.debug("Bearer auth: BEARER_TOKEN not set — skipping")
+        return None
+    logger.debug("Bearer auth: BEARER_TOKEN is set (value redacted)")
+    from fastmcp.server.auth import StaticTokenVerifier
+
+    return StaticTokenVerifier(
+        tokens={token: {"client_id": "bearer", "scopes": ["read", "write"]}}
+    )
+
+
+def build_oidc_auth(config: CollectionConfig) -> Any:
+    """Build an OIDCProxy auth provider from configuration, or return None.
+
+    All four of ``base_url``, ``oidc_config_url``, ``oidc_client_id``,
+    and ``oidc_client_secret`` must be set on *config* to enable
+    authentication.  If any is absent the server starts unauthenticated.
+
+    By default the proxy verifies the upstream ``id_token`` (a standard
+    JWT per OIDC Core) instead of the ``access_token``.  This works with
+    every OIDC provider -- including those that issue opaque access
+    tokens (e.g. Authelia).  Set ``oidc_verify_access_token=True`` on
+    *config* to revert to access-token verification.
+
+    Args:
+        config: Populated configuration object.
+
+    Returns:
+        A configured :class:`~fastmcp.server.auth.oidc_proxy.OIDCProxy`
+        instance, or ``None`` when authentication is disabled.
+    """
+    # Check required fields.  The secret is checked separately so it never
+    # enters the dict that feeds the logged "missing" list — this keeps
+    # CodeQL's taint analysis happy.
+    required_public = {
+        "BASE_URL": config.base_url,
+        "OIDC_CONFIG_URL": config.oidc_config_url,
+        "OIDC_CLIENT_ID": config.oidc_client_id,
+    }
+    has_secret = bool(config.oidc_client_secret)
+
+    if not all(required_public.values()) or not has_secret:
+        missing = [k for k, v in required_public.items() if not v]
+        if not has_secret:
+            missing.append("OIDC_CLIENT_SECRET")
+        logger.debug("OIDC auth: disabled — missing env vars: %s", ", ".join(missing))
+        return None
+
+    # All four are guaranteed non-None after the guard above.
+    oidc_base_url: str = config.base_url  # type: ignore[assignment]
+    oidc_config_url: str = config.oidc_config_url  # type: ignore[assignment]
+    oidc_client_id: str = config.oidc_client_id  # type: ignore[assignment]
+    oidc_client_secret: str = config.oidc_client_secret  # type: ignore[assignment]
+
+    from fastmcp.server.auth.oidc_proxy import OIDCProxy
+
+    jwt_signing_key = config.oidc_jwt_signing_key
+    audience = config.oidc_audience
+
+    # Parse scopes: default to ["openid"] when not set.
+    raw_scopes = _parse_scopes(config.oidc_required_scopes)
+    required_scopes = raw_scopes if raw_scopes is not None else ["openid"]
+
+    # Default: verify id_token (works with all providers, including opaque
+    # access-token issuers like Authelia).
+    verify_access_token = config.oidc_verify_access_token
+    verify_id_token = not verify_access_token
+
+    logger.debug(
+        "OIDC auth config:\n"
+        "  config_url          = %s\n"
+        "  client_id           = %s\n"
+        "  client_secret       = <redacted>\n"
+        "  base_url            = %s\n"
+        "  audience            = %s\n"
+        "  required_scopes     = %s\n"
+        "  jwt_signing_key     = %s\n"
+        "  verify_id_token     = %s\n"
+        "  verify_access_token = %s",
+        oidc_config_url,
+        oidc_client_id,
+        oidc_base_url,
+        audience or "(not set)",
+        required_scopes,
+        "(set)" if jwt_signing_key else "(not set)",
+        verify_id_token,
+        verify_access_token,
+    )
+
+    if verify_id_token and "openid" not in required_scopes:
+        logger.warning(
+            "OIDC: verify_id_token=True requires the 'openid' scope but it is "
+            "not in MARKDOWN_VAULT_MCP_OIDC_REQUIRED_SCOPES — the id_token may "
+            "be absent from the token response; add 'openid' to the scope list "
+            "or set MARKDOWN_VAULT_MCP_OIDC_VERIFY_ACCESS_TOKEN=true"
+        )
+
+    if jwt_signing_key is None and sys.platform.startswith("linux"):
+        logger.warning(
+            "OIDC: MARKDOWN_VAULT_MCP_OIDC_JWT_SIGNING_KEY is not set — "
+            "the JWT signing key is ephemeral on Linux; all clients must "
+            "re-authenticate after every server restart"
+        )
+
+    if verify_id_token:
+        logger.info(
+            "OIDC: verifying upstream id_token (works with opaque access tokens)"
+        )
+    else:
+        logger.info(
+            "OIDC: verifying upstream access_token as JWT "
+            "(MARKDOWN_VAULT_MCP_OIDC_VERIFY_ACCESS_TOKEN=true)"
+        )
+
+    return OIDCProxy(
+        config_url=oidc_config_url,
+        client_id=oidc_client_id,
+        client_secret=oidc_client_secret,
+        base_url=oidc_base_url,
+        audience=audience,
+        required_scopes=required_scopes,
+        jwt_signing_key=jwt_signing_key,
+        verify_id_token=verify_id_token,
+        require_authorization_consent=False,
     )
