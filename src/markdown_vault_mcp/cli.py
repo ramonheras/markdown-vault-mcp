@@ -111,7 +111,7 @@ def _cmd_serve(args: argparse.Namespace) -> None:
             app,
             host=args.host,
             port=args.port,
-            timeout_graceful_shutdown=0,
+            timeout_graceful_shutdown=3,
             lifespan="on",
         )
     else:

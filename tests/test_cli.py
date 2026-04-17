@@ -284,7 +284,7 @@ class TestCmdServe:
             mock_app,
             host="127.0.0.1",
             port=9000,
-            timeout_graceful_shutdown=0,
+            timeout_graceful_shutdown=3,
             lifespan="on",
         )
 
