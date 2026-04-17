@@ -379,7 +379,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           repository: pvliesdonk/claude-plugins
-          token: ${{ secrets.CLAUDE_PLUGINS_PAT }}
+          token: ${{ secrets.RELEASE_TOKEN }}
           path: catalog
       - name: Bump marketplace.json entry
         env:
@@ -398,7 +398,7 @@ jobs:
         uses: peter-evans/create-pull-request@v8
         with:
           path: catalog
-          token: ${{ secrets.CLAUDE_PLUGINS_PAT }}
+          token: ${{ secrets.RELEASE_TOKEN }}
           branch: bump/markdown-vault-mcp-${{ needs.release.outputs.version }}
           title: "chore: bump markdown-vault-mcp to v${{ needs.release.outputs.version }}"
           body: |
