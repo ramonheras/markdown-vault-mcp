@@ -149,9 +149,9 @@ def register_apps(mcp: FastMCP) -> None:
                 Defaults to ``"context"`` if a path is given, ``"browse"`` otherwise.
 
         Returns:
-            - ``path``: the requested path (or ``null``)
-            - ``view``: the requested view
-            - ``summary``: text summary for non-Apps clients
+            - path (str | None): The requested note path, or null if none given.
+            - view (str): The active view ("context", "graph", "browse", or "note").
+            - summary (str): Text summary of vault or note state for non-Apps clients.
         """
         effective_view = view or ("context" if path else "browse")
         summary_parts: list[str] = []
@@ -183,6 +183,7 @@ def register_apps(mcp: FastMCP) -> None:
     # -- App-only tools (hidden from LLM, used by SPA via callServerTool) ---
 
     @mcp.tool(
+        icons=_TOOL_ICONS["vault_context"],
         annotations={
             "readOnlyHint": True,
             "destructiveHint": False,
@@ -205,7 +206,9 @@ def register_apps(mcp: FastMCP) -> None:
             path: Relative note path (e.g. ``"Journal/2024-01-15.md"``).
 
         Returns:
-            NoteContext as a JSON-serializable dict.
+            Dict with path, title, folder, frontmatter, modified_at, backlinks,
+            outlinks, similar, folder_notes, and tags — see 'get_context' for
+            field details. Returns {"error": "..."} if the note is not found.
         """
         try:
             ctx = await asyncio.to_thread(collection.get_context, path)
@@ -240,9 +243,9 @@ def register_apps(mcp: FastMCP) -> None:
             path: Relative note path (e.g. ``"Journal/2024-01-15.md"``).
 
         Returns:
-            - ``path``: the note path
-            - ``view``: ``"context"``
-            - ``summary``: text summary with relationship counts
+            - path (str): The note path.
+            - view (str): Always "context".
+            - summary (str): Text summary with backlink, outlink, and similarity counts.
         """
         try:
             ctx = await asyncio.to_thread(collection.get_context, path)
@@ -271,6 +274,7 @@ def register_apps(mcp: FastMCP) -> None:
         }
 
     @mcp.tool(
+        icons=_TOOL_ICONS["vault_graph_neighborhood"],
         annotations={
             "readOnlyHint": True,
             "destructiveHint": False,
@@ -299,7 +303,21 @@ def register_apps(mcp: FastMCP) -> None:
                 silently omitted when unavailable).
 
         Returns:
-            ``{nodes: [{id, label, group, folder, backlink_count}], edges: [{from, to, type}]}``
+            Dict with:
+
+            - nodes (list): List of dicts, each with:
+
+              - id (str): Unique identifier for the node.
+              - label (str): Display name for the node.
+              - group (str): "note" or "orphan".
+              - folder (str): Parent folder path.
+              - backlink_count (int): Number of inbound links.
+
+            - edges (list): List of dicts, each with:
+
+              - from (str): Source node ID.
+              - to (str): Target node ID.
+              - type (str): "markdown", "wikilink", "reference", or "semantic".
         """
         nodes: dict[str, dict[str, Any]] = {}
         edges: list[dict[str, Any]] = []
@@ -429,6 +447,7 @@ def register_apps(mcp: FastMCP) -> None:
         return {"nodes": list(nodes.values()), "edges": unique_edges}
 
     @mcp.tool(
+        icons=_TOOL_ICONS["vault_graph_hubs"],
         annotations={
             "readOnlyHint": True,
             "destructiveHint": False,
@@ -451,7 +470,21 @@ def register_apps(mcp: FastMCP) -> None:
             limit: Max number of hub notes to include.
 
         Returns:
-            ``{nodes: [{id, label, group, backlink_count}], edges: [{from, to, type}]}``
+            Dict with:
+
+            - nodes (list): List of dicts, each with:
+
+              - id (str): Unique identifier for the node.
+              - label (str): Display name for the node.
+              - group (str): "hub" or "note".
+              - folder (str): Parent folder path.
+              - backlink_count (int): Number of inbound links.
+
+            - edges (list): List of dicts, each with:
+
+              - from (str): Source node ID.
+              - to (str): Target node ID.
+              - type (str): "markdown", "wikilink", or "reference".
         """
         hubs = await asyncio.to_thread(collection.get_most_linked, limit=limit)
         nodes: dict[str, dict[str, Any]] = {}
@@ -505,6 +538,7 @@ def register_apps(mcp: FastMCP) -> None:
         return {"nodes": list(nodes.values()), "edges": edges}
 
     @mcp.tool(
+        icons=_TOOL_ICONS["vault_list"],
         annotations={
             "readOnlyHint": True,
             "destructiveHint": False,
@@ -527,7 +561,15 @@ def register_apps(mcp: FastMCP) -> None:
             folder: Folder to list (root if omitted).
 
         Returns:
-            ``{folders: [str], notes: [{path, title, kind}]}``
+            Dict with:
+
+            - folders (list[str]): Direct child folder paths.
+            - notes (list): Notes directly inside this folder. List of dicts,
+              each with:
+
+              - path (str): Relative path of the note.
+              - title (str): Document title.
+              - kind (str): "note" or "attachment".
         """
         docs = await asyncio.to_thread(
             collection.list, folder=folder, include_attachments=True
@@ -562,6 +604,7 @@ def register_apps(mcp: FastMCP) -> None:
         return {"folders": child_folders, "notes": notes}
 
     @mcp.tool(
+        icons=_TOOL_ICONS["vault_read"],
         annotations={
             "readOnlyHint": True,
             "destructiveHint": False,
@@ -584,7 +627,8 @@ def register_apps(mcp: FastMCP) -> None:
             path: Relative note path.
 
         Returns:
-            ``{path, title, frontmatter, content, modified_at}`` or ``null``.
+            Dict with path, title, frontmatter, content (markdown body), and
+            modified_at (Unix timestamp), or null if the note is not found.
         """
         note = await asyncio.to_thread(collection.read, path)
         if note is None:
@@ -598,6 +642,7 @@ def register_apps(mcp: FastMCP) -> None:
         }
 
     @mcp.tool(
+        icons=_TOOL_ICONS["vault_search"],
         annotations={
             "readOnlyHint": True,
             "destructiveHint": False,
@@ -624,7 +669,9 @@ def register_apps(mcp: FastMCP) -> None:
             limit: Max results.
 
         Returns:
-            List of ``{path, title, snippet, score}``.
+            List of result dicts, each with path (str), title (str),
+            snippet (str, first 200 chars of matched chunk), and
+            score (float). Returns [{"error": "..."}] on search failure.
         """
         try:
             results = await asyncio.to_thread(

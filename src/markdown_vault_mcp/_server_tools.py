@@ -112,9 +112,18 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
                 document where "pacing" appears in the tags list.
 
         Returns:
-            List of result dicts ranked by relevance (higher score is better).
-            Each contains: path, title, folder, content (matched chunk),
-            score, frontmatter.
+            List of result dicts ranked by relevance. Each contains:
+
+            - path (str): Relative path of the document.
+            - title (str): Document title.
+            - folder (str): Parent folder path.
+            - heading (str | None): Section heading of the matched chunk,
+              or null for the document intro.
+            - content (str): Matched chunk text (not the full document).
+            - score (float): BM25 relevance score (keyword mode) or cosine
+              similarity 0.0-1.0 (semantic/hybrid); higher = better match.
+            - search_type (str): "keyword" or "semantic".
+            - frontmatter (dict): Parsed YAML frontmatter of the document.
 
         Raises:
             ValueError: If mode is "semantic" or "hybrid" and no embedding
@@ -339,10 +348,13 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
         scratch after changing the embedding model.
 
         Returns:
-            Dict with available (bool), provider (str or null — provider class
-            name when configured, e.g. "OllamaProvider"), chunk_count (int —
-            embedded chunks in the vector index), and path (str or null —
-            vector index file path when configured).
+            Dict with the following fields:
+
+            - available (bool): True if semantic search can be used in 'search'.
+            - provider (str | None): Provider class name when configured
+              (e.g. "OllamaProvider"), or null if not configured.
+            - chunk_count (int): Number of chunks currently in the vector index.
+            - path (str | None): Vector index file path when persisted, or null.
         """
         return await asyncio.to_thread(collection.embeddings_status)
 
@@ -502,9 +514,16 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
             limit: Maximum number of similar notes to return (default 10).
 
         Returns:
-            List of result dicts ranked by similarity (higher score is
-            more similar). Each contains: path, title, folder, content
-            (most similar chunk), score, search_type ("semantic").
+            List of result dicts ranked by similarity. Each contains:
+
+            - path (str): Relative path of the similar document.
+            - title (str): Document title.
+            - folder (str): Parent folder path.
+            - heading (str | None): Section heading of the most similar chunk.
+            - content (str): Most similar chunk text.
+            - score (float): Cosine similarity, 0.0-1.0; higher = more similar.
+            - search_type (str): Always "semantic".
+            - frontmatter (dict): Parsed YAML frontmatter.
 
         Raises:
             ValueError: If no document exists at the given path.
@@ -587,15 +606,43 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
                 each (default 10).
 
         Returns:
-            Dict with: path, title, folder, frontmatter (dict),
-            modified_at (Unix timestamp), backlinks (list), outlinks (list),
-            similar (list of {path, title, score}).
-            folder_notes (list[str]): Paths of other notes in the same folder
-            (max 20). Plain strings, not dicts — unlike backlinks/outlinks/similar.
-            tags (dict[str, list[str]]): Indexed frontmatter field → list of values.
-            backlinks and outlinks are empty if link tracking is not
-            available. similar is empty if semantic search is not configured
-            or similar_limit is 0.
+            Dict with the following fields:
+
+            - path (str): Relative path of the document.
+            - title (str): Document title.
+            - folder (str): Parent folder path.
+            - frontmatter (dict): Parsed YAML frontmatter.
+            - modified_at (float): Unix timestamp of last modification.
+            - backlinks (list): Documents linking to this note. List of dicts,
+              each with:
+
+              - source_path (str): Path of the document containing the link.
+              - source_title (str): Title of the source document.
+              - link_text (str): The clickable text of the link.
+              - link_type (str): One of "markdown", "wikilink", or "reference".
+              - fragment (str | None): Heading anchor (e.g. "#section"), or null.
+              - raw_target (str): Literal link target as written in the source.
+
+            - outlinks (list): Links from this note. List of dicts, each with:
+
+              - target_path (str): Path of the linked document.
+              - link_text (str): The clickable text of the link.
+              - link_type (str): One of "markdown", "wikilink", or "reference".
+              - fragment (str | None): Heading anchor (e.g. "#section"), or null.
+              - raw_target (str): Literal link target as written in the source.
+              - exists (bool): True if the target document is indexed.
+
+            - similar (list): Semantically similar notes. List of dicts, each
+              with:
+
+              - path (str): Relative path of the similar document.
+              - title (str): Document title.
+              - score (float): Cosine similarity, 0.0-1.0; higher = more similar.
+
+            - folder_notes (list[str]): Paths of other notes in the same
+              folder (up to 20). Plain strings, not dicts.
+            - tags (dict[str, list[str]]): Indexed frontmatter field →
+              distinct values for this note.
 
         Raises:
             ValueError: If no document exists at the given path.
@@ -760,10 +807,8 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
             - author (str): Committer name and email, e.g. "Name <email>".
             - message (str): First line of the commit message.
             - paths_changed (list[str]): Files touched by the commit.
-              Populated for vault-wide queries; always empty for single-note
-              queries because the path is already determined by the query
-              arguments — callers know which file the commit touched without
-              needing it echoed back.
+              Populated for vault-wide queries. Always [] for single-note
+              queries (the queried note path is implicit).
 
         Raises:
             ToolError: If the path is invalid.
@@ -909,7 +954,8 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
         Args:
             force: When True, discards existing embeddings and rebuilds from
                 scratch. Use only if the embedding model has changed.
-                False (default) only embeds chunks not yet embedded.
+                When False (default), only embeds chunks not yet in the
+                vector index (incremental — does not skip if any exist).
 
         Returns:
             Dict with chunks_embedded: number of chunks newly embedded.
@@ -1109,7 +1155,7 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
             Dict with path (str) of the deleted file.
 
         Raises:
-            ValueError: If no file exists at the given path.
+            DocumentNotFoundError: If no file exists at the given path.
             McpError: If if_match is provided and the file has been modified
                 (ConcurrentModificationError).
         """
@@ -1161,8 +1207,9 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
             counting the number of source documents whose links were updated.
 
         Raises:
-            ValueError: If old_path does not exist, new_path already exists,
-                or the path fails traversal validation.
+            DocumentNotFoundError: If old_path does not exist.
+            DocumentExistsError: If new_path already exists.
+            ValueError: If the path fails traversal validation.
             McpError: If if_match is provided and the file has been modified
                 (ConcurrentModificationError).
         """
@@ -1401,8 +1448,12 @@ def _register_download_link_tool(mcp: FastMCP) -> None:
                 minutes).
 
         Returns:
-            JSON with ``download_url``, ``expires_in_seconds``,
-            ``path``, and ``content_type``.
+            JSON-encoded string with the following fields:
+
+            - download_url (str): One-time HTTP URL to download the file.
+            - expires_in_seconds (int): Link lifetime (equals ttl_seconds).
+            - path (str): Vault-relative path of the served file.
+            - content_type (str): MIME type of the file.
 
         Raises:
             ValueError: If ``MARKDOWN_VAULT_MCP_BASE_URL`` is not
