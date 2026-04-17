@@ -392,8 +392,8 @@ jobs:
               then .version = $v | .source.ref = $ref
               else . end
             )
-          ' .claude-plugin/marketplace.json > marketplace.json.tmp
-          mv marketplace.json.tmp .claude-plugin/marketplace.json
+          ' marketplace.json > marketplace.json.tmp
+          mv marketplace.json.tmp marketplace.json
       - name: Create pull request
         uses: peter-evans/create-pull-request@v8
         with:
