@@ -2,7 +2,7 @@
 title: "{{title}}"
 type: permanent
 tags: []
-created: {{date}}
+created: "{{date}}"
 ---
 
 # {{title}}

@@ -2,7 +2,7 @@
 title: "{{title}} (MOC)"
 type: moc
 tags: [moc]
-created: {{date}}
+created: "{{date}}"
 ---
 
 # {{title}}

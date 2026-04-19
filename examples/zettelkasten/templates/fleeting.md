@@ -2,7 +2,7 @@
 title: "{{title}}"
 type: fleeting
 tags: []
-created: {{date}}
+created: "{{date}}"
 ---
 
 # {{title}}

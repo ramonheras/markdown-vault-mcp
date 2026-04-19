@@ -3,7 +3,7 @@ title: "{{title}}"
 type: literature
 tags: []
 source: "{{source}}"
-created: {{date}}
+created: "{{date}}"
 ---
 
 # {{title}}
