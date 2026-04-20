@@ -31,6 +31,7 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = [
+    "fastmcp-pvl-core==1.0.0rc1",
     "python-frontmatter>=1.0",
     "requests>=2.33.0",
 ]
@@ -156,6 +157,13 @@ module = [
 # Phase 1 modules have structural type issues (FTSResult used as dict,
 # numpy dtype mismatches).  TODO: fix in a dedicated type-safety PR.
 ignore_errors = true
+
+[tool.pyright]
+# Point Pyright at the uv-managed venv so editor diagnostics resolve
+# imports the same way as our CLI tools (mypy/ruff/pytest run via uv).
+venvPath = "."
+venv = ".venv"
+pythonVersion = "3.11"
 
 [tool.semantic_release]
 version_toml = ["pyproject.toml:project.version"]
