@@ -3,7 +3,7 @@
     "command": "uvx",
     "args": [
       "--from",
-      "markdown-vault-mcp[all]==1.23.2-rc.1",
+      "markdown-vault-mcp[all]==1.23.1",
       "markdown-vault-mcp",
       "serve"
     ],
