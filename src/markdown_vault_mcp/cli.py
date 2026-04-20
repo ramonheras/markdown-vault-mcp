@@ -15,7 +15,7 @@ import sys
 from dataclasses import asdict
 from pathlib import Path
 
-from fastmcp.utilities.logging import configure_logging
+from fastmcp_pvl_core import configure_logging_from_env
 
 from markdown_vault_mcp.collection import Collection
 from markdown_vault_mcp.config import _ENV_PREFIX, load_config
@@ -310,21 +310,17 @@ def main() -> None:
     parser = _build_parser()
     args = parser.parse_args()
 
-    # App loggers (markdown_vault_mcp.*) propagate to root; FastMCP
-    # loggers (fastmcp.*) have propagate=False and are configured via
-    # FASTMCP_LOG_LEVEL at import time.  -v overrides both to DEBUG.
-    level = logging.DEBUG if args.verbose else logging.INFO
+    configure_logging_from_env(verbose=args.verbose)
+
+    # Root handler for markdown_vault_mcp.* — FastMCP's configure_logging only covers its own logger tree.
     root = logging.getLogger()
-    root.setLevel(level)
     if not root.handlers:
         handler = logging.StreamHandler()
         handler.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
         root.addHandler(handler)
 
+    # Silence httpx/httpcore at DEBUG — kept inline, core doesn't own these deps.
     if args.verbose:
-        os.environ["FASTMCP_LOG_LEVEL"] = "DEBUG"
-        configure_logging("DEBUG")
-        # httpx is noisy at DEBUG — keep it at WARNING.
         logging.getLogger("httpx").setLevel(logging.WARNING)
         logging.getLogger("httpcore").setLevel(logging.WARNING)
 
