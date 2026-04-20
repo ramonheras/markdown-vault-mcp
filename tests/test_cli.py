@@ -39,7 +39,7 @@ class TestBuildParser:
         assert args.transport == "http"
         assert args.host == "127.0.0.1"
         assert args.port == 8000
-        assert args.path is None
+        assert args.http_path is None
 
     def test_serve_http_custom_host_port(self) -> None:
         parser = _build_parser()
@@ -53,10 +53,22 @@ class TestBuildParser:
     def test_serve_http_custom_path(self) -> None:
         parser = _build_parser()
         args = parser.parse_args(
-            ["serve", "--transport", "http", "--path", "/vault/mcp"]
+            ["serve", "--transport", "http", "--http-path", "/vault/mcp"]
         )
         assert args.transport == "http"
-        assert args.path == "/vault/mcp"
+        assert args.http_path == "/vault/mcp"
+
+    def test_serve_legacy_path_alias_still_works(self) -> None:
+        """The legacy --path spelling is kept as an alias for --http-path.
+
+        Protects existing Dockerfiles, systemd units, and service configs
+        from the rename; the argparse dest remains ``http_path``.
+        """
+        parser = _build_parser()
+        args = parser.parse_args(
+            ["serve", "--transport", "http", "--path", "/legacy/mcp"]
+        )
+        assert args.http_path == "/legacy/mcp"
 
     def test_index_command(self) -> None:
         parser = _build_parser()
@@ -307,7 +319,7 @@ class TestCmdServe:
         mock_build_es: MagicMock,
         _mock_uvicorn_run: MagicMock,
     ) -> None:
-        """_cmd_serve passes custom --path to http_app()."""
+        """_cmd_serve passes custom --http-path to http_app()."""
         mock_server = MagicMock()
         mock_create.return_value = mock_server
         mock_config = MagicMock()
@@ -317,7 +329,7 @@ class TestCmdServe:
         mock_server.http_app.return_value = MagicMock()
 
         args = _build_parser().parse_args(
-            ["serve", "--transport", "http", "--path", "/vault/mcp"]
+            ["serve", "--transport", "http", "--http-path", "/vault/mcp"]
         )
         _cmd_serve(args)
 
@@ -336,7 +348,7 @@ class TestCmdServe:
         mock_build_es: MagicMock,
         _mock_uvicorn_run: MagicMock,
     ) -> None:
-        """_cmd_serve normalises --path by adding leading slash and trimming tail."""
+        """_cmd_serve normalises --http-path by adding leading slash and trimming tail."""
         mock_server = MagicMock()
         mock_create.return_value = mock_server
         mock_config = MagicMock()
@@ -346,7 +358,7 @@ class TestCmdServe:
         mock_server.http_app.return_value = MagicMock()
 
         args = _build_parser().parse_args(
-            ["serve", "--transport", "http", "--path", "vault/mcp/"]
+            ["serve", "--transport", "http", "--http-path", "vault/mcp/"]
         )
         _cmd_serve(args)
 
@@ -365,7 +377,7 @@ class TestCmdServe:
         mock_build_es: MagicMock,
         _mock_uvicorn_run: MagicMock,
     ) -> None:
-        """_cmd_serve uses MARKDOWN_VAULT_MCP_HTTP_PATH when --path is omitted."""
+        """_cmd_serve uses MARKDOWN_VAULT_MCP_HTTP_PATH when --http-path is omitted."""
         mock_server = MagicMock()
         mock_create.return_value = mock_server
         mock_config = MagicMock()
@@ -393,7 +405,7 @@ class TestCmdServe:
         mock_build_es: MagicMock,
         _mock_uvicorn_run: MagicMock,
     ) -> None:
-        """_cmd_serve --path takes precedence over MARKDOWN_VAULT_MCP_HTTP_PATH."""
+        """_cmd_serve --http-path takes precedence over MARKDOWN_VAULT_MCP_HTTP_PATH."""
         mock_server = MagicMock()
         mock_create.return_value = mock_server
         mock_config = MagicMock()
@@ -404,7 +416,7 @@ class TestCmdServe:
 
         with patch.dict("os.environ", {"MARKDOWN_VAULT_MCP_HTTP_PATH": "/from-env"}):
             args = _build_parser().parse_args(
-                ["serve", "--transport", "http", "--path", "/from-cli"]
+                ["serve", "--transport", "http", "--http-path", "/from-cli"]
             )
             _cmd_serve(args)
 
