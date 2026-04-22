@@ -157,6 +157,7 @@ class CollectionConfig:
         collection = Collection(**config.to_collection_kwargs())
     """
 
+    # CONFIG-FIELDS-START — domain fields; kept across copier update
     source_dir: Path
     read_only: bool = True
     index_path: Path | None = None
@@ -203,6 +204,7 @@ class CollectionConfig:
     openai_api_key: str | None = None
     fastembed_model: str = "BAAI/bge-small-en-v1.5"
     fastembed_cache_dir: str | None = None
+    # CONFIG-FIELDS-END
 
     # Universal server fields delegated to fastmcp_pvl_core.ServerConfig.
     # Domain-specific fields above remain on CollectionConfig; subsequent
@@ -688,6 +690,7 @@ def load_config() -> CollectionConfig:
     )
 
     return CollectionConfig(
+        # CONFIG-FROM-ENV-START — domain fields populated from env; kept across copier update
         source_dir=source_dir,
         read_only=read_only,
         index_path=index_path,
@@ -728,6 +731,7 @@ def load_config() -> CollectionConfig:
         openai_api_key=openai_api_key,
         fastembed_model=fastembed_model,
         fastembed_cache_dir=fastembed_cache_dir,
+        # CONFIG-FROM-ENV-END
         server=ServerConfig.from_env(_ENV_PREFIX),
     )
 
