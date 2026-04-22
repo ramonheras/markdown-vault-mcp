@@ -3,11 +3,12 @@
 Generic markdown collection MCP server with FTS5 + semantic search, frontmatter-aware indexing, and incremental reindexing.
 
 ## Design
-
+<!-- DOMAIN-START -->
 The authoritative design specification lives at [`docs/design.md`](docs/design.md). All implementation must conform to this spec. When in doubt, the design doc wins.
+<!-- DOMAIN-END -->
 
 ## Project Structure
-
+<!-- DOMAIN-START -->
 ```
 src/markdown_vault_mcp/
   utils/
@@ -28,10 +29,17 @@ src/markdown_vault_mcp/
   server.py            -- generic FastMCP server factory (make_server) with tool annotations
   cli.py               -- CLI entry point
 ```
+<!-- DOMAIN-END -->
+
+## Reference
+
+This project is extracted from [`pvliesdonk/if-craft-corpus`](https://github.com/pvliesdonk/if-craft-corpus). See the design doc's Reference Code section for the mapping between source files.
+
+<!-- ===== TEMPLATE-OWNED SECTIONS BELOW — DO NOT EDIT; CHANGES WILL BE OVERWRITTEN ON COPIER UPDATE ===== -->
 
 ## Conventions
 
-- Python 3.10+
+- Python 3.11+
 - `uv` for package management, `ruff` for linting/formatting (line length 88)
 - `hatchling` build backend
 - Conventional commits: `feat:`, `fix:`, `docs:`, `refactor:`, `test:`, `chore:`
@@ -60,10 +68,6 @@ GitHub has two distinct review mechanisms — **both must be read and addressed*
 
 Always fetch both before declaring a review round complete.
 
-## Reference
-
-This project is extracted from [`pvliesdonk/if-craft-corpus`](https://github.com/pvliesdonk/if-craft-corpus). See the design doc's Reference Code section for the mapping between source files.
-
 ## Documentation Discipline
 
 Every issue, PR, and code change must consider documentation impact. Before closing any issue or creating any PR, check whether the following need updating:
@@ -85,10 +89,6 @@ Every issue, PR, and code change must consider documentation impact. Before clos
 - **Inline docstrings** — new or changed public API methods need accurate docstrings.
 
 **Rule: code without matching docs is incomplete.** When writing issues, include a "Documentation" section listing which docs need updating. When reviewing PRs, verify documentation is included. A PR that adds a tool, env var, resource, or user-facing feature without updating the corresponding docs/ page and README section should not be merged.
-
-## Shared Infrastructure
-
-Shared infrastructure (auth, middleware, logging, event store, CLI scaffolding, release pipeline, Docker/packaging) lives upstream in [`fastmcp-pvl-core`](https://github.com/pvliesdonk/fastmcp-pvl-core) (library) and [`fastmcp-server-template`](https://github.com/pvliesdonk/fastmcp-server-template) (copier template). Fixes and improvements to shared code land there and propagate to this repo via `copier update` against the template's latest tag. Domain-specific code (vault logic, tools, resources, prompts) stays in this repo.
 
 ## Logging Standard
 
@@ -118,11 +118,24 @@ Shared infrastructure (auth, middleware, logging, event store, CLI scaffolding, 
 - Event name as first token (snake_case), then key=value pairs via `%s` formatting.
 - Never use f-strings in log calls (defeats lazy evaluation).
 
-## Key Design Decisions
+## Config & Customization Contract
 
+Domain configuration composes `fastmcp_pvl_core.ServerConfig` inside `CollectionConfig` (see `src/markdown_vault_mcp/config.py`). Add domain fields between the `CONFIG-FIELDS-START` / `CONFIG-FIELDS-END` sentinels and populate them from env vars between the `CONFIG-FROM-ENV-START` / `CONFIG-FROM-ENV-END` sentinels. Never inherit from `ServerConfig`; always compose.
+
+Env var prefix is `MARKDOWN_VAULT_MCP_` — all env reads go through `fastmcp_pvl_core.env(_ENV_PREFIX, "SUFFIX", default)` so naming stays consistent.
+
+<!-- ===== TEMPLATE-OWNED SECTIONS END ===== -->
+
+## Shared Infrastructure
+
+Shared infrastructure (auth, middleware, logging, event store, CLI scaffolding, release pipeline, Docker/packaging) lives upstream in [`fastmcp-pvl-core`](https://github.com/pvliesdonk/fastmcp-pvl-core) (library) and [`fastmcp-server-template`](https://github.com/pvliesdonk/fastmcp-server-template) (copier template). Fixes and improvements to shared code land there and propagate to this repo via `copier update` against the template's latest tag. Domain-specific code (vault logic, tools, resources, prompts) stays in this repo.
+
+## Key Design Decisions
+<!-- DOMAIN-START -->
 - Document identity: relative path with `.md` extension
 - Frontmatter: optional by default, `required_frontmatter` config to enforce
 - Hybrid search: Reciprocal Rank Fusion (RRF)
 - Tool semantics: mirror Claude Code Read/Write/Edit patterns
 - Library is sync; MCP layer uses `asyncio.to_thread()`
 - Full decision log in `docs/design.md` appendix
+<!-- DOMAIN-END -->
