@@ -13,7 +13,7 @@ from unittest.mock import patch
 import pytest
 from fastmcp import Client
 
-from markdown_vault_mcp.mcp_server import create_server
+from markdown_vault_mcp.server import make_server
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -69,7 +69,7 @@ class TestGraphExplorerHTML:
     """Verify graph explorer elements exist in the SPA HTML."""
 
     async def _get_html(self) -> str:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             resource = await client.read_resource("ui://vault/app.html")
             return (
@@ -164,7 +164,7 @@ class TestGraphDataTools:
     """Verify graph tools return valid node/edge structures."""
 
     async def test_neighborhood_returns_graph(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool(
                 "vault___vault_graph_neighborhood", {"path": "simple.md"}
@@ -181,7 +181,7 @@ class TestGraphDataTools:
                 assert "folder" in node
 
     async def test_neighborhood_with_depth(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             r1 = await client.call_tool(
                 "vault___vault_graph_neighborhood", {"path": "simple.md", "depth": 1}
@@ -196,7 +196,7 @@ class TestGraphDataTools:
             assert len(d2["nodes"]) >= len(d1["nodes"])
 
     async def test_hubs_returns_graph(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool("vault___vault_graph_hubs", {})
             data = _parse_tool_data(result)
@@ -204,7 +204,7 @@ class TestGraphDataTools:
             assert "edges" in data
 
     async def test_edges_have_type(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool(
                 "vault___vault_graph_neighborhood", {"path": "simple.md"}
@@ -216,7 +216,7 @@ class TestGraphDataTools:
                 assert "type" in edge
 
     async def test_neighborhood_nodes_have_backlink_count(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool(
                 "vault___vault_graph_neighborhood", {"path": "simple.md"}
@@ -227,7 +227,7 @@ class TestGraphDataTools:
                 assert isinstance(node["backlink_count"], int)
 
     async def test_edges_deduplicated(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool(
                 "vault___vault_graph_neighborhood", {"path": "simple.md"}
@@ -238,7 +238,7 @@ class TestGraphDataTools:
 
     async def test_include_semantic_false_by_default(self) -> None:
         """Default call returns no semantic edges."""
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool(
                 "vault___vault_graph_neighborhood", {"path": "simple.md"}
@@ -249,7 +249,7 @@ class TestGraphDataTools:
 
     async def test_include_semantic_true_no_embeddings(self) -> None:
         """include_semantic=True without embeddings returns graph without semantic edges."""
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool(
                 "vault___vault_graph_neighborhood",
@@ -274,7 +274,7 @@ class TestSemanticGraphHTML:
     """Verify semantic similarity graph features in the SPA HTML."""
 
     async def _get_html(self) -> str:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             resource = await client.read_resource("ui://vault/app.html")
             return (
@@ -335,7 +335,7 @@ class TestIncludeSemanticEdges:
             "markdown_vault_mcp.providers.get_embedding_provider",
             return_value=mock_prov,
         ):
-            server = create_server()
+            server = make_server()
             async with Client(server) as client:
                 result = await client.call_tool(
                     "vault___vault_graph_neighborhood",
@@ -369,7 +369,7 @@ class TestIncludeSemanticEdges:
             "markdown_vault_mcp.providers.get_embedding_provider",
             return_value=mock_prov,
         ):
-            server = create_server()
+            server = make_server()
             async with Client(server) as client:
                 result = await client.call_tool(
                     "vault___vault_graph_neighborhood",
@@ -400,7 +400,7 @@ class TestIncludeSemanticEdges:
             "markdown_vault_mcp.providers.get_embedding_provider",
             return_value=mock_prov,
         ):
-            server = create_server()
+            server = make_server()
             async with Client(server) as client:
                 result = await client.call_tool(
                     "vault___vault_graph_neighborhood",
@@ -435,7 +435,7 @@ class TestIncludeSemanticEdges:
                 side_effect=ValueError("not found"),
             ),
         ):
-            server = create_server()
+            server = make_server()
             async with Client(server) as client:
                 result = await client.call_tool(
                     "vault___vault_graph_neighborhood",
@@ -470,7 +470,7 @@ class TestIncludeSemanticEdges:
                 side_effect=RuntimeError("embedding backend unavailable"),
             ),
         ):
-            server = create_server()
+            server = make_server()
             async with Client(server) as client:
                 result = await client.call_tool(
                     "vault___vault_graph_neighborhood",

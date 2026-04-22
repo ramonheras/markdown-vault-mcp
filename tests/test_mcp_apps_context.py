@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 from fastmcp import Client
 
-from markdown_vault_mcp.mcp_server import create_server
+from markdown_vault_mcp.server import make_server
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -68,7 +68,7 @@ class TestContextCardHTML:
     """Verify context card sections exist in the SPA HTML."""
 
     async def _get_html(self) -> str:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             resource = await client.read_resource("ui://vault/app.html")
             return (
@@ -150,7 +150,7 @@ class TestVaultContextToolData:
     """Verify _vault_context returns complete NoteContext fields."""
 
     async def test_all_context_fields_present(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool(
                 "vault___vault_context", {"path": "simple.md"}
@@ -168,7 +168,7 @@ class TestVaultContextToolData:
             assert "tags" in data
 
     async def test_context_with_frontmatter(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool(
                 "vault___vault_context", {"path": "full_frontmatter.md"}
@@ -188,7 +188,7 @@ class TestShowContextTool:
     """Verify show_context primary tool behaviour (AC2)."""
 
     async def test_returns_view_and_summary(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool("show_context", {"path": "simple.md"})
             data = _parse_tool_data(result)
@@ -197,7 +197,7 @@ class TestShowContextTool:
             assert "Backlinks:" in data["summary"]
 
     async def test_summary_contains_relationship_counts(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool("show_context", {"path": "simple.md"})
             data = _parse_tool_data(result)
@@ -207,7 +207,7 @@ class TestShowContextTool:
             assert "Folder peers:" in summary
 
     async def test_show_context_visible_to_llm(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             tools = await client.list_tools()
             names = [t.name for t in tools]
@@ -216,7 +216,7 @@ class TestShowContextTool:
             assert "vault_context" not in names
 
     async def test_missing_note_returns_error_summary(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool("show_context", {"path": "nonexistent.md"})
             data = _parse_tool_data(result)
@@ -234,7 +234,7 @@ class TestNoHardcodedColors:
     """Verify context card CSS uses variables instead of hardcoded hex colours."""
 
     async def _get_html(self) -> str:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             resource = await client.read_resource("ui://vault/app.html")
             return (

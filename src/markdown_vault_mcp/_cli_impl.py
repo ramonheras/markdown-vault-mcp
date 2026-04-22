@@ -66,7 +66,7 @@ def _build_collection(args: argparse.Namespace) -> Collection:
 def _cmd_serve(args: argparse.Namespace) -> None:
     """Run the MCP server."""
     try:
-        from markdown_vault_mcp.mcp_server import build_event_store, create_server
+        from markdown_vault_mcp.server import build_event_store, make_server
     except ImportError:
         logger.error(
             "FastMCP is not installed. Install with: "
@@ -75,7 +75,7 @@ def _cmd_serve(args: argparse.Namespace) -> None:
         sys.exit(1)
 
     transport = args.transport
-    server = create_server(transport=transport)
+    server = make_server(transport=transport)
     env_http_path = os.environ.get(f"{_ENV_PREFIX}_HTTP_PATH")
     http_path = normalise_http_path(args.http_path or env_http_path)
     if transport != "http" and (

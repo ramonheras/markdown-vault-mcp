@@ -1,7 +1,7 @@
 """MCP tool registrations for the markdown-vault-mcp server.
 
 Call :func:`register_tools` after constructing the :class:`~fastmcp.FastMCP`
-instance in :func:`~markdown_vault_mcp.mcp_server.create_server`.
+instance in :func:`~markdown_vault_mcp.server.make_server`.
 """
 
 from __future__ import annotations

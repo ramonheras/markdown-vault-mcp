@@ -2,7 +2,7 @@
 
 Call :func:`register_prompts` after constructing the
 :class:`~fastmcp.FastMCP` instance in
-:func:`~markdown_vault_mcp.mcp_server.create_server`.
+:func:`~markdown_vault_mcp.server.make_server`.
 """
 
 from __future__ import annotations
@@ -308,7 +308,7 @@ def register_prompts(
         mcp: The :class:`~fastmcp.FastMCP` instance to register prompts on.
         templates_folder: The configured templates folder path, or ``None``
             when templates are not configured.  Passed in from
-            :func:`~markdown_vault_mcp.mcp_server.create_server` so that
+            :func:`~markdown_vault_mcp.server.make_server` so that
             ``create_from_template`` can close over this value without
             re-reading environment variables.
         prompts_folder: Path to a directory of user-defined ``.md`` prompt

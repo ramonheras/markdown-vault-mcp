@@ -5,7 +5,7 @@ Provides :func:`register_apps` to set up the vault SPA shell as a
 ``show_context``, and app-only data-fetching tools hidden from the LLM).
 
 Call :func:`register_apps` after constructing the :class:`~fastmcp.FastMCP`
-instance in :func:`~markdown_vault_mcp.mcp_server.create_server`.
+instance in :func:`~markdown_vault_mcp.server.make_server`.
 """
 
 from __future__ import annotations

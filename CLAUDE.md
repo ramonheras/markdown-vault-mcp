@@ -25,7 +25,7 @@ src/markdown_vault_mcp/
   tracker.py           -- hash-based change detection
   collection.py        -- thin facade: lifecycle, wiring, delegation
   config.py            -- configuration loading
-  mcp_server.py        -- generic FastMCP server with tool annotations
+  server.py            -- generic FastMCP server factory (make_server) with tool annotations
   cli.py               -- CLI entry point
 ```
 

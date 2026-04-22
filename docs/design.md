@@ -47,7 +47,7 @@ Generic FastMCP infrastructure (auth providers, middleware stack, logging
 bootstrap, server-factory helpers, artifact store, CLI helpers) lives in the
 `fastmcp-pvl-core` PyPI package. markdown-vault-mcp composes this library
 via `ServerConfig` (never inheritance) and imports the building blocks
-directly — see `create_server()` in `src/markdown_vault_mcp/mcp_server.py` for the
+directly — see `make_server()` in `src/markdown_vault_mcp/server.py` for the
 assembled call graph.
 
 Design spec: `docs/superpowers/specs/2026-04-20-fastmcp-core-and-copier-template-design.md`.
@@ -66,7 +66,7 @@ markdown-vault-mcp (new package)
 +-- tracker.py        -- hash-based change detection
 +-- collection.py     -- thin facade: lifecycle, wiring, delegation
 +-- config.py         -- configuration loading
-+-- mcp_server.py     -- generic FastMCP server
++-- server.py         -- generic FastMCP server
 +-- cli.py            -- CLI entry point
 +-- utils/
 |   +-- text.py       -- text normalization and fuzzy matching
@@ -100,7 +100,7 @@ implementation patterns:
 | `search.py` | **Adapt** | Pattern for `Collection` facade. Replace domain methods with generic API. |
 | `index.py` | **Adapt** | Pattern for `fts_index.py`. Replace corpus-specific schema. Fix hybrid score bug (see RRF section). |
 | `parser.py` | **Replace** | Replace with generic frontmatter + heading-based chunking using `python-frontmatter`. |
-| `mcp_server.py` | **Adapt** | Replace domain tools with generic tools. Use lifespan hooks instead of lazy global singleton. |
+| `server.py` | **Adapt** | Replace domain tools with generic tools. Use lifespan hooks instead of lazy global singleton. |
 | `cli.py` | **Adapt** | Simplify for markdown-vault-mcp. |
 
 **Reuse strategy definitions**:
@@ -1034,7 +1034,7 @@ class ChangeTracker:
 `tracker.py` is entirely new code (no ifcraftcorpus equivalent). State file
 format: `{"Journal/note.md": "sha256hex", ...}` as JSON.
 
-### `mcp_server.py` -- Generic MCP Server
+### `server.py` -- Generic MCP Server
 
 Uses **FastMCP 3.0+** with lifespan hooks for Collection init/teardown.
 
@@ -1615,7 +1615,7 @@ for the bundle.
 
 **API surface adds**: MCP tools, CLI.
 
-9. Implement `mcp_server.py` with all read-only tools, `ToolAnnotations`,
+9. Implement `server.py` with all read-only tools, `ToolAnnotations`,
    lifespan hooks
 10. Implement `cli.py` -- `serve`, `index`, `search`, `reindex` commands
 11. Configuration loading (env vars)

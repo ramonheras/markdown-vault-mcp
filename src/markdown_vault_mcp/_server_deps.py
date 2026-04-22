@@ -31,7 +31,7 @@ def make_collection_lifespan(config: CollectionConfig) -> Any:
     Args:
         config: A fully-loaded :class:`~markdown_vault_mcp.config.CollectionConfig`
             instance, typically produced by a single :func:`load_config` call in
-            :func:`~markdown_vault_mcp.mcp_server.create_server`.
+            :func:`~markdown_vault_mcp.server.make_server`.
 
     Returns:
         A FastMCP lifespan coroutine that initialises the
@@ -76,7 +76,7 @@ def make_collection_lifespan(config: CollectionConfig) -> Any:
         # Start background tasks (e.g. git pull loop) after index is built.
         collection.start()
 
-        # Artifact store singleton is wired in create_server(), not here —
+        # Artifact store singleton is wired in make_server(), not here —
         # the HTTP route captures the store at server-construction time and
         # tool handlers reach it via get_artifact_store().  Tokens carry
         # eager bytes now, so the lifespan no longer needs to expose the

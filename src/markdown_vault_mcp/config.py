@@ -740,7 +740,7 @@ def load_config() -> CollectionConfig:
 # :class:`ServerConfig` view via :func:`_server_from_collection`, and
 # delegates to the core implementation.  The duplicates on
 # :class:`CollectionConfig` will be removed in a later PR once consumers
-# (currently :mod:`markdown_vault_mcp.mcp_server`) read directly from
+# (currently :mod:`markdown_vault_mcp.server`) read directly from
 # ``config.server`` instead.
 # ---------------------------------------------------------------------------
 
@@ -776,7 +776,7 @@ def resolve_auth_mode(config: CollectionConfig) -> str | None:
     resolver via :func:`_server_from_collection` and hides the ``"multi"``
     / ``"bearer"`` / ``"none"`` outcomes behind ``None`` so callers that
     only branch on the OIDC flavor (``"remote"`` / ``"oidc-proxy"``) keep
-    working.  Production code in :mod:`mcp_server` now calls core's
+    working.  Production code in :mod:`markdown_vault_mcp.server` now calls core's
     :func:`~fastmcp_pvl_core.resolve_auth_mode` directly on
     ``config.server``.
 

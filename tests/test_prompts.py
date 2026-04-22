@@ -16,7 +16,7 @@ import pytest
 from fastmcp import Client
 
 from markdown_vault_mcp._server_prompts import _load_user_prompt_defs
-from markdown_vault_mcp.mcp_server import create_server
+from markdown_vault_mcp.server import make_server
 
 # ---------------------------------------------------------------------------
 # _load_user_prompt_defs unit tests
@@ -206,7 +206,7 @@ class TestRegisterOneUserPromptArgValidation:
 
 @pytest.fixture
 def _clear_vars(monkeypatch: pytest.MonkeyPatch, vault_path: Path) -> None:
-    """Set minimal env vars for create_server and clear interfering vars."""
+    """Set minimal env vars for make_server and clear interfering vars."""
     monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", str(vault_path))
     monkeypatch.delenv("MARKDOWN_VAULT_MCP_READ_ONLY", raising=False)
     for var in (
@@ -248,7 +248,7 @@ class TestUserPromptNoArgs:
         )
         monkeypatch.setenv("MARKDOWN_VAULT_MCP_PROMPTS_FOLDER", str(prompts_dir))
 
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.get_prompt("greet", {})
         text = result.messages[0].content.text
@@ -266,7 +266,7 @@ class TestUserPromptNoArgs:
         )
         monkeypatch.setenv("MARKDOWN_VAULT_MCP_PROMPTS_FOLDER", str(prompts_dir))
 
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             prompts = await client.list_prompts()
         names = {p.name for p in prompts}
@@ -295,7 +295,7 @@ class TestUserPromptWithArgs:
         (prompts_dir / "myread.md").write_text(content, encoding="utf-8")
         monkeypatch.setenv("MARKDOWN_VAULT_MCP_PROMPTS_FOLDER", str(prompts_dir))
 
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.get_prompt("myread", {"path": "notes/foo.md"})
         text = result.messages[0].content.text
@@ -319,7 +319,7 @@ class TestUserPromptWithArgs:
         (prompts_dir / "styled.md").write_text(content, encoding="utf-8")
         monkeypatch.setenv("MARKDOWN_VAULT_MCP_PROMPTS_FOLDER", str(prompts_dir))
 
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.get_prompt("styled", {})
         text = result.messages[0].content.text
@@ -347,7 +347,7 @@ class TestUserPromptOverride:
         (prompts_dir / "summarize.md").write_text(content, encoding="utf-8")
         monkeypatch.setenv("MARKDOWN_VAULT_MCP_PROMPTS_FOLDER", str(prompts_dir))
 
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.get_prompt("summarize", {"path": "some.md"})
         text = result.messages[0].content.text
@@ -366,7 +366,7 @@ class TestUserPromptOverride:
         (prompts_dir / "summarize.md").write_text("OVERRIDE", encoding="utf-8")
         monkeypatch.setenv("MARKDOWN_VAULT_MCP_PROMPTS_FOLDER", str(prompts_dir))
 
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.get_prompt(
                 "compare", {"path1": "a.md", "path2": "b.md"}
@@ -385,7 +385,7 @@ class TestUserPromptOverride:
         (prompts_dir / "summarize.md").write_text("OVERRIDE", encoding="utf-8")
         monkeypatch.setenv("MARKDOWN_VAULT_MCP_PROMPTS_FOLDER", str(prompts_dir))
 
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             prompts = await client.list_prompts()
         summarize_entries = [p for p in prompts if p.name == "summarize"]
@@ -406,7 +406,7 @@ class TestUserPromptWriteTag:
         monkeypatch.setenv("MARKDOWN_VAULT_MCP_PROMPTS_FOLDER", str(prompts_dir))
         # READ_ONLY is True by default (env not set)
 
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             prompts = await client.list_prompts()
         names = {p.name for p in prompts}
@@ -423,7 +423,7 @@ class TestUserPromptWriteTag:
         monkeypatch.setenv("MARKDOWN_VAULT_MCP_PROMPTS_FOLDER", str(prompts_dir))
         monkeypatch.setenv("MARKDOWN_VAULT_MCP_READ_ONLY", "false")
 
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             prompts = await client.list_prompts()
         names = {p.name for p in prompts}
@@ -435,7 +435,7 @@ class TestNoPromptsFolder:
 
     @pytest.mark.usefixtures("_clear_vars")
     async def test_all_builtins_present_without_prompts_folder(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             prompts = await client.list_prompts()
         names = {p.name for p in prompts}
@@ -458,7 +458,7 @@ class TestProposeLinks:
     ) -> None:
         # propose-links is tagged "write"; must enable write mode to see it.
         monkeypatch.setenv("MARKDOWN_VAULT_MCP_READ_ONLY", "false")
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             prompts = await client.list_prompts()
         propose_links = next(p for p in prompts if p.name == "propose-links")
@@ -477,7 +477,7 @@ class TestProposeLinks:
     ) -> None:
         """Invoking propose-links substitutes $scope and $per_note_limit into the body."""
         monkeypatch.setenv("MARKDOWN_VAULT_MCP_READ_ONLY", "false")
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.get_prompt(
                 "propose-links", {"scope": "1-Projects", "per_note_limit": "7"}
