@@ -3,7 +3,7 @@ name = "markdown-vault-mcp"
 version = "1.27.0"
 description = "Generic markdown vault MCP server with FTS5 + semantic search"
 readme = "README.md"
-license = "MIT"
+license = "MIT"  # project-owned — keep across copier updates
 requires-python = ">=3.11"
 authors = [{ name = "Peter van Liesdonk" }]
 keywords = [
@@ -26,21 +26,25 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
-    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: MIT License",  # project-owned — keep across copier updates
     "Topic :: Text Processing :: Markup :: Markdown",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = [
     "fastmcp-pvl-core>=1.0.0,<2",
+    # PROJECT-DEPS-START — add domain dependencies below; kept across copier update
     "python-frontmatter>=1.0",
     "requests>=2.33.0",
+    # PROJECT-DEPS-END
 ]
 
 [project.optional-dependencies]
+# PROJECT-EXTRAS-START — add domain-specific optional-dependency groups below; kept across copier update
 mcp = ["fastmcp>=3.0,<4"]
 embeddings-api = ["httpx>=0.25", "numpy>=1.20"]
 embeddings = ["fastembed>=0.3", "numpy>=1.20"]
 all = ["fastmcp>=3.0,<4", "httpx>=0.25", "fastembed>=0.3", "numpy>=1.20"]
+# PROJECT-EXTRAS-END
 dev = [
     "pytest>=7.0",
     "pytest-asyncio>=0.21",

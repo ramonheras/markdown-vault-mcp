@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from markdown_vault_mcp.cli import _build_parser, _cmd_serve, main
+from markdown_vault_mcp._cli_impl import _build_parser, _cmd_serve, main
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -154,7 +154,7 @@ class TestMainDispatch:
         ):
             main()
 
-    @patch("markdown_vault_mcp.cli._COMMANDS")
+    @patch("markdown_vault_mcp._cli_impl._COMMANDS")
     def test_index_dispatch(self, mock_commands: MagicMock) -> None:
         mock_handler = MagicMock()
         mock_commands.__getitem__ = MagicMock(return_value=mock_handler)
@@ -163,7 +163,7 @@ class TestMainDispatch:
         mock_commands.__getitem__.assert_called_once_with("index")
         mock_handler.assert_called_once()
 
-    @patch("markdown_vault_mcp.cli._COMMANDS")
+    @patch("markdown_vault_mcp._cli_impl._COMMANDS")
     def test_valueerror_exits_with_message(self, mock_commands: MagicMock) -> None:
         mock_handler = MagicMock(side_effect=ValueError("SOURCE_DIR not set"))
         mock_commands.__getitem__ = MagicMock(return_value=mock_handler)
@@ -173,7 +173,7 @@ class TestMainDispatch:
         ):
             main()
 
-    @patch("markdown_vault_mcp.cli._COMMANDS")
+    @patch("markdown_vault_mcp._cli_impl._COMMANDS")
     def test_serve_dispatch(self, mock_commands: MagicMock) -> None:
         mock_handler = MagicMock()
         mock_commands.__getitem__ = MagicMock(return_value=mock_handler)
@@ -182,8 +182,8 @@ class TestMainDispatch:
         mock_commands.__getitem__.assert_called_once_with("serve")
         mock_handler.assert_called_once()
 
-    @patch("markdown_vault_mcp.cli._COMMANDS")
-    @patch("markdown_vault_mcp.cli.configure_logging_from_env")
+    @patch("markdown_vault_mcp._cli_impl._COMMANDS")
+    @patch("markdown_vault_mcp._cli_impl.configure_logging_from_env")
     def test_verbose_enables_debug_for_both_logger_trees(
         self, mock_configure: MagicMock, mock_commands: MagicMock
     ) -> None:
@@ -198,7 +198,7 @@ class TestMainDispatch:
         assert logging.getLogger("httpx").level == logging.WARNING
         assert logging.getLogger("httpcore").level == logging.WARNING
 
-    @patch("markdown_vault_mcp.cli._COMMANDS")
+    @patch("markdown_vault_mcp._cli_impl._COMMANDS")
     def test_verbose_sets_fastmcp_log_level_env(self, mock_commands: MagicMock) -> None:
         """``-v`` sets FASTMCP_LOG_LEVEL=DEBUG via the real configure_logging_from_env.
 
@@ -227,7 +227,7 @@ class TestMainDispatch:
             root.setLevel(saved_level)
             root.handlers[:] = saved_handlers
 
-    @patch("markdown_vault_mcp.cli._COMMANDS")
+    @patch("markdown_vault_mcp._cli_impl._COMMANDS")
     def test_no_verbose_does_not_set_fastmcp_log_level(
         self, mock_commands: MagicMock
     ) -> None:
@@ -247,7 +247,7 @@ class TestMainDispatch:
             else:
                 os.environ.pop("FASTMCP_LOG_LEVEL", None)
 
-    @patch("markdown_vault_mcp.cli._COMMANDS")
+    @patch("markdown_vault_mcp._cli_impl._COMMANDS")
     def test_root_handler_added_when_none_exist(self, mock_commands: MagicMock) -> None:
         """A StreamHandler is added to root when it has no handlers."""
         import logging
@@ -270,7 +270,7 @@ class TestCmdServe:
 
     @patch("uvicorn.run")
     @patch("markdown_vault_mcp.mcp_server.build_event_store")
-    @patch("markdown_vault_mcp.cli.load_config")
+    @patch("markdown_vault_mcp._cli_impl.load_config")
     @patch("markdown_vault_mcp.mcp_server.create_server")
     def test_serve_http_calls_http_app_and_uvicorn(
         self,
@@ -310,7 +310,7 @@ class TestCmdServe:
 
     @patch("uvicorn.run")
     @patch("markdown_vault_mcp.mcp_server.build_event_store")
-    @patch("markdown_vault_mcp.cli.load_config")
+    @patch("markdown_vault_mcp._cli_impl.load_config")
     @patch("markdown_vault_mcp.mcp_server.create_server")
     def test_serve_http_custom_path(
         self,
@@ -339,7 +339,7 @@ class TestCmdServe:
 
     @patch("uvicorn.run")
     @patch("markdown_vault_mcp.mcp_server.build_event_store")
-    @patch("markdown_vault_mcp.cli.load_config")
+    @patch("markdown_vault_mcp._cli_impl.load_config")
     @patch("markdown_vault_mcp.mcp_server.create_server")
     def test_serve_http_custom_path_normalised(
         self,
@@ -368,7 +368,7 @@ class TestCmdServe:
 
     @patch("uvicorn.run")
     @patch("markdown_vault_mcp.mcp_server.build_event_store")
-    @patch("markdown_vault_mcp.cli.load_config")
+    @patch("markdown_vault_mcp._cli_impl.load_config")
     @patch("markdown_vault_mcp.mcp_server.create_server")
     def test_serve_http_path_env_fallback(
         self,
@@ -396,7 +396,7 @@ class TestCmdServe:
 
     @patch("uvicorn.run")
     @patch("markdown_vault_mcp.mcp_server.build_event_store")
-    @patch("markdown_vault_mcp.cli.load_config")
+    @patch("markdown_vault_mcp._cli_impl.load_config")
     @patch("markdown_vault_mcp.mcp_server.create_server")
     def test_serve_http_path_cli_overrides_env(
         self,
@@ -437,7 +437,7 @@ class TestCmdServe:
 class TestCmdIndex:
     """Test the index subcommand."""
 
-    @patch("markdown_vault_mcp.cli._build_collection")
+    @patch("markdown_vault_mcp._cli_impl._build_collection")
     def test_index_prints_stats(
         self,
         mock_build: MagicMock,
@@ -459,7 +459,7 @@ class TestCmdIndex:
         assert "128 chunks" in captured.out
         mock_collection.build_index.assert_called_once_with(force=False)
 
-    @patch("markdown_vault_mcp.cli._build_collection")
+    @patch("markdown_vault_mcp._cli_impl._build_collection")
     def test_valueerror_exits_with_message(
         self,
         mock_build: MagicMock,
@@ -472,7 +472,7 @@ class TestCmdIndex:
         ):
             main()
 
-    @patch("markdown_vault_mcp.cli._build_collection")
+    @patch("markdown_vault_mcp._cli_impl._build_collection")
     def test_index_force_propagates(
         self,
         mock_build: MagicMock,
@@ -489,7 +489,7 @@ class TestCmdIndex:
 
         mock_collection.build_index.assert_called_once_with(force=True)
 
-    @patch("markdown_vault_mcp.cli._build_collection")
+    @patch("markdown_vault_mcp._cli_impl._build_collection")
     def test_index_builds_embeddings_when_configured(
         self,
         mock_build: MagicMock,
@@ -508,7 +508,7 @@ class TestCmdIndex:
 
         mock_collection.build_embeddings.assert_called_once_with(force=False)
 
-    @patch("markdown_vault_mcp.cli._build_collection")
+    @patch("markdown_vault_mcp._cli_impl._build_collection")
     def test_index_skips_embeddings_when_not_configured(
         self,
         mock_build: MagicMock,
@@ -527,7 +527,7 @@ class TestCmdIndex:
 
         mock_collection.build_embeddings.assert_called_once()
 
-    @patch("markdown_vault_mcp.cli._build_collection")
+    @patch("markdown_vault_mcp._cli_impl._build_collection")
     def test_index_force_propagates_to_embeddings(
         self,
         mock_build: MagicMock,
@@ -550,7 +550,7 @@ class TestCmdIndex:
 class TestCmdSearch:
     """Test the search subcommand."""
 
-    @patch("markdown_vault_mcp.cli._build_collection")
+    @patch("markdown_vault_mcp._cli_impl._build_collection")
     def test_search_text_output(
         self,
         mock_build: MagicMock,
@@ -573,7 +573,7 @@ class TestCmdSearch:
         assert "0.9876" in captured.out
         assert "Test Note" in captured.out
 
-    @patch("markdown_vault_mcp.cli._build_collection")
+    @patch("markdown_vault_mcp._cli_impl._build_collection")
     def test_search_json_output(
         self,
         mock_build: MagicMock,
@@ -604,7 +604,7 @@ class TestCmdSearch:
         assert data[0]["path"] == "a.md"
         assert data[0]["score"] == 1.0
 
-    @patch("markdown_vault_mcp.cli._build_collection")
+    @patch("markdown_vault_mcp._cli_impl._build_collection")
     def test_search_passes_options(self, mock_build: MagicMock) -> None:
         mock_collection = MagicMock()
         mock_collection.search.return_value = []
@@ -664,7 +664,7 @@ class TestCmdServeEdgeCases:
             patch(
                 "markdown_vault_mcp.mcp_server.create_server", return_value=mock_server
             ),
-            caplog.at_level(logging.WARNING, logger="markdown_vault_mcp.cli"),
+            caplog.at_level(logging.WARNING, logger="markdown_vault_mcp._cli_impl"),
         ):
             _cmd_serve(args)
 
@@ -688,7 +688,7 @@ class TestBuildCollectionEmbeddingFailure:
         """Collection is still returned even when get_embedding_provider raises."""
         import logging
 
-        from markdown_vault_mcp.cli import _build_collection
+        from markdown_vault_mcp._cli_impl import _build_collection
 
         vault = tmp_path / "vault"
         vault.mkdir()
@@ -706,7 +706,7 @@ class TestBuildCollectionEmbeddingFailure:
                 "markdown_vault_mcp.providers.get_embedding_provider",
                 side_effect=RuntimeError("no embedding provider"),
             ),
-            caplog.at_level(logging.WARNING, logger="markdown_vault_mcp.cli"),
+            caplog.at_level(logging.WARNING, logger="markdown_vault_mcp._cli_impl"),
         ):
             collection = _build_collection(args)
 
@@ -738,7 +738,7 @@ class TestBuildCollectionConfigFields:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """``MARKDOWN_VAULT_MCP_EXCLUDE`` reaches ``Collection._exclude_patterns``."""
-        from markdown_vault_mcp.cli import _build_collection
+        from markdown_vault_mcp._cli_impl import _build_collection
 
         vault = tmp_path / "vault"
         vault.mkdir()
@@ -757,7 +757,7 @@ class TestBuildCollectionConfigFields:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """``MARKDOWN_VAULT_MCP_ATTACHMENT_*`` env vars reach the Collection."""
-        from markdown_vault_mcp.cli import _build_collection
+        from markdown_vault_mcp._cli_impl import _build_collection
 
         vault = tmp_path / "vault"
         vault.mkdir()
@@ -785,7 +785,7 @@ class TestBuildCollectionConfigFields:
         always returned ``False`` — because ``self._exclude_patterns`` was
         ``None``. Assert the exclusion logic is live end-to-end.
         """
-        from markdown_vault_mcp.cli import _build_collection
+        from markdown_vault_mcp._cli_impl import _build_collection
 
         vault = tmp_path / "vault"
         vault.mkdir()
@@ -818,7 +818,7 @@ class TestBuildCollectionConfigFields:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """``--index-path`` CLI override reaches the Collection."""
-        from markdown_vault_mcp.cli import _build_collection
+        from markdown_vault_mcp._cli_impl import _build_collection
 
         vault = tmp_path / "vault"
         vault.mkdir()
@@ -835,7 +835,7 @@ class TestBuildCollectionConfigFields:
 class TestCmdSearchJsonOutput:
     """Verify --json flag in _cmd_search produces valid parseable output."""
 
-    @patch("markdown_vault_mcp.cli._build_collection")
+    @patch("markdown_vault_mcp._cli_impl._build_collection")
     def test_json_flag_produces_valid_json(
         self,
         mock_build: MagicMock,
@@ -881,7 +881,7 @@ class TestCmdSearchJsonOutput:
         assert data[0]["score"] == 0.75
         assert data[1]["path"] == "notes/beta.md"
 
-    @patch("markdown_vault_mcp.cli._build_collection")
+    @patch("markdown_vault_mcp._cli_impl._build_collection")
     def test_json_flag_empty_results(
         self,
         mock_build: MagicMock,
@@ -903,7 +903,7 @@ class TestCmdSearchJsonOutput:
 class TestCmdReindex:
     """Test the reindex subcommand."""
 
-    @patch("markdown_vault_mcp.cli._build_collection")
+    @patch("markdown_vault_mcp._cli_impl._build_collection")
     def test_reindex_prints_stats(
         self,
         mock_build: MagicMock,
@@ -928,7 +928,7 @@ class TestCmdReindex:
         assert "2 deleted" in captured.out
         assert "10 unchanged" in captured.out
 
-    @patch("markdown_vault_mcp.cli._build_collection")
+    @patch("markdown_vault_mcp._cli_impl._build_collection")
     def test_reindex_builds_embeddings_when_configured(
         self,
         mock_build: MagicMock,
@@ -949,7 +949,7 @@ class TestCmdReindex:
 
         mock_collection.build_embeddings.assert_called_once_with(force=True)
 
-    @patch("markdown_vault_mcp.cli._build_collection")
+    @patch("markdown_vault_mcp._cli_impl._build_collection")
     def test_reindex_skips_embeddings_when_not_configured(
         self,
         mock_build: MagicMock,
@@ -970,7 +970,7 @@ class TestCmdReindex:
 
         mock_collection.build_embeddings.assert_called_once()
 
-    @patch("markdown_vault_mcp.cli._build_collection")
+    @patch("markdown_vault_mcp._cli_impl._build_collection")
     def test_reindex_uses_force_false_when_no_changes(
         self,
         mock_build: MagicMock,
@@ -991,7 +991,7 @@ class TestCmdReindex:
 
         mock_collection.build_embeddings.assert_called_once_with(force=False)
 
-    @patch("markdown_vault_mcp.cli._build_collection")
+    @patch("markdown_vault_mcp._cli_impl._build_collection")
     def test_reindex_uses_force_true_when_changes_exist(
         self,
         mock_build: MagicMock,
