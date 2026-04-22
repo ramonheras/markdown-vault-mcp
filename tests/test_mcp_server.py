@@ -23,7 +23,7 @@ from markdown_vault_mcp.config import (
     build_remote_auth,
     resolve_auth_mode,
 )
-from markdown_vault_mcp.mcp_server import create_server
+from markdown_vault_mcp.server import make_server
 
 if TYPE_CHECKING:
     import mcp.types as mcp_types
@@ -71,7 +71,7 @@ _CLEAR_VARS = (
 
 @pytest.fixture
 def _mcp_env(vault_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Set minimal env vars for create_server (read_only=true default)."""
+    """Set minimal env vars for make_server (read_only=true default)."""
     monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", str(vault_path))
     monkeypatch.delenv("MARKDOWN_VAULT_MCP_READ_ONLY", raising=False)
     for var in _CLEAR_VARS:
@@ -108,7 +108,7 @@ class TestServerIdentity:
 
     @pytest.mark.usefixtures("_mcp_env")
     def test_defaults_read_only(self) -> None:
-        server = create_server()
+        server = make_server()
         assert server.name == "markdown-vault-mcp"
         assert "READ-ONLY" in server.instructions
         assert "not available" in server.instructions
@@ -116,7 +116,7 @@ class TestServerIdentity:
     @pytest.mark.usefixtures("_mcp_env")
     def test_defaults_read_write(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("MARKDOWN_VAULT_MCP_READ_ONLY", "false")
-        server = create_server()
+        server = make_server()
         assert "READ-WRITE" in server.instructions
         assert "'write'" in server.instructions
         assert "'edit'" in server.instructions
@@ -125,7 +125,7 @@ class TestServerIdentity:
 
     @pytest.mark.usefixtures("_mcp_env")
     def test_default_instructions_content(self) -> None:
-        server = create_server()
+        server = make_server()
         assert "relative" in server.instructions
         assert "'search'" in server.instructions
         assert "'stats'" in server.instructions
@@ -138,7 +138,7 @@ class TestServerIdentity:
     @pytest.mark.usefixtures("_mcp_env")
     def test_custom_server_name(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("MARKDOWN_VAULT_MCP_SERVER_NAME", "my-vault")
-        server = create_server()
+        server = make_server()
         assert server.name == "my-vault"
 
     @pytest.mark.usefixtures("_mcp_env")
@@ -149,7 +149,7 @@ class TestServerIdentity:
             "MARKDOWN_VAULT_MCP_INSTRUCTIONS",
             "Personal notes vault. Read-only.",
         )
-        server = create_server()
+        server = make_server()
         assert server.instructions == "Personal notes vault. Read-only."
 
 
@@ -163,7 +163,7 @@ class TestToolListing:
 
     @pytest.mark.usefixtures("_mcp_env")
     async def test_write_tools_absent_when_readonly(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             tools = await client.list_tools()
             names = {t.name for t in tools}
@@ -191,7 +191,7 @@ class TestToolListing:
 
     @pytest.mark.usefixtures("_mcp_env_writable")
     async def test_write_tools_present_when_writable(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             tools = await client.list_tools()
             names = {t.name for t in tools}
@@ -208,7 +208,7 @@ class TestToolAnnotations:
 
     @pytest.mark.usefixtures("_mcp_env_writable")
     async def test_annotations(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             tools = await client.list_tools()
             by_name = {t.name: t for t in tools}
@@ -263,7 +263,7 @@ class TestSearchTool:
 
     @pytest.mark.usefixtures("_mcp_env")
     async def test_keyword_search(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool(
                 "search", {"query": "simple document", "limit": 5}
@@ -276,7 +276,7 @@ class TestSearchTool:
 
     @pytest.mark.usefixtures("_mcp_env")
     async def test_search_with_folder_filter(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool(
                 "search",
@@ -296,7 +296,7 @@ class TestReadTool:
 
     @pytest.mark.usefixtures("_mcp_env")
     async def test_read_existing(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool("read", {"path": "simple.md"})
         data = result.data
@@ -306,14 +306,14 @@ class TestReadTool:
 
     @pytest.mark.usefixtures("_mcp_env")
     async def test_read_nonexistent(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool_mcp("read", {"path": "nonexistent.md"})
         assert result.isError is True
 
     @pytest.mark.usefixtures("_mcp_env")
     async def test_read_with_frontmatter(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool("read", {"path": "full_frontmatter.md"})
         data = result.data
@@ -326,7 +326,7 @@ class TestReadTool:
         template_path.parent.mkdir(parents=True, exist_ok=True)
         template_path.write_text("# Meeting Template\n\n- Date:\n- Attendees:\n")
 
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool("read", {"path": "_templates/meeting.md"})
         data = result.data
@@ -339,7 +339,7 @@ class TestListDocumentsTool:
 
     @pytest.mark.usefixtures("_mcp_env")
     async def test_list_all(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool("list_documents", {})
         data = _parse_tool_data(result)
@@ -350,7 +350,7 @@ class TestListDocumentsTool:
 
     @pytest.mark.usefixtures("_mcp_env")
     async def test_list_by_folder(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool("list_documents", {"folder": "subfolder"})
         data = _parse_tool_data(result)
@@ -367,7 +367,7 @@ class TestListDocumentsTool:
         template_path.parent.mkdir(parents=True, exist_ok=True)
         template_path.write_text("# Daily Template\n\n## Highlights\n\n- \n")
 
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool("list_documents", {"folder": "_templates"})
         data = _parse_tool_data(result)
@@ -380,7 +380,7 @@ class TestListFoldersTool:
 
     @pytest.mark.usefixtures("_mcp_env")
     async def test_list_folders(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool("list_folders", {})
         folders = result.data
@@ -393,7 +393,7 @@ class TestListTagsTool:
 
     @pytest.mark.usefixtures("_mcp_env_with_fields")
     async def test_list_tags(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool("list_tags", {"field": "cluster"})
         tags = result.data
@@ -406,7 +406,7 @@ class TestStatsTool:
 
     @pytest.mark.usefixtures("_mcp_env")
     async def test_stats(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool("stats", {})
         data = result.data
@@ -421,7 +421,7 @@ class TestEmbeddingsStatusTool:
 
     @pytest.mark.usefixtures("_mcp_env")
     async def test_embeddings_status_no_provider(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool("embeddings_status", {})
         data = result.data
@@ -434,7 +434,7 @@ class TestReindexTool:
 
     @pytest.mark.usefixtures("_mcp_env")
     async def test_reindex_no_changes(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool("reindex", {})
         data = result.data
@@ -455,7 +455,7 @@ class TestErrorHandling:
     @pytest.mark.usefixtures("_mcp_env")
     async def test_semantic_search_without_embeddings_returns_error(self) -> None:
         """search with mode='semantic' when no embeddings configured returns error."""
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool_mcp(
                 "search", {"query": "test", "mode": "semantic"}
@@ -473,7 +473,7 @@ class TestWriteTool:
 
     @pytest.mark.usefixtures("_mcp_env_writable")
     async def test_write_creates_document(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool(
                 "write", {"path": "new_note.md", "content": "# New\n\nBody.\n"}
@@ -485,7 +485,7 @@ class TestWriteTool:
 
     @pytest.mark.usefixtures("_mcp_env_writable")
     async def test_write_overwrites_existing(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool(
                 "write", {"path": "simple.md", "content": "# Replaced\n"}
@@ -496,7 +496,7 @@ class TestWriteTool:
     @pytest.mark.usefixtures("_mcp_env_writable")
     async def test_write_with_frontmatter(self) -> None:
         """write tool with frontmatter parameter creates document and returns created=True."""
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool(
                 "write",
@@ -517,7 +517,7 @@ class TestEditTool:
 
     @pytest.mark.usefixtures("_mcp_env_writable")
     async def test_edit_patches_document(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool(
                 "edit",
@@ -533,7 +533,7 @@ class TestEditTool:
 
     @pytest.mark.usefixtures("_mcp_env_writable")
     async def test_edit_nonexistent_returns_error(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool_mcp(
                 "edit",
@@ -543,7 +543,7 @@ class TestEditTool:
 
     @pytest.mark.usefixtures("_mcp_env_writable")
     async def test_edit_conflict_returns_error(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool_mcp(
                 "edit",
@@ -554,7 +554,7 @@ class TestEditTool:
     @pytest.mark.usefixtures("_mcp_env_writable")
     async def test_edit_line_range(self) -> None:
         """MCP edit tool accepts line_start/line_end."""
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             await client.call_tool(
                 "write",
@@ -576,7 +576,7 @@ class TestEditTool:
     @pytest.mark.usefixtures("_mcp_env_writable")
     async def test_edit_normalized_match(self) -> None:
         """MCP edit response includes match_type."""
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             await client.call_tool(
                 "write",
@@ -596,7 +596,7 @@ class TestEditTool:
     @pytest.mark.usefixtures("_mcp_env_writable")
     async def test_edit_diagnostic_error(self) -> None:
         """MCP edit error includes diagnostic info."""
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             await client.call_tool(
                 "write",
@@ -620,7 +620,7 @@ class TestDeleteTool:
 
     @pytest.mark.usefixtures("_mcp_env_writable")
     async def test_delete_removes_document(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool("delete", {"path": "simple.md"})
         data = result.data
@@ -628,7 +628,7 @@ class TestDeleteTool:
 
     @pytest.mark.usefixtures("_mcp_env_writable")
     async def test_delete_nonexistent_returns_error(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool_mcp("delete", {"path": "nonexistent.md"})
         assert result.isError is True
@@ -639,7 +639,7 @@ class TestRenameTool:
 
     @pytest.mark.usefixtures("_mcp_env_writable")
     async def test_rename_moves_document(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool(
                 "rename", {"old_path": "simple.md", "new_path": "renamed.md"}
@@ -650,7 +650,7 @@ class TestRenameTool:
 
     @pytest.mark.usefixtures("_mcp_env_writable")
     async def test_rename_nonexistent_returns_error(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool_mcp(
                 "rename",
@@ -660,7 +660,7 @@ class TestRenameTool:
 
     @pytest.mark.usefixtures("_mcp_env_writable")
     async def test_rename_target_exists_returns_error(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool_mcp(
                 "rename",
@@ -671,7 +671,7 @@ class TestRenameTool:
     @pytest.mark.usefixtures("_mcp_env_writable")
     async def test_rename_to_same_path_returns_error(self) -> None:
         """rename to same old_path and new_path should return an error."""
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool_mcp(
                 "rename",
@@ -701,7 +701,7 @@ class TestMCPExcludePatterns:
             if var != "MARKDOWN_VAULT_MCP_EXCLUDE":
                 monkeypatch.delenv(var, raising=False)
 
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool("list_documents", {})
 
@@ -1027,7 +1027,7 @@ class TestMCPReadAttachment:
     ) -> None:
         import base64
 
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool("read", {"path": "assets/report.pdf"})
         data = result.data
@@ -1041,7 +1041,7 @@ class TestMCPReadAttachment:
     async def test_read_attachment_returns_mime_type(
         self, _mcp_env_writable_with_attachments: Path
     ) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool("read", {"path": "assets/image.png"})
         assert result.data["mime_type"] == "image/png"
@@ -1049,7 +1049,7 @@ class TestMCPReadAttachment:
     async def test_read_attachment_missing_raises(
         self, _mcp_env_writable_with_attachments: Path
     ) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             with pytest.raises(ToolError):
                 await client.call_tool("read", {"path": "assets/missing.pdf"})
@@ -1065,7 +1065,7 @@ class TestMCPWriteAttachment:
 
         raw = b"new pdf binary content"
         b64 = base64.b64encode(raw).decode("ascii")
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool(
                 "write",
@@ -1081,7 +1081,7 @@ class TestMCPWriteAttachment:
     async def test_write_attachment_missing_base64_raises(
         self, _mcp_env_writable_with_attachments: Path
     ) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             with pytest.raises(ToolError):
                 await client.call_tool("write", {"path": "assets/new.pdf"})
@@ -1089,7 +1089,7 @@ class TestMCPWriteAttachment:
     async def test_write_attachment_invalid_base64_raises(
         self, _mcp_env_writable_with_attachments: Path
     ) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             with pytest.raises(ToolError):
                 await client.call_tool(
@@ -1138,7 +1138,7 @@ class TestFetchTool:
         )
 
         with patch.object(httpx, "AsyncClient", return_value=mock_client):
-            server = create_server()
+            server = make_server()
             async with Client(server) as client:
                 result = await client.call_tool(
                     "fetch",
@@ -1167,7 +1167,7 @@ class TestFetchTool:
         mock_client = self._mock_httpx_stream(raw, {"content-type": "image/png"})
 
         with patch.object(httpx, "AsyncClient", return_value=mock_client):
-            server = create_server()
+            server = make_server()
             async with Client(server) as client:
                 result = await client.call_tool(
                     "fetch",
@@ -1191,7 +1191,7 @@ class TestFetchTool:
         self, _mcp_env_writable_with_attachments: Path
     ) -> None:
         """file:// URLs are rejected (SSRF protection)."""
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             with pytest.raises(ToolError, match="http and https"):
                 await client.call_tool(
@@ -1203,7 +1203,7 @@ class TestFetchTool:
         self, _mcp_env_writable_with_attachments: Path
     ) -> None:
         """ftp:// URLs are rejected."""
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             with pytest.raises(ToolError, match="http and https"):
                 await client.call_tool(
@@ -1227,7 +1227,7 @@ class TestFetchTool:
         )
 
         with patch.object(httpx, "AsyncClient", return_value=mock_client):
-            server = create_server()
+            server = make_server()
             async with Client(server) as client:
                 with pytest.raises(ToolError, match="exceeded"):
                     await client.call_tool(
@@ -1253,7 +1253,7 @@ class TestFetchTool:
 
         monkeypatch.setattr(builtins, "__import__", mock_import)
 
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             with pytest.raises(ToolError, match="httpx"):
                 await client.call_tool(
@@ -1273,7 +1273,7 @@ class TestFetchTool:
         mock_client = self._mock_httpx_stream(body, {"content-type": "text/markdown"})
 
         with patch.object(httpx, "AsyncClient", return_value=mock_client):
-            server = create_server()
+            server = make_server()
             async with Client(server) as client:
                 result = await client.call_tool(
                     "fetch",
@@ -1323,7 +1323,7 @@ class TestFetchTool:
         mock_client_instance.__aexit__ = AsyncMock(return_value=False)
 
         with patch.object(httpx, "AsyncClient", return_value=mock_client_instance):
-            server = create_server()
+            server = make_server()
             async with Client(server) as client:
                 with pytest.raises(ToolError, match="Not Found"):
                     await client.call_tool(
@@ -1338,7 +1338,7 @@ class TestFetchTool:
         self, _mcp_env_writable_with_attachments: Path
     ) -> None:
         """Private/loopback IPs are rejected (SSRF protection)."""
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             with pytest.raises(ToolError, match="private"):
                 await client.call_tool(
@@ -1350,7 +1350,7 @@ class TestFetchTool:
         self, _mcp_env_writable_with_attachments: Path
     ) -> None:
         """Cloud metadata endpoint IPs are rejected."""
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             with pytest.raises(ToolError, match="private"):
                 await client.call_tool(
@@ -1365,7 +1365,7 @@ class TestFetchTool:
         self, _mcp_env_writable_with_attachments: Path
     ) -> None:
         """0.0.0.0 is rejected (routes to localhost on most systems)."""
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             with pytest.raises(ToolError, match="private"):
                 await client.call_tool(
@@ -1385,7 +1385,7 @@ class TestFetchTool:
         mock_client = self._mock_httpx_stream(raw, {"content-type": "image/png"})
 
         with patch.object(httpx, "AsyncClient", return_value=mock_client):
-            server = create_server()
+            server = make_server()
             async with Client(server) as client:
                 with pytest.raises(ToolError, match="not valid UTF-8"):
                     await client.call_tool(
@@ -1399,7 +1399,7 @@ class TestFetchTool:
     @pytest.mark.usefixtures("_mcp_env")
     async def test_fetch_hidden_in_read_only_mode(self) -> None:
         """fetch tool should not appear when server is read-only."""
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             tools = await client.list_tools()
         tool_names = [t.name for t in tools]
@@ -1419,7 +1419,7 @@ class TestFetchTool:
         mock_client.__aexit__ = AsyncMock(return_value=False)
 
         with patch.object(httpx, "AsyncClient", return_value=mock_client):
-            server = create_server()
+            server = make_server()
             async with Client(server) as client:
                 with pytest.raises(ToolError, match="timed out"):
                     await client.call_tool(
@@ -1434,7 +1434,7 @@ class TestFetchTool:
         self, _mcp_env_writable_with_attachments: Path
     ) -> None:
         """Hostname blocklist rejects 'localhost'."""
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             with pytest.raises(ToolError, match="private"):
                 await client.call_tool(
@@ -1449,7 +1449,7 @@ class TestMCPListDocumentsAttachments:
     async def test_list_documents_default_excludes_attachments(
         self, _mcp_env_writable_with_attachments: Path
     ) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool("list_documents", {})
         items = _parse_tool_data(result)
@@ -1459,7 +1459,7 @@ class TestMCPListDocumentsAttachments:
     async def test_list_documents_include_attachments_returns_both(
         self, _mcp_env_writable_with_attachments: Path
     ) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool(
                 "list_documents", {"include_attachments": True}
@@ -1477,7 +1477,7 @@ class TestMCPListDocumentsAttachments:
     async def test_list_documents_attachments_have_mime_type(
         self, _mcp_env_writable_with_attachments: Path
     ) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool(
                 "list_documents", {"include_attachments": True}
@@ -1495,7 +1495,7 @@ class TestMCPStatsAttachmentExtensions:
     async def test_stats_includes_attachment_extensions(
         self, _mcp_env_writable_with_attachments: Path
     ) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool("stats", {})
         data = result.data
@@ -1533,7 +1533,7 @@ class TestLinkTools:
 
     @pytest.mark.usefixtures("_mcp_env_linked")
     async def test_get_backlinks(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool("get_backlinks", {"path": "notes/topic.md"})
         data = _parse_tool_data(result)
@@ -1543,14 +1543,14 @@ class TestLinkTools:
 
     @pytest.mark.usefixtures("_mcp_env_linked")
     async def test_get_backlinks_nonexistent_raises(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             with pytest.raises((ToolError, McpError)):
                 await client.call_tool("get_backlinks", {"path": "nope.md"})
 
     @pytest.mark.usefixtures("_mcp_env_linked")
     async def test_get_outlinks(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool("get_outlinks", {"path": "index.md"})
         data = _parse_tool_data(result)
@@ -1565,14 +1565,14 @@ class TestLinkTools:
 
     @pytest.mark.usefixtures("_mcp_env_linked")
     async def test_get_outlinks_nonexistent_path(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             with pytest.raises((ToolError, McpError)):
                 await client.call_tool("get_outlinks", {"path": "nope.md"})
 
     @pytest.mark.usefixtures("_mcp_env_linked")
     async def test_get_broken_links(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool("get_broken_links", {})
         data = _parse_tool_data(result)
@@ -1582,7 +1582,7 @@ class TestLinkTools:
 
     @pytest.mark.usefixtures("_mcp_env_linked")
     async def test_get_broken_links_with_folder_filter(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool("get_broken_links", {"folder": "notes"})
         data = _parse_tool_data(result)
@@ -1592,7 +1592,7 @@ class TestLinkTools:
     @pytest.mark.usefixtures("_mcp_env_linked")
     async def test_link_tools_available_in_readonly(self) -> None:
         """Link tools are read-only and available even when vault is read-only."""
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             tools = await client.list_tools()
             names = {t.name for t in tools}
@@ -1607,7 +1607,7 @@ class TestSimilarTool:
     @pytest.mark.usefixtures("_mcp_env")
     async def test_get_similar_no_embeddings_returns_empty(self) -> None:
         """get_similar returns empty list when embeddings not configured."""
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool("get_similar", {"path": "simple.md"})
         data = _parse_tool_data(result)
@@ -1615,7 +1615,7 @@ class TestSimilarTool:
 
     @pytest.mark.usefixtures("_mcp_env")
     async def test_get_similar_nonexistent_raises(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             with pytest.raises((ToolError, McpError)):
                 await client.call_tool("get_similar", {"path": "nonexistent.md"})
@@ -1626,7 +1626,7 @@ class TestRecentTool:
 
     @pytest.mark.usefixtures("_mcp_env")
     async def test_get_recent_returns_notes(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool("get_recent", {"limit": 5})
         data = _parse_tool_data(result)
@@ -1640,7 +1640,7 @@ class TestRecentTool:
 
     @pytest.mark.usefixtures("_mcp_env")
     async def test_get_recent_empty_folder(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool(
                 "get_recent", {"folder": "nonexistent_folder"}
@@ -1650,7 +1650,7 @@ class TestRecentTool:
 
     @pytest.mark.usefixtures("_mcp_env")
     async def test_recent_resource(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.read_resource("recent://vault")
         data = json.loads(result[0].text)
@@ -1696,7 +1696,7 @@ class TestContextTool:
     @pytest.mark.usefixtures("_mcp_env_context")
     async def test_get_context_basic_fields(self) -> None:
         """get_context returns expected top-level fields."""
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool("get_context", {"path": "index.md"})
         data = _parse_tool_data(result)
@@ -1713,7 +1713,7 @@ class TestContextTool:
     @pytest.mark.usefixtures("_mcp_env_context")
     async def test_get_context_modified_at_matches_read(self) -> None:
         """modified_at in context matches the value from read()."""
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             ctx = _parse_tool_data(
                 await client.call_tool("get_context", {"path": "index.md"})
@@ -1724,7 +1724,7 @@ class TestContextTool:
     @pytest.mark.usefixtures("_mcp_env_context")
     async def test_get_context_backlinks(self) -> None:
         """notes/topic.md has a backlink from index.md."""
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool("get_context", {"path": "notes/topic.md"})
         data = _parse_tool_data(result)
@@ -1734,7 +1734,7 @@ class TestContextTool:
     @pytest.mark.usefixtures("_mcp_env_context")
     async def test_get_context_outlinks(self) -> None:
         """index.md has an outlink to notes/topic.md."""
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool("get_context", {"path": "index.md"})
         data = _parse_tool_data(result)
@@ -1744,7 +1744,7 @@ class TestContextTool:
     @pytest.mark.usefixtures("_mcp_env_context")
     async def test_get_context_folder_notes_excludes_self(self) -> None:
         """folder_notes for notes/topic.md contains peer.md but not topic.md."""
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool("get_context", {"path": "notes/topic.md"})
         data = _parse_tool_data(result)
@@ -1754,7 +1754,7 @@ class TestContextTool:
     @pytest.mark.usefixtures("_mcp_env_context")
     async def test_get_context_tags(self) -> None:
         """Indexed frontmatter tags appear in context.tags."""
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool("get_context", {"path": "index.md"})
         data = _parse_tool_data(result)
@@ -1765,7 +1765,7 @@ class TestContextTool:
     @pytest.mark.usefixtures("_mcp_env_context")
     async def test_get_context_similar_empty_without_embeddings(self) -> None:
         """similar is empty when embeddings are not configured."""
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool("get_context", {"path": "index.md"})
         data = _parse_tool_data(result)
@@ -1774,7 +1774,7 @@ class TestContextTool:
     @pytest.mark.usefixtures("_mcp_env_context")
     async def test_get_context_nonexistent_raises(self) -> None:
         """get_context raises for a path not in the index."""
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             with pytest.raises((ToolError, McpError)):
                 await client.call_tool("get_context", {"path": "nope.md"})
@@ -1782,7 +1782,7 @@ class TestContextTool:
     @pytest.mark.usefixtures("_mcp_env_context")
     async def test_get_context_in_tool_list(self) -> None:
         """get_context appears in the server tool list."""
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             tools = await client.list_tools()
         names = {t.name for t in tools}
@@ -1799,7 +1799,7 @@ class TestResources:
 
     @pytest.mark.usefixtures("_mcp_env_with_fields")
     async def test_config_resource(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.read_resource("config://vault")
         data = json.loads(result[0].text)
@@ -1814,7 +1814,7 @@ class TestResources:
 
     @pytest.mark.usefixtures("_mcp_env_with_fields")
     async def test_stats_resource(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             resource_result = await client.read_resource("stats://vault")
             tool_result = await client.call_tool("stats", {})
@@ -1825,7 +1825,7 @@ class TestResources:
 
     @pytest.mark.usefixtures("_mcp_env_with_fields")
     async def test_tags_resource_grouped(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.read_resource("tags://vault")
         data = json.loads(result[0].text)
@@ -1836,7 +1836,7 @@ class TestResources:
 
     @pytest.mark.usefixtures("_mcp_env_with_fields")
     async def test_tags_resource_by_field(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.read_resource("tags://vault/cluster")
         data = json.loads(result[0].text)
@@ -1846,7 +1846,7 @@ class TestResources:
 
     @pytest.mark.usefixtures("_mcp_env")
     async def test_folders_resource(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.read_resource("folders://vault")
         data = json.loads(result[0].text)
@@ -1856,7 +1856,7 @@ class TestResources:
 
     @pytest.mark.usefixtures("_mcp_env")
     async def test_toc_resource(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.read_resource("toc://vault/simple.md")
         data = json.loads(result[0].text)
@@ -1869,7 +1869,7 @@ class TestResources:
 
     @pytest.mark.usefixtures("_mcp_env")
     async def test_toc_resource_missing_path(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             with pytest.raises(McpError, match="Document not found"):
                 await client.read_resource("toc://vault/does_not_exist.md")
@@ -1885,7 +1885,7 @@ class TestPrompts:
 
     @pytest.mark.usefixtures("_mcp_env")
     async def test_summarize_prompt(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.get_prompt("summarize", {"path": "simple.md"})
         text = result.messages[0].content.text
@@ -1894,7 +1894,7 @@ class TestPrompts:
 
     @pytest.mark.usefixtures("_mcp_env_writable")
     async def test_research_prompt(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.get_prompt("research", {"topic": "horror fiction"})
         text = result.messages[0].content.text
@@ -1904,7 +1904,7 @@ class TestPrompts:
 
     @pytest.mark.usefixtures("_mcp_env_writable")
     async def test_discuss_prompt(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.get_prompt("discuss", {"path": "simple.md"})
         text = result.messages[0].content.text
@@ -1914,7 +1914,7 @@ class TestPrompts:
 
     @pytest.mark.usefixtures("_mcp_env")
     async def test_related_prompt(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.get_prompt("related", {"path": "simple.md"})
         text = result.messages[0].content.text
@@ -1924,7 +1924,7 @@ class TestPrompts:
 
     @pytest.mark.usefixtures("_mcp_env")
     async def test_compare_prompt(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.get_prompt(
                 "compare", {"path1": "simple.md", "path2": "no_frontmatter.md"}
@@ -1936,7 +1936,7 @@ class TestPrompts:
 
     @pytest.mark.usefixtures("_mcp_env_writable")
     async def test_create_from_template_prompt_with_name(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.get_prompt(
                 "create_from_template", {"template_name": "meeting.md"}
@@ -1950,7 +1950,7 @@ class TestPrompts:
 
     @pytest.mark.usefixtures("_mcp_env_writable")
     async def test_create_from_template_prompt_sanitizes_template_name(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.get_prompt(
                 "create_from_template",
@@ -1965,7 +1965,7 @@ class TestPrompts:
         self,
     ) -> None:
         """.. segments collapse into parent rather than being dropped as isolated parts."""
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.get_prompt(
                 "create_from_template",
@@ -1981,7 +1981,7 @@ class TestPrompts:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setenv("MARKDOWN_VAULT_MCP_TEMPLATES_FOLDER", "Templates\\Notes\\")
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.get_prompt(
                 "create_from_template",
@@ -1993,7 +1993,7 @@ class TestPrompts:
 
     @pytest.mark.usefixtures("_mcp_env_writable")
     async def test_create_from_template_prompt_discovery_mode(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.get_prompt("create_from_template", {})
         text = result.messages[0].content.text
@@ -2005,7 +2005,7 @@ class TestPrompts:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setenv("MARKDOWN_VAULT_MCP_TEMPLATES_FOLDER", "Templates/")
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.get_prompt("create_from_template", {})
         text = result.messages[0].content.text
@@ -2014,7 +2014,7 @@ class TestPrompts:
 
     @pytest.mark.usefixtures("_mcp_env_writable")
     async def test_create_from_template_prompt_registration_schema(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             prompts = await client.list_prompts()
 
@@ -2038,7 +2038,7 @@ class TestPromptVisibility:
 
     @pytest.mark.usefixtures("_mcp_env")
     async def test_write_prompts_hidden_when_readonly(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             prompts = await client.list_prompts()
         names = {p.name for p in prompts}
@@ -2048,7 +2048,7 @@ class TestPromptVisibility:
 
     @pytest.mark.usefixtures("_mcp_env_writable")
     async def test_write_prompts_visible_when_writable(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             prompts = await client.list_prompts()
         names = {p.name for p in prompts}
@@ -2061,7 +2061,7 @@ class TestPromptVisibility:
 
     @pytest.mark.usefixtures("_mcp_env")
     async def test_readonly_prompts_always_visible(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             prompts = await client.list_prompts()
         names = {p.name for p in prompts}
@@ -2080,7 +2080,7 @@ class TestPromptAndResourceIcons:
 
     @pytest.mark.usefixtures("_mcp_env_writable")
     async def test_prompts_have_icons(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             prompts = await client.list_prompts()
 
@@ -2091,7 +2091,7 @@ class TestPromptAndResourceIcons:
 
     @pytest.mark.usefixtures("_mcp_env")
     async def test_resources_have_icons(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             resources = await client.list_resources()
 
@@ -2114,7 +2114,7 @@ class TestIfMatchParameter:
         """write tool succeeds when if_match matches the current file etag."""
         from markdown_vault_mcp.hashing import compute_file_hash
 
-        server = create_server()
+        server = make_server()
         current_etag = compute_file_hash(vault_path / "simple.md")
         async with Client(server) as client:
             result = await client.call_tool(
@@ -2132,7 +2132,7 @@ class TestIfMatchParameter:
     @pytest.mark.usefixtures("_mcp_env_writable")
     async def test_write_rejects_stale_if_match(self) -> None:
         """write tool returns an error when if_match does not match."""
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool_mcp(
                 "write",
@@ -2149,7 +2149,7 @@ class TestIfMatchParameter:
         """edit tool succeeds when if_match matches the current file etag."""
         from markdown_vault_mcp.hashing import compute_file_hash
 
-        server = create_server()
+        server = make_server()
         current_etag = compute_file_hash(vault_path / "simple.md")
         async with Client(server) as client:
             result = await client.call_tool(
@@ -2167,7 +2167,7 @@ class TestIfMatchParameter:
     @pytest.mark.usefixtures("_mcp_env_writable")
     async def test_edit_rejects_stale_if_match(self) -> None:
         """edit tool returns an error when if_match does not match."""
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool_mcp(
                 "edit",
@@ -2185,7 +2185,7 @@ class TestIfMatchParameter:
         """delete tool succeeds when if_match matches the current file etag."""
         from markdown_vault_mcp.hashing import compute_file_hash
 
-        server = create_server()
+        server = make_server()
         current_etag = compute_file_hash(vault_path / "simple.md")
         async with Client(server) as client:
             result = await client.call_tool(
@@ -2198,7 +2198,7 @@ class TestIfMatchParameter:
     @pytest.mark.usefixtures("_mcp_env_writable")
     async def test_delete_rejects_stale_if_match(self) -> None:
         """delete tool returns an error when if_match does not match."""
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool_mcp(
                 "delete",
@@ -2211,7 +2211,7 @@ class TestIfMatchParameter:
         """rename tool succeeds when if_match matches the current file etag."""
         from markdown_vault_mcp.hashing import compute_file_hash
 
-        server = create_server()
+        server = make_server()
         current_etag = compute_file_hash(vault_path / "simple.md")
         async with Client(server) as client:
             result = await client.call_tool(
@@ -2229,7 +2229,7 @@ class TestIfMatchParameter:
     @pytest.mark.usefixtures("_mcp_env_writable")
     async def test_rename_rejects_stale_if_match(self) -> None:
         """rename tool returns an error when if_match does not match."""
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool_mcp(
                 "rename",
@@ -2276,7 +2276,7 @@ class TestLifespanAutoEmbeddings:
             "markdown_vault_mcp.providers.get_embedding_provider",
             return_value=mock_prov,
         ):
-            server = create_server()
+            server = make_server()
             async with Client(server) as client:
                 result = await client.call_tool_mcp("embeddings_status", {})
         data = json.loads(result.content[0].text)
@@ -2306,7 +2306,7 @@ class TestLifespanAutoEmbeddings:
             "markdown_vault_mcp.providers.get_embedding_provider",
             return_value=mock_prov,
         ):
-            server = create_server()
+            server = make_server()
             async with Client(server) as client:
                 r1 = await client.call_tool_mcp("embeddings_status", {})
         count1 = json.loads(r1.content[0].text)["chunk_count"]
@@ -2326,7 +2326,7 @@ class TestLifespanAutoEmbeddings:
             "markdown_vault_mcp.providers.get_embedding_provider",
             return_value=mock_prov2,
         ):
-            server2 = create_server()
+            server2 = make_server()
             async with Client(server2) as client2:
                 r2 = await client2.call_tool_mcp("embeddings_status", {})
         count2 = json.loads(r2.content[0].text)["chunk_count"]
@@ -2345,7 +2345,7 @@ class TestLifespanAutoEmbeddings:
         for var in _CLEAR_VARS:
             monkeypatch.delenv(var, raising=False)
 
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool_mcp("stats", {})
         data = json.loads(result.content[0].text)
@@ -2413,9 +2413,9 @@ class TestBuildBearerAuth:
 
 
 class TestAuthModeSelection:
-    """Tests for auth mode selection in create_server().
+    """Tests for auth mode selection in make_server().
 
-    These tests call ``create_server()`` directly so the real assembly
+    These tests call ``make_server()`` directly so the real assembly
     logic is exercised — not just the individual builder functions.
     Covers all four modes: multi (both), bearer-only, OIDC-only, none.
     """
@@ -2446,7 +2446,7 @@ class TestAuthModeSelection:
             patch("fastmcp.server.auth.oidc_proxy.OIDCProxy", mock_cls),
             caplog.at_level(logging.INFO),
         ):
-            server = create_server()
+            server = make_server()
 
         assert isinstance(server.auth, MultiAuth)
         assert "using bearer token auth" not in caplog.text
@@ -2470,7 +2470,7 @@ class TestAuthModeSelection:
         mock_oidc = MagicMock()
         mock_cls = MagicMock(return_value=mock_oidc)
         with patch("fastmcp.server.auth.oidc_proxy.OIDCProxy", mock_cls):
-            server = create_server()
+            server = make_server()
 
         assert isinstance(server.auth, MultiAuth)
         # OIDCProxy is an OAuthProvider — must be server=, not in verifiers=,
@@ -2506,7 +2506,7 @@ class TestAuthModeSelection:
         mock_oidc.required_scopes = ["openid"]
         mock_cls = MagicMock(return_value=mock_oidc)
         with patch("fastmcp.server.auth.oidc_proxy.OIDCProxy", mock_cls):
-            server = create_server()
+            server = make_server()
 
         assert isinstance(server.auth, MultiAuth)
         assert server.auth.required_scopes == []
@@ -2525,7 +2525,7 @@ class TestAuthModeSelection:
 
         mock_cls = MagicMock()
         with patch("fastmcp.server.auth.oidc_proxy.OIDCProxy", mock_cls):
-            server = create_server()
+            server = make_server()
 
         # Server must use the OIDC mock, not bearer
         assert server.auth is not None
@@ -2541,7 +2541,7 @@ class TestAuthModeSelection:
         monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", str(vault_path))
 
         with caplog.at_level(logging.WARNING):
-            server = create_server()
+            server = make_server()
 
         assert server.auth is None
         assert "unauthenticated" in caplog.text
@@ -2570,10 +2570,10 @@ class TestAuthModeSelection:
             monkeypatch.setenv(var, val)
 
         with (
-            patch("markdown_vault_mcp.mcp_server.build_auth", return_value=None),
+            patch("markdown_vault_mcp.server.build_auth", return_value=None),
             caplog.at_level(logging.INFO),
         ):
-            server = create_server()
+            server = make_server()
 
         assert server.auth is None
         assert "unauthenticated" in caplog.text
@@ -2649,7 +2649,7 @@ class TestAuthDebugLogging:
     ) -> None:
         monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", str(vault_path))
         with caplog.at_level(logging.INFO):
-            create_server()
+            make_server()
         assert "Server config:" in caplog.text
         assert "version=" in caplog.text
         assert "auth=none" in caplog.text
@@ -2666,11 +2666,11 @@ class TestAuthDebugLogging:
 
         monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", str(vault_path))
         monkeypatch.setattr(
-            "markdown_vault_mcp.mcp_server._pkg_version",
+            "markdown_vault_mcp.server._pkg_version",
             lambda _name: (_ for _ in ()).throw(PackageNotFoundError("test")),
         )
         with caplog.at_level(logging.INFO):
-            create_server()
+            make_server()
         assert "version=unknown" in caplog.text
 
 
@@ -2960,7 +2960,7 @@ class TestBuildRemoteAuth:
 
 
 class TestMiddlewareStack:
-    """Verify that create_server() wires the expected middleware."""
+    """Verify that make_server() wires the expected middleware."""
 
     @pytest.mark.usefixtures("_mcp_env")
     def test_default_middleware_stack(self) -> None:
@@ -2969,7 +2969,7 @@ class TestMiddlewareStack:
         from fastmcp.server.middleware.logging import LoggingMiddleware
         from fastmcp.server.middleware.timing import TimingMiddleware
 
-        server = create_server()
+        server = make_server()
         types = [type(m) for m in server.middleware]
         assert ErrorHandlingMiddleware in types
         assert TimingMiddleware in types
@@ -2983,7 +2983,7 @@ class TestMiddlewareStack:
         from fastmcp.server.middleware.logging import StructuredLoggingMiddleware
 
         monkeypatch.setenv("FASTMCP_ENABLE_RICH_LOGGING", "false")
-        server = create_server()
+        server = make_server()
         types = [type(m) for m in server.middleware]
         assert StructuredLoggingMiddleware in types
 
@@ -2994,7 +2994,7 @@ class TestMiddlewareStack:
         from fastmcp.server.middleware.logging import LoggingMiddleware
         from fastmcp.server.middleware.timing import TimingMiddleware
 
-        server = create_server()
+        server = make_server()
         types = [type(m) for m in server.middleware]
         assert ErrorHandlingMiddleware in types, "ErrorHandlingMiddleware missing"
         assert TimingMiddleware in types, "TimingMiddleware missing"
@@ -3067,7 +3067,7 @@ class TestGetHistoryTool:
 
     async def test_vault_wide_history(self) -> None:
         """get_history with no path returns vault-wide commits."""
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool("get_history", {})
         entries = _parse_tool_data(result)
@@ -3079,7 +3079,7 @@ class TestGetHistoryTool:
 
     async def test_single_note_history(self) -> None:
         """get_history filtered by path returns commits for that note."""
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool("get_history", {"path": "alpha.md"})
         entries = _parse_tool_data(result)
@@ -3088,7 +3088,7 @@ class TestGetHistoryTool:
 
     async def test_history_entry_fields(self) -> None:
         """Each history entry has the expected fields."""
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool("get_history", {"limit": 1})
         entries = _parse_tool_data(result)
@@ -3102,7 +3102,7 @@ class TestGetHistoryTool:
 
     async def test_limit_respected(self) -> None:
         """limit parameter restricts the number of results."""
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool("get_history", {"limit": 1})
         entries = _parse_tool_data(result)
@@ -3112,14 +3112,14 @@ class TestGetHistoryTool:
         """A path that escapes the vault raises ToolError."""
         from fastmcp.exceptions import ToolError
 
-        server = create_server()
+        server = make_server()
         with pytest.raises((ToolError, Exception)):
             async with Client(server) as client:
                 await client.call_tool("get_history", {"path": "../escape.md"})
 
     async def test_get_history_in_tool_list(self) -> None:
         """get_history appears in the tool list."""
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             tools = await client.list_tools()
         names = [t.name for t in tools]
@@ -3127,7 +3127,7 @@ class TestGetHistoryTool:
 
     async def test_get_diff_in_tool_list(self) -> None:
         """get_diff appears in the tool list."""
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             tools = await client.list_tools()
         names = [t.name for t in tools]
@@ -3153,7 +3153,7 @@ class TestGetDiffTool:
     async def test_single_diff_from_sha(self, git_vault: Path) -> None:
         """get_diff with since_sha returns a unified diff dict."""
         sha = self._first_sha(git_vault)
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool(
                 "get_diff", {"path": "alpha.md", "since_sha": sha}
@@ -3166,7 +3166,7 @@ class TestGetDiffTool:
     async def test_per_commit_diff(self, git_vault: Path) -> None:
         """get_diff with per_commit=True returns a list of commit diffs."""
         sha = self._first_sha(git_vault)
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool(
                 "get_diff",
@@ -3182,7 +3182,7 @@ class TestGetDiffTool:
         """Calling get_diff without any reference raises ToolError."""
         from fastmcp.exceptions import ToolError
 
-        server = create_server()
+        server = make_server()
         with pytest.raises((ToolError, Exception)):
             async with Client(server) as client:
                 await client.call_tool("get_diff", {"path": "alpha.md"})
@@ -3192,7 +3192,7 @@ class TestGetDiffTool:
         from fastmcp.exceptions import ToolError
 
         sha = self._first_sha(git_vault)
-        server = create_server()
+        server = make_server()
         with pytest.raises((ToolError, Exception)):
             async with Client(server) as client:
                 await client.call_tool(
@@ -3208,7 +3208,7 @@ class TestGetDiffTool:
         """An invalid SHA raises ToolError."""
         from fastmcp.exceptions import ToolError
 
-        server = create_server()
+        server = make_server()
         with pytest.raises((ToolError, Exception)):
             async with Client(server) as client:
                 await client.call_tool(
@@ -3233,7 +3233,7 @@ class TestGetDiffTool:
                 check=True,
             )
         sha = self._first_sha(git_vault)
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool(
                 "get_diff",
@@ -3263,7 +3263,7 @@ class TestGitToolsUntilParam:
         # The existing fixture has two commits with real (recent) timestamps.
         # A far-future cutoff must include both; a far-past cutoff must exclude
         # both. This proves the `until` kwarg is plumbed through to git log.
-        server = create_server()
+        server = make_server()
 
         async with Client(server) as client:
             future = await client.call_tool(

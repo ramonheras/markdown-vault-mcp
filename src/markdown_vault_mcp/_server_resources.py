@@ -2,7 +2,7 @@
 
 Call :func:`register_resources` after constructing the
 :class:`~fastmcp.FastMCP` instance in
-:func:`~markdown_vault_mcp.mcp_server.create_server`.
+:func:`~markdown_vault_mcp.server.make_server`.
 """
 
 from __future__ import annotations

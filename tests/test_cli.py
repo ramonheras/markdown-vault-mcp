@@ -269,9 +269,9 @@ class TestCmdServe:
     """Test the serve subcommand dispatch."""
 
     @patch("uvicorn.run")
-    @patch("markdown_vault_mcp.mcp_server.build_event_store")
+    @patch("markdown_vault_mcp.server.build_event_store")
     @patch("markdown_vault_mcp._cli_impl.load_config")
-    @patch("markdown_vault_mcp.mcp_server.create_server")
+    @patch("markdown_vault_mcp.server.make_server")
     def test_serve_http_calls_http_app_and_uvicorn(
         self,
         mock_create: MagicMock,
@@ -309,9 +309,9 @@ class TestCmdServe:
         )
 
     @patch("uvicorn.run")
-    @patch("markdown_vault_mcp.mcp_server.build_event_store")
+    @patch("markdown_vault_mcp.server.build_event_store")
     @patch("markdown_vault_mcp._cli_impl.load_config")
-    @patch("markdown_vault_mcp.mcp_server.create_server")
+    @patch("markdown_vault_mcp.server.make_server")
     def test_serve_http_custom_path(
         self,
         mock_create: MagicMock,
@@ -338,9 +338,9 @@ class TestCmdServe:
         assert call_kwargs["path"] == "/vault/mcp"
 
     @patch("uvicorn.run")
-    @patch("markdown_vault_mcp.mcp_server.build_event_store")
+    @patch("markdown_vault_mcp.server.build_event_store")
     @patch("markdown_vault_mcp._cli_impl.load_config")
-    @patch("markdown_vault_mcp.mcp_server.create_server")
+    @patch("markdown_vault_mcp.server.make_server")
     def test_serve_http_custom_path_normalised(
         self,
         mock_create: MagicMock,
@@ -367,9 +367,9 @@ class TestCmdServe:
         assert call_kwargs["path"] == "/vault/mcp"
 
     @patch("uvicorn.run")
-    @patch("markdown_vault_mcp.mcp_server.build_event_store")
+    @patch("markdown_vault_mcp.server.build_event_store")
     @patch("markdown_vault_mcp._cli_impl.load_config")
-    @patch("markdown_vault_mcp.mcp_server.create_server")
+    @patch("markdown_vault_mcp.server.make_server")
     def test_serve_http_path_env_fallback(
         self,
         mock_create: MagicMock,
@@ -395,9 +395,9 @@ class TestCmdServe:
         assert call_kwargs["path"] == "/vault/mcp"
 
     @patch("uvicorn.run")
-    @patch("markdown_vault_mcp.mcp_server.build_event_store")
+    @patch("markdown_vault_mcp.server.build_event_store")
     @patch("markdown_vault_mcp._cli_impl.load_config")
-    @patch("markdown_vault_mcp.mcp_server.create_server")
+    @patch("markdown_vault_mcp.server.make_server")
     def test_serve_http_path_cli_overrides_env(
         self,
         mock_create: MagicMock,
@@ -424,7 +424,7 @@ class TestCmdServe:
         call_kwargs = mock_server.http_app.call_args[1]
         assert call_kwargs["path"] == "/from-cli"
 
-    @patch("markdown_vault_mcp.mcp_server.create_server")
+    @patch("markdown_vault_mcp.server.make_server")
     def test_serve_stdio_does_not_pass_host_port(self, mock_create: MagicMock) -> None:
         """_cmd_serve does not pass host/port for stdio transport."""
         mock_server = MagicMock()
@@ -641,7 +641,7 @@ class TestCmdServeEdgeCases:
         args = _build_parser().parse_args(["serve"])
 
         with (
-            patch.dict(sys.modules, {"markdown_vault_mcp.mcp_server": None}),
+            patch.dict(sys.modules, {"markdown_vault_mcp.server": None}),
             pytest.raises(SystemExit) as exc_info,
         ):
             _cmd_serve(args)
@@ -661,9 +661,7 @@ class TestCmdServeEdgeCases:
         )
 
         with (
-            patch(
-                "markdown_vault_mcp.mcp_server.create_server", return_value=mock_server
-            ),
+            patch("markdown_vault_mcp.server.make_server", return_value=mock_server),
             caplog.at_level(logging.WARNING, logger="markdown_vault_mcp._cli_impl"),
         ):
             _cmd_serve(args)

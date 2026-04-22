@@ -327,9 +327,9 @@ class TestMCPGraphTools:
         """get_orphan_notes MCP tool returns orphan notes."""
         from fastmcp import Client
 
-        from markdown_vault_mcp.mcp_server import create_server
+        from markdown_vault_mcp.server import make_server
 
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool("get_orphan_notes", {})
         items = _parse_tool_data(result)
@@ -342,9 +342,9 @@ class TestMCPGraphTools:
         """get_most_linked MCP tool returns hub note first."""
         from fastmcp import Client
 
-        from markdown_vault_mcp.mcp_server import create_server
+        from markdown_vault_mcp.server import make_server
 
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool("get_most_linked", {"limit": 5})
         items = _parse_tool_data(result)
@@ -357,9 +357,9 @@ class TestMCPGraphTools:
         """get_most_linked respects the limit parameter."""
         from fastmcp import Client
 
-        from markdown_vault_mcp.mcp_server import create_server
+        from markdown_vault_mcp.server import make_server
 
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool("get_most_linked", {"limit": 1})
         items = _parse_tool_data(result)
@@ -647,9 +647,9 @@ class TestMCPGetConnectionPath:
         """get_connection_path tool returns found=True and correct path."""
         from fastmcp import Client
 
-        from markdown_vault_mcp.mcp_server import create_server
+        from markdown_vault_mcp.server import make_server
 
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool(
                 "get_connection_path", {"source": "a.md", "target": "c.md"}
@@ -663,9 +663,9 @@ class TestMCPGetConnectionPath:
         """get_connection_path tool returns found=False when no path exists."""
         from fastmcp import Client
 
-        from markdown_vault_mcp.mcp_server import create_server
+        from markdown_vault_mcp.server import make_server
 
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool(
                 "get_connection_path",
@@ -680,9 +680,9 @@ class TestMCPGetConnectionPath:
         """get_connection_path tool returns found=True with 0 hops for source==target."""
         from fastmcp import Client
 
-        from markdown_vault_mcp.mcp_server import create_server
+        from markdown_vault_mcp.server import make_server
 
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool(
                 "get_connection_path", {"source": "a.md", "target": "a.md"}
@@ -697,9 +697,9 @@ class TestMCPGetConnectionPath:
         from fastmcp import Client
         from fastmcp.exceptions import ToolError
 
-        from markdown_vault_mcp.mcp_server import create_server
+        from markdown_vault_mcp.server import make_server
 
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             with pytest.raises(ToolError):
                 await client.call_tool(

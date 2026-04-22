@@ -13,7 +13,7 @@ import pytest
 from fastmcp import Client
 
 from markdown_vault_mcp._server_apps import _compute_claude_app_domain
-from markdown_vault_mcp.mcp_server import create_server
+from markdown_vault_mcp.server import make_server
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -45,7 +45,7 @@ _CLEAR_VARS = (
 
 @pytest.fixture
 def _mcp_env(vault_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Set minimal env vars for create_server."""
+    """Set minimal env vars for make_server."""
     monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", str(vault_path))
     monkeypatch.delenv("MARKDOWN_VAULT_MCP_READ_ONLY", raising=False)
     for var in _CLEAR_VARS:
@@ -128,14 +128,14 @@ class TestSPAShellResource:
     """Tests for the ui://vault/app.html resource."""
 
     async def test_resource_registered(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             resources = await client.list_resources()
             uris = [str(r.uri) for r in resources]
             assert "ui://vault/app.html" in uris
 
     async def test_html_contains_ext_apps_sdk(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             resource = await client.read_resource("ui://vault/app.html")
             html = (
@@ -144,7 +144,7 @@ class TestSPAShellResource:
             assert "@modelcontextprotocol/ext-apps" in html
 
     async def test_html_contains_tab_navigation(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             resource = await client.read_resource("ui://vault/app.html")
             html = (
@@ -155,7 +155,7 @@ class TestSPAShellResource:
             assert 'data-tab="browse"' in html
 
     async def test_html_contains_host_theming(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             resource = await client.read_resource("ui://vault/app.html")
             html = (
@@ -167,7 +167,7 @@ class TestSPAShellResource:
             assert "--color-text-primary" in html
 
     async def test_html_handlers_before_connect(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             resource = await client.read_resource("ui://vault/app.html")
             html = (
@@ -179,7 +179,7 @@ class TestSPAShellResource:
             assert on_tool_result_pos < connect_pos
 
     async def test_html_contains_fullscreen_toggle(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             resource = await client.read_resource("ui://vault/app.html")
             html = (
@@ -189,7 +189,7 @@ class TestSPAShellResource:
             assert "requestDisplayMode" in html
 
     async def test_html_contains_ontoolinput(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             resource = await client.read_resource("ui://vault/app.html")
             html = resource[0].text
@@ -198,21 +198,21 @@ class TestSPAShellResource:
             assert "pendingToolInput" in html
 
     async def test_html_contains_ontoolcancelled(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             resource = await client.read_resource("ui://vault/app.html")
             html = resource[0].text
             assert "app.ontoolcancelled" in html
 
     async def test_html_contains_onteardown(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             resource = await client.read_resource("ui://vault/app.html")
             html = resource[0].text
             assert "app.onteardown" in html
 
     async def test_html_static_import(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             resource = await client.read_resource("ui://vault/app.html")
             html = resource[0].text
@@ -222,7 +222,7 @@ class TestSPAShellResource:
             assert "await import(" not in html
 
     async def test_html_parse_tool_result(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             resource = await client.read_resource("ui://vault/app.html")
             html = resource[0].text
@@ -241,7 +241,7 @@ class TestSPAShellResource:
 
     async def test_html_browse_fallback_when_no_tool_input(self) -> None:
         """After connect, app defaults to browse view when ontoolinput never fires."""
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             resource = await client.read_resource("ui://vault/app.html")
             html = resource[0].text
@@ -250,7 +250,7 @@ class TestSPAShellResource:
             assert "window.loadBrowser" in html
 
     async def test_html_contains_error_handler(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             resource = await client.read_resource("ui://vault/app.html")
             html = (
@@ -259,7 +259,7 @@ class TestSPAShellResource:
             assert "app.onerror" in html
 
     async def test_html_contains_navigate_to(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             resource = await client.read_resource("ui://vault/app.html")
             html = (
@@ -268,7 +268,7 @@ class TestSPAShellResource:
             assert "navigateTo" in html
 
     async def test_html_contains_send_to_llm(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             resource = await client.read_resource("ui://vault/app.html")
             html = (
@@ -278,7 +278,7 @@ class TestSPAShellResource:
             assert "sendMessage" in html
 
     async def test_html_contains_update_context(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             resource = await client.read_resource("ui://vault/app.html")
             html = (
@@ -298,14 +298,14 @@ class TestBrowseVaultTool:
     """Tests for the browse_vault primary tool."""
 
     async def test_tool_registered(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             tools = await client.list_tools()
             names = [t.name for t in tools]
             assert "browse_vault" in names
 
     async def test_no_args_returns_vault_summary(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool("browse_vault", {})
             data = _parse_tool_data(result)
@@ -314,7 +314,7 @@ class TestBrowseVaultTool:
             assert "notes" in data["summary"]
 
     async def test_with_path_returns_note_info(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool("browse_vault", {"path": "simple.md"})
             data = _parse_tool_data(result)
@@ -322,14 +322,14 @@ class TestBrowseVaultTool:
             assert data["view"] == "context"
 
     async def test_with_view_override(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool("browse_vault", {"view": "graph"})
             data = _parse_tool_data(result)
             assert data["view"] == "graph"
 
     async def test_missing_path(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool(
                 "browse_vault", {"path": "nonexistent/path.md"}
@@ -348,14 +348,14 @@ class TestShowContextTool:
     """Tests for the show_context tool."""
 
     async def test_tool_registered(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             tools = await client.list_tools()
             names = [t.name for t in tools]
             assert "show_context" in names
 
     async def test_returns_context_summary(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool("show_context", {"path": "simple.md"})
             data = _parse_tool_data(result)
@@ -375,7 +375,7 @@ class TestAppOnlyTools:
     """Tests for app-only tools (visibility=["app"])."""
 
     async def test_vault_context_returns_note_context(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool(
                 "vault___vault_context", {"path": "simple.md"}
@@ -389,7 +389,7 @@ class TestAppOnlyTools:
             assert "tags" in data
 
     async def test_vault_graph_neighborhood(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool(
                 "vault___vault_graph_neighborhood", {"path": "simple.md"}
@@ -404,7 +404,7 @@ class TestAppOnlyTools:
             assert "simple.md" in node_ids
 
     async def test_vault_graph_hubs(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool("vault___vault_graph_hubs", {})
             data = _parse_tool_data(result)
@@ -412,7 +412,7 @@ class TestAppOnlyTools:
             assert "edges" in data
 
     async def test_vault_list_root(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool("vault___vault_list", {})
             data = _parse_tool_data(result)
@@ -422,7 +422,7 @@ class TestAppOnlyTools:
 
     async def test_vault_list_root_notes_are_root_only(self) -> None:
         """Root listing must not include notes from subfolders."""
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool("vault___vault_list", {})
             data = _parse_tool_data(result)
@@ -433,7 +433,7 @@ class TestAppOnlyTools:
 
     async def test_vault_list_subfolder_notes_are_direct_children(self) -> None:
         """Subfolder listing must only include direct children, not deeper nesting."""
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool(
                 "vault___vault_list", {"folder": "subfolder"}
@@ -463,7 +463,7 @@ class TestAppOnlyTools:
         monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", str(tmp_path))
         for var in _CLEAR_VARS:
             monkeypatch.delenv(var, raising=False)
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool("vault___vault_list", {})
             data = _parse_tool_data(result)
@@ -476,7 +476,7 @@ class TestAppOnlyTools:
             )
 
     async def test_vault_read(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool("vault___vault_read", {"path": "simple.md"})
             data = _parse_tool_data(result)
@@ -485,7 +485,7 @@ class TestAppOnlyTools:
             assert "title" in data
 
     async def test_vault_read_missing(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool(
                 "vault___vault_read", {"path": "does-not-exist.md"}
@@ -494,7 +494,7 @@ class TestAppOnlyTools:
             assert data is None
 
     async def test_vault_search(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool(
                 "vault___vault_search", {"query": "hello", "mode": "keyword"}
@@ -536,7 +536,7 @@ class TestAppDomainOverride:
                 monkeypatch.delenv(var, raising=False)
         # Server creates successfully — no assertion on domain value since
         # it's internal to the resource config, but the server should not error.
-        server = create_server()
+        server = make_server()
         assert server is not None
 
 
@@ -567,7 +567,7 @@ class TestAppToolData:
     """Cover app-only tool Python paths for diff-cover."""
 
     async def test_browse_vault_with_path(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool(
                 "browse_vault", {"path": "full_frontmatter.md", "view": "browse"}
@@ -578,14 +578,14 @@ class TestAppToolData:
             assert "Frontmatter:" in data["summary"]
 
     async def test_browse_vault_no_path(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool("browse_vault", {})
             data = _parse_tool_data(result)
             assert "Vault:" in data["summary"]
 
     async def test_show_context_tool(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool("show_context", {"path": "simple.md"})
             data = _parse_tool_data(result)
@@ -594,7 +594,7 @@ class TestAppToolData:
             assert "Backlinks:" in data["summary"]
 
     async def test_vault_graph_hubs(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool("vault___vault_graph_hubs", {})
             data = _parse_tool_data(result)
@@ -602,7 +602,7 @@ class TestAppToolData:
             assert "edges" in data
 
     async def test_vault_list_root(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool("vault___vault_list", {})
             data = _parse_tool_data(result)
@@ -613,7 +613,7 @@ class TestAppToolData:
                 assert "/" not in note["path"]
 
     async def test_vault_read_note(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool("vault___vault_read", {"path": "simple.md"})
             data = _parse_tool_data(result)
@@ -621,7 +621,7 @@ class TestAppToolData:
             assert "content" in data
 
     async def test_vault_search_keyword(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool(
                 "vault___vault_search", {"query": "simple", "mode": "keyword"}
@@ -639,7 +639,7 @@ class TestAppToolData:
         assert result.endswith(".claudemcpcontent.com")
 
     async def test_vault_context_missing_path(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool(
                 "vault___vault_context", {"path": "does-not-exist.md"}
@@ -649,7 +649,7 @@ class TestAppToolData:
             assert "not found" in data["error"].lower()
 
     async def test_show_context_missing_path(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool(
                 "show_context", {"path": "does-not-exist.md"}
@@ -659,7 +659,7 @@ class TestAppToolData:
             assert "not found" in data["summary"].lower()
 
     async def test_vault_search_semantic_no_embeddings(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool(
                 "vault___vault_search", {"query": "test", "mode": "semantic"}
@@ -675,7 +675,7 @@ class TestAppToolLinkedData:
     """Cover graph traversal paths that require inter-note links."""
 
     async def test_vault_graph_neighborhood_with_links(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool(
                 "vault___vault_graph_neighborhood", {"path": "linked_a.md", "depth": 2}
@@ -688,7 +688,7 @@ class TestAppToolLinkedData:
             assert len(data["edges"]) > 0
 
     async def test_vault_graph_neighborhood_dedup(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool(
                 "vault___vault_graph_neighborhood", {"path": "linked_a.md", "depth": 2}
@@ -698,7 +698,7 @@ class TestAppToolLinkedData:
             assert len(edge_keys) == len(set(edge_keys))
 
     async def test_vault_graph_hubs_with_links(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool("vault___vault_graph_hubs", {})
             data = _parse_tool_data(result)
@@ -708,7 +708,7 @@ class TestAppToolLinkedData:
                 assert len(data["edges"]) > 0
 
     async def test_vault_context_with_links(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool(
                 "vault___vault_context", {"path": "linked_a.md"}
@@ -727,7 +727,7 @@ class TestAppToolLinkedData:
         for var in _CLEAR_VARS:
             if var != "MARKDOWN_VAULT_MCP_INDEXED_FIELDS":
                 monkeypatch.delenv(var, raising=False)
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool("show_context", {"path": "linked_b.md"})
             data = _parse_tool_data(result)

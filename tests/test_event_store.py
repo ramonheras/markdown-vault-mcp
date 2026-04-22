@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from markdown_vault_mcp.config import load_config
-from markdown_vault_mcp.mcp_server import build_event_store
+from markdown_vault_mcp.server import build_event_store
 
 
 class TestBuildEventStore:

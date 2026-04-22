@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 import pytest
 from fastmcp import Client
 
-from markdown_vault_mcp.mcp_server import create_server
+from markdown_vault_mcp.server import make_server
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -51,7 +51,7 @@ def _mcp_env(vault_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
 async def _fetch_app_html() -> str:
     """Create a server and fetch the app HTML resource."""
-    server = create_server()
+    server = make_server()
     async with Client(server) as client:
         resource = await client.read_resource("ui://vault/app.html")
         return resource[0].text if hasattr(resource[0], "text") else str(resource[0])

@@ -740,7 +740,7 @@ def load_config() -> CollectionConfig:
 # :class:`ServerConfig` view via :func:`_server_from_collection`, and
 # delegates to the core implementation.  The duplicates on
 # :class:`CollectionConfig` will be removed in a later PR once consumers
-# (currently :mod:`markdown_vault_mcp.mcp_server`) read directly from
+# (currently :mod:`markdown_vault_mcp.server`) read directly from
 # ``config.server`` instead.
 # ---------------------------------------------------------------------------
 

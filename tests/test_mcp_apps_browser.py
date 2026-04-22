@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 from fastmcp import Client
 
-from markdown_vault_mcp.mcp_server import create_server
+from markdown_vault_mcp.server import make_server
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -68,7 +68,7 @@ class TestBrowserHTML:
     """Verify browser elements exist in the SPA HTML."""
 
     async def _get_html(self) -> str:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             resource = await client.read_resource("ui://vault/app.html")
             return (
@@ -153,7 +153,7 @@ class TestBrowserDataTools:
     """Verify browser data tools return expected structures."""
 
     async def test_vault_list_root(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool("vault___vault_list", {})
             data = _parse_tool_data(result)
@@ -165,7 +165,7 @@ class TestBrowserDataTools:
             assert len(data["notes"]) > 0
 
     async def test_vault_list_subfolder(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool(
                 "vault___vault_list", {"folder": "subfolder"}
@@ -175,7 +175,7 @@ class TestBrowserDataTools:
             assert "notes" in data
 
     async def test_vault_read_note(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool("vault___vault_read", {"path": "simple.md"})
             data = _parse_tool_data(result)
@@ -187,7 +187,7 @@ class TestBrowserDataTools:
             assert len(data["content"]) > 0
 
     async def test_vault_read_with_frontmatter(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool(
                 "vault___vault_read", {"path": "full_frontmatter.md"}
@@ -197,7 +197,7 @@ class TestBrowserDataTools:
             assert len(data["frontmatter"]) > 0
 
     async def test_vault_search_keyword(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool(
                 "vault___vault_search", {"query": "simple", "mode": "keyword"}
@@ -211,7 +211,7 @@ class TestBrowserDataTools:
             assert "score" in data[0]
 
     async def test_vault_search_respects_limit(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool(
                 "vault___vault_search",
@@ -221,7 +221,7 @@ class TestBrowserDataTools:
             assert len(data) <= 2
 
     async def test_notes_have_kind_field(self) -> None:
-        server = create_server()
+        server = make_server()
         async with Client(server) as client:
             result = await client.call_tool("vault___vault_list", {})
             data = _parse_tool_data(result)

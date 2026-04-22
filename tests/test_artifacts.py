@@ -24,7 +24,7 @@ from fastmcp.exceptions import ToolError
 from starlette.testclient import TestClient
 
 from markdown_vault_mcp.artifacts import ARTIFACT_TTL_SECONDS, ArtifactStore
-from markdown_vault_mcp.mcp_server import create_server
+from markdown_vault_mcp.server import make_server
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -89,21 +89,21 @@ class TestCreateDownloadLinkRegistration:
             monkeypatch.delenv(var, raising=False)
 
     async def test_not_registered_on_stdio(self) -> None:
-        server = create_server(transport="stdio")
+        server = make_server(transport="stdio")
         async with Client(server) as client:
             tools = await client.list_tools()
         names = {t.name for t in tools}
         assert "create_download_link" not in names
 
     async def test_registered_on_http(self) -> None:
-        server = create_server(transport="http")
+        server = make_server(transport="http")
         async with Client(server) as client:
             tools = await client.list_tools()
         names = {t.name for t in tools}
         assert "create_download_link" in names
 
     async def test_registered_on_sse(self) -> None:
-        server = create_server(transport="sse")
+        server = make_server(transport="sse")
         async with Client(server) as client:
             tools = await client.list_tools()
         names = {t.name for t in tools}
@@ -119,7 +119,7 @@ class TestCreateDownloadLinkTool:
     """Functional tests for the create_download_link tool."""
 
     async def test_returns_json_with_download_url(self, _artifact_vault: Path) -> None:
-        server = create_server(transport="http")
+        server = make_server(transport="http")
         async with Client(server) as client:
             result = await client.call_tool("create_download_link", {"path": "note.md"})
         data = json.loads(result.content[0].text)
@@ -129,21 +129,21 @@ class TestCreateDownloadLinkTool:
         assert "content_type" in data
 
     async def test_download_url_contains_base_url(self, _artifact_vault: Path) -> None:
-        server = create_server(transport="http")
+        server = make_server(transport="http")
         async with Client(server) as client:
             result = await client.call_tool("create_download_link", {"path": "note.md"})
         data = json.loads(result.content[0].text)
         assert data["download_url"].startswith("https://mcp.example.com/artifacts/")
 
     async def test_content_type_markdown_for_notes(self, _artifact_vault: Path) -> None:
-        server = create_server(transport="http")
+        server = make_server(transport="http")
         async with Client(server) as client:
             result = await client.call_tool("create_download_link", {"path": "note.md"})
         data = json.loads(result.content[0].text)
         assert data["content_type"] == "text/markdown; charset=utf-8"
 
     async def test_content_type_for_attachment(self, _artifact_vault: Path) -> None:
-        server = create_server(transport="http")
+        server = make_server(transport="http")
         async with Client(server) as client:
             result = await client.call_tool(
                 "create_download_link", {"path": "assets/image.png"}
@@ -160,7 +160,7 @@ class TestCreateDownloadLinkTool:
         ``ttl_seconds`` argument is accepted for backward-compat and
         validation but does not vary the expiry per token.
         """
-        server = create_server(transport="http")
+        server = make_server(transport="http")
         async with Client(server) as client:
             result = await client.call_tool(
                 "create_download_link",
@@ -173,13 +173,13 @@ class TestCreateDownloadLinkTool:
         self, _artifact_vault: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.delenv("MARKDOWN_VAULT_MCP_BASE_URL", raising=False)
-        server = create_server(transport="http")
+        server = make_server(transport="http")
         async with Client(server) as client:
             with pytest.raises(ToolError, match="MARKDOWN_VAULT_MCP_BASE_URL"):
                 await client.call_tool("create_download_link", {"path": "note.md"})
 
     async def test_raises_on_zero_ttl(self, _artifact_vault: Path) -> None:
-        server = create_server(transport="http")
+        server = make_server(transport="http")
         async with Client(server) as client:
             with pytest.raises(ToolError, match="positive integer"):
                 await client.call_tool(
@@ -187,7 +187,7 @@ class TestCreateDownloadLinkTool:
                 )
 
     async def test_raises_on_negative_ttl(self, _artifact_vault: Path) -> None:
-        server = create_server(transport="http")
+        server = make_server(transport="http")
         async with Client(server) as client:
             with pytest.raises(ToolError, match="positive integer"):
                 await client.call_tool(
@@ -195,13 +195,13 @@ class TestCreateDownloadLinkTool:
                 )
 
     async def test_raises_on_nonexistent_path(self, _artifact_vault: Path) -> None:
-        server = create_server(transport="http")
+        server = make_server(transport="http")
         async with Client(server) as client:
             with pytest.raises(ToolError, match=r"not found|does not exist"):
                 await client.call_tool("create_download_link", {"path": "missing.md"})
 
     async def test_raises_on_path_traversal(self, _artifact_vault: Path) -> None:
-        server = create_server(transport="http")
+        server = make_server(transport="http")
         async with Client(server) as client:
             with pytest.raises(ToolError, match="traversal"):
                 await client.call_tool(
@@ -219,7 +219,7 @@ class TestArtifactHandler:
     """Tests for the ``GET /artifacts/{token}`` route registered by core.
 
     The route is mounted by :meth:`ArtifactStore.register_route` at
-    ``create_server`` time.  We build a minimal Starlette app with the
+    ``make_server`` time.  We build a minimal Starlette app with the
     same route + a shared :class:`ArtifactStore`, seed the store with
     :meth:`ArtifactStore.add`, and exercise the HTTP contract directly.
     """
@@ -301,12 +301,12 @@ class TestArtifactHandler:
 
 
 # ---------------------------------------------------------------------------
-# create_server: artifact route mounted on HTTP but not stdio
+# make_server: artifact route mounted on HTTP but not stdio
 # ---------------------------------------------------------------------------
 
 
 class TestCreateServerArtifactRoute:
-    """create_server mounts the artifact route for HTTP transport only."""
+    """make_server mounts the artifact route for HTTP transport only."""
 
     @pytest.fixture(autouse=True)
     def _env(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -319,13 +319,13 @@ class TestCreateServerArtifactRoute:
             monkeypatch.delenv(var, raising=False)
 
     def test_artifact_route_not_registered_for_stdio(self) -> None:
-        server = create_server(transport="stdio")
+        server = make_server(transport="stdio")
         routes = server._additional_http_routes
         paths = [getattr(r, "path", "") for r in routes]
         assert not any("/artifacts/" in p for p in paths)
 
     def test_artifact_route_registered_for_http(self) -> None:
-        server = create_server(transport="http")
+        server = make_server(transport="http")
         routes = server._additional_http_routes
         paths = [getattr(r, "path", "") for r in routes]
         assert any("/artifacts/" in p for p in paths)
@@ -341,7 +341,7 @@ class TestCreateServerArtifactRoute:
         """
         from markdown_vault_mcp.artifacts import get_artifact_store
 
-        server = create_server(transport="http")
+        server = make_server(transport="http")
         store = get_artifact_store()
         token = store.add(
             b"integration",
@@ -360,7 +360,7 @@ class TestGetArtifactStoreUninitialised:
     """get_artifact_store() must error rather than silently return None."""
 
     def test_raises_runtime_error_when_store_unset(self) -> None:
-        # Any prior test / create_server call may have set the singleton;
+        # Any prior test / make_server call may have set the singleton;
         # clear it explicitly to exercise the uninitialised path, then
         # restore afterwards.
         import markdown_vault_mcp.artifacts as _artifacts_module

@@ -103,7 +103,7 @@ ignore = ["E501"]
 # FastMCP dependency injection pattern — B008 is a false positive here.
 # Context/FastMCP/Collection imports must stay runtime (not TYPE_CHECKING) for
 # DI resolution — TC001/TC002.
-"src/markdown_vault_mcp/mcp_server.py" = ["B008", "TCH002"]
+"src/markdown_vault_mcp/server.py" = ["B008", "TCH002"]
 "src/markdown_vault_mcp/_server_deps.py" = ["B008", "TCH002"]
 "src/markdown_vault_mcp/_server_tools.py" = ["B008", "TCH001", "TCH002"]
 "src/markdown_vault_mcp/_server_resources.py" = ["B008", "TCH001", "TCH002"]

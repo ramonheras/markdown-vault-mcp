@@ -5,7 +5,7 @@ with proper ``ToolAnnotations``.  Uses a lifespan hook to build the
 ``Collection`` once at startup and tear it down on shutdown.
 
 The server is configured entirely via environment variables (see
-:mod:`markdown_vault_mcp.config`).  Call :func:`create_server` to build a
+:mod:`markdown_vault_mcp.config`).  Call :func:`make_server` to build a
 configured :class:`~fastmcp.FastMCP` instance.
 """
 
@@ -112,7 +112,7 @@ def _build_default_instructions(*, read_only: bool) -> str:
     )
 
 
-def create_server(transport: str = "stdio") -> FastMCP:
+def make_server(transport: str = "stdio") -> FastMCP:
     """Create and configure the FastMCP server.
 
     Reads configuration from environment variables via :func:`load_config`.
