@@ -18,7 +18,7 @@ description: |
   Generic markdown collection MCP server with FTS5 + semantic search,
   frontmatter-aware indexing, and incremental reindexing.
 homepage: "https://pvliesdonk.github.io/markdown-vault-mcp/"
-license: "MIT"
+license: "MIT"  # project-owned — keep across copier updates
 
 # --- Package contents ---
 
