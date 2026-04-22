@@ -127,11 +127,6 @@ Env var prefix is `MARKDOWN_VAULT_MCP_` — all env reads go through `fastmcp_pv
 
 <!-- ===== TEMPLATE-OWNED SECTIONS END ===== -->
 
-## Shared Infrastructure
-<!-- DOMAIN-START -->
-Shared infrastructure (auth, middleware, logging, event store, CLI scaffolding, release pipeline, Docker/packaging) lives upstream in [`fastmcp-pvl-core`](https://github.com/pvliesdonk/fastmcp-pvl-core) (library) and [`fastmcp-server-template`](https://github.com/pvliesdonk/fastmcp-server-template) (copier template). Fixes and improvements to shared code land there and propagate to this repo via `copier update` against the template's latest tag. Domain-specific code (vault logic, tools, resources, prompts) stays in this repo.
-<!-- DOMAIN-END -->
-
 ## Key Design Decisions
 <!-- DOMAIN-START -->
 - Document identity: relative path with `.md` extension
