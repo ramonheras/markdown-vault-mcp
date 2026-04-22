@@ -121,11 +121,7 @@ Every issue, PR, and code change must consider documentation impact. Before clos
 
 ## Config & Customization Contract
 
-<<<<<<< before updating
-Domain configuration composes `fastmcp_pvl_core.ServerConfig` inside `CollectionConfig` (see `src/markdown_vault_mcp/config.py`). Add domain fields between the `CONFIG-FIELDS-START` / `CONFIG-FIELDS-END` sentinels and populate them from env vars between the `CONFIG-FROM-ENV-START` / `CONFIG-FROM-ENV-END` sentinels. Never inherit from `ServerConfig`; always compose.
-=======
 Domain configuration composes `fastmcp_pvl_core.ServerConfig` inside your domain config class (see `src/markdown_vault_mcp/config.py`).  Add domain fields between the `CONFIG-FIELDS-START` / `CONFIG-FIELDS-END` sentinels and populate them in `from_env` between the `CONFIG-FROM-ENV-START` / `CONFIG-FROM-ENV-END` sentinels.  Never inherit from `ServerConfig`; always compose.
->>>>>>> after updating
 
 Env var prefix is `MARKDOWN_VAULT_MCP_` — all env reads go through `fastmcp_pvl_core.env(_ENV_PREFIX, "SUFFIX", default)` so naming stays consistent.
 

@@ -23,11 +23,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # Copy source and install project.
 COPY . .
 RUN --mount=type=cache,target=/root/.cache/uv \
-<<<<<<< before updating
     uv sync --frozen --no-dev --extra all
-=======
-    uv sync --frozen --no-dev
->>>>>>> after updating
 # DOCKERFILE-UV-EXTRAS-END
 
 # Create non-root user with configurable UID/GID for bind-mount compatibility.
