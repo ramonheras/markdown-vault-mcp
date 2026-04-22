@@ -1,14 +1,19 @@
 #!/usr/bin/env python3
 """Bump versioned manifests to match the semantic-release version.
 
-Invoked by python-semantic-release via `[tool.semantic_release] build_command`.
-PSR sets ``NEW_VERSION`` in the environment and, because the three manifest
-paths are listed in ``[tool.semantic_release] assets``, PSR stages and commits
-them together with ``pyproject.toml`` + ``CHANGELOG.md`` as the single release
+Invoked by python-semantic-release via ``[tool.semantic_release] build_command``.
+PSR sets ``NEW_VERSION`` in the environment and, because ``server.json`` is
+listed in ``[tool.semantic_release] assets``, PSR stages and commits it
+together with ``pyproject.toml`` + ``CHANGELOG.md`` as the single release
 commit — which is the commit it then tags.
 
 The script runs inside PSR's Docker action container (python:3.14-slim), which
 has Python but no ``jq`` — hence Python rather than a shell+jq wrapper.
+
+Projects that ship additional versioned manifests (e.g. a Claude Code
+``plugin.json``, an ``.mcp.json``, or other lockstep JSON/TOML files) should
+add the extra paths to this script and list them in
+``pyproject.toml`` ``[tool.semantic_release] assets``.
 """
 
 from __future__ import annotations
@@ -47,32 +52,55 @@ def main() -> int:
     # Replace only the ``:v<old>`` suffix of the OCI identifier so forks/renames
     # keep their own ``ghcr.io/<owner>/<image>`` base.
     server_path = Path("server.json")
+    if not server_path.exists():
+        print(
+            f"server.json not found in {Path.cwd()} — run from repo root",
+            file=sys.stderr,
+        )
+        return 1
     server = _load(server_path)
+    if not isinstance(server, dict):
+        print(
+            f"{server_path} must contain a JSON object (top-level), "
+            f"got {type(server).__name__}",
+            file=sys.stderr,
+        )
+        return 1
     server["version"] = version
-    for pkg in server.get("packages", []):
+    packages = server.get("packages", [])
+    if not isinstance(packages, list):
+        print(
+            f"{server_path}: 'packages' must be a JSON array, got "
+            f"{type(packages).__name__}",
+            file=sys.stderr,
+        )
+        return 1
+    for i, pkg in enumerate(packages):
+        if not isinstance(pkg, dict):
+            print(
+                f"WARNING: packages[{i}] is not a JSON object "
+                f"(got {type(pkg).__name__}) — skipped",
+                file=sys.stderr,
+            )
+            continue
         if pkg.get("registryType") == "pypi":
             pkg["version"] = version
         elif pkg.get("registryType") == "oci":
-            pkg["identifier"] = re.sub(r":v[^:]+$", f":v{version}", pkg["identifier"])
+            # ``or ""`` covers both the absent-key and the JSON-null cases;
+            # ``dict.get(key, default)`` only returns default when the key
+            # is absent, not when the value is None.
+            identifier = pkg.get("identifier") or ""
+            new_id, n = re.subn(r":v[^:]+$", f":v{version}", identifier)
+            if n == 0:
+                print(
+                    f"WARNING: OCI identifier {identifier!r} has no ':v<tag>' "
+                    "suffix to bump — left unchanged",
+                    file=sys.stderr,
+                )
+            pkg["identifier"] = new_id
     _dump(server_path, server)
 
-    # Claude Code plugin.json: plugin version, lockstep with the package.
-    plugin_path = Path(".claude-plugin/plugin/.claude-plugin/plugin.json")
-    plugin = _load(plugin_path)
-    plugin["version"] = version
-    _dump(plugin_path, plugin)
-
-    # Claude Code .mcp.json: pin uvx --from spec to the released version.
-    mcp_path = Path(".claude-plugin/plugin/.mcp.json")
-    mcp = _load(mcp_path)
-    mcp["markdown-vault-mcp"]["args"] = [
-        "--from",
-        f"markdown-vault-mcp[all]=={version}",
-        "markdown-vault-mcp",
-        "serve",
-    ]
-    _dump(mcp_path, mcp)
-
+    print(f"bump_manifests: server.json → {version}")
     return 0
 
 
