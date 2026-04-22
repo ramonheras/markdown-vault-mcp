@@ -66,7 +66,7 @@ markdown-vault-mcp (new package)
 +-- tracker.py        -- hash-based change detection
 +-- collection.py     -- thin facade: lifecycle, wiring, delegation
 +-- config.py         -- configuration loading
-+-- server.py     -- generic FastMCP server
++-- server.py         -- generic FastMCP server
 +-- cli.py            -- CLI entry point
 +-- utils/
 |   +-- text.py       -- text normalization and fuzzy matching
