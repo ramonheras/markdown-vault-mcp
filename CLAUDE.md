@@ -86,11 +86,9 @@ Every issue, PR, and code change must consider documentation impact. Before clos
 
 **Rule: code without matching docs is incomplete.** When writing issues, include a "Documentation" section listing which docs need updating. When reviewing PRs, verify documentation is included. A PR that adds a tool, env var, resource, or user-facing feature without updating the corresponding docs/ page and README section should not be merged.
 
-## Cross-Repo Sync
+## Shared Infrastructure
 
-This repo shares domain-independent infrastructure with [`pvliesdonk/image-generation-mcp`](https://github.com/pvliesdonk/image-generation-mcp). See [`SYNC.md`](SYNC.md) for the shared file mapping, known divergences, and port history.
-
-**Rule:** When fixing or improving shared infrastructure (auth, CI/CD, Docker entrypoint, release pipeline, packaging, CLI logging), create a corresponding issue in the other repo to port the change. Reference the source PR in the issue body. Domain-specific code (vault logic, image generation, tools, resources) does not need cross-posting.
+Shared infrastructure (auth, middleware, logging, event store, CLI scaffolding, release pipeline, Docker/packaging) lives upstream in [`fastmcp-pvl-core`](https://github.com/pvliesdonk/fastmcp-pvl-core) (library) and [`fastmcp-server-template`](https://github.com/pvliesdonk/fastmcp-server-template) (copier template). Fixes and improvements to shared code land there and propagate to this repo via `copier update` against the template's latest tag. Domain-specific code (vault logic, tools, resources, prompts) stays in this repo.
 
 ## Logging Standard
 
