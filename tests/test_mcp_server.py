@@ -1,4 +1,4 @@
-"""Integration tests for mcp_server.py using FastMCP test client.
+"""Integration tests for server.py using FastMCP test client.
 
 Tests exercise all MCP tools via the in-memory Client transport,
 verifying end-to-end behaviour through the full Collection stack.
@@ -2271,7 +2271,7 @@ class TestLifespanAutoEmbeddings:
         mock_prov = MockEmbeddingProvider()
         # Patch at providers module — the lifespan uses a local import so the
         # patched attribute is resolved at call time.  If the import moves to
-        # module level, patch "mcp_server.get_embedding_provider" instead.
+        # module level, patch "markdown_vault_mcp.server.get_embedding_provider" instead.
         with patch(
             "markdown_vault_mcp.providers.get_embedding_provider",
             return_value=mock_prov,

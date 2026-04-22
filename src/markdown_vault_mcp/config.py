@@ -776,7 +776,7 @@ def resolve_auth_mode(config: CollectionConfig) -> str | None:
     resolver via :func:`_server_from_collection` and hides the ``"multi"``
     / ``"bearer"`` / ``"none"`` outcomes behind ``None`` so callers that
     only branch on the OIDC flavor (``"remote"`` / ``"oidc-proxy"``) keep
-    working.  Production code in :mod:`mcp_server` now calls core's
+    working.  Production code in :mod:`markdown_vault_mcp.server` now calls core's
     :func:`~fastmcp_pvl_core.resolve_auth_mode` directly on
     ``config.server``.
 
