@@ -3,14 +3,17 @@
 
 [![CI](https://github.com/pvliesdonk/markdown-vault-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/pvliesdonk/markdown-vault-mcp/actions/workflows/ci.yml) [![codecov](https://codecov.io/gh/pvliesdonk/markdown-vault-mcp/graph/badge.svg)](https://codecov.io/gh/pvliesdonk/markdown-vault-mcp) [![PyPI](https://img.shields.io/pypi/v/markdown-vault-mcp)](https://pypi.org/project/markdown-vault-mcp/) [![Python](https://img.shields.io/pypi/pyversions/markdown-vault-mcp)](https://pypi.org/project/markdown-vault-mcp/) [![License](https://img.shields.io/github/license/pvliesdonk/markdown-vault-mcp)](LICENSE) [![Docker](https://img.shields.io/github/v/release/pvliesdonk/markdown-vault-mcp?label=ghcr.io&logo=docker)](https://github.com/pvliesdonk/markdown-vault-mcp/pkgs/container/markdown-vault-mcp) [![Docs](https://img.shields.io/badge/docs-GitHub%20Pages-blue)](https://pvliesdonk.github.io/markdown-vault-mcp/) [![llms.txt](https://img.shields.io/badge/llms.txt-available-brightgreen)](https://pvliesdonk.github.io/markdown-vault-mcp/llms.txt) [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/pvliesdonk/markdown-vault-mcp)
 
+<!-- DOMAIN-START -->
 A generic markdown collection [MCP](https://modelcontextprotocol.io/) server with FTS5 full-text search, semantic vector search, frontmatter-aware indexing, incremental reindexing, and non-markdown attachment support.
 
 **[Documentation](https://pvliesdonk.github.io/markdown-vault-mcp/)** | **[PyPI](https://pypi.org/project/markdown-vault-mcp/)** | **[Docker](https://github.com/pvliesdonk/markdown-vault-mcp/pkgs/container/markdown-vault-mcp)**
 
 Point it at a directory of Markdown files (an Obsidian vault, a docs folder, a Zettelkasten, a PARA vault) and it exposes search, read, write, and edit tools over the Model Context Protocol.
+<!-- DOMAIN-END -->
 
 ## Features
 
+<!-- DOMAIN-START -->
 - **Full-text search** — SQLite FTS5 with BM25 scoring, porter stemming
 - **Semantic search** — cosine similarity over embedding vectors (FastEmbed, Ollama, or OpenAI)
 - **Hybrid search** — Reciprocal Rank Fusion combining FTS5 and vector results
@@ -23,9 +26,11 @@ Point it at a directory of Markdown files (an Obsidian vault, a docs folder, a Z
 - **MCP tools** — 28 LLM-visible tools including search, read, write, edit, delete, rename, git history, and admin operations; plus 6 app-only tools for MCP Apps clients
 - **MCP resources** — 9 resources exposing vault configuration, statistics, tags, folders, document outlines, similar notes, recent notes, and an interactive SPA
 - **MCP prompts** — 6 prompt templates including template-driven note creation
+<!-- DOMAIN-END -->
 
 ## What you can do with it
 
+<!-- DOMAIN-START -->
 With this server mounted in Claude, you can:
 
 - **Capture a URL as a note.** "Fetch <url>, summarize as a Resource note under `3-Resources/`, and link any existing notes on the topic." — Claude composes `fetch` + `search` + `write`.
@@ -35,6 +40,9 @@ With this server mounted in Claude, you can:
 - **Split or merge captures.** "Split this Inbox note into two." / "Merge this into `<existing note>` instead of duplicating." — Claude composes `read` + `write` + `delete`.
 
 No external scheduler, no separate capture app — the vault sits behind your conversations and absorbs their output.
+<!-- DOMAIN-END -->
+
+<!-- ===== TEMPLATE-OWNED SECTIONS BELOW — DO NOT EDIT; CHANGES WILL BE OVERWRITTEN ON COPIER UPDATE ===== -->
 
 ## Installation
 
@@ -44,6 +52,7 @@ No external scheduler, no separate capture app — the vault sits behind your co
 pip install markdown-vault-mcp
 ```
 
+<!-- DOMAIN-START -->
 With optional dependencies:
 
 ```bash
@@ -52,13 +61,14 @@ pip install markdown-vault-mcp[embeddings-api]  # Ollama/OpenAI embeddings via H
 pip install markdown-vault-mcp[embeddings]      # FastEmbed local embeddings
 pip install markdown-vault-mcp[all]             # MCP + FastEmbed + API embeddings
 ```
+<!-- DOMAIN-END -->
 
 ### From source
 
 ```bash
 git clone https://github.com/pvliesdonk/markdown-vault-mcp.git
 cd markdown-vault-mcp
-pip install -e ".[all,dev]"
+uv sync --all-extras --dev
 ```
 
 ### Docker
@@ -67,20 +77,23 @@ pip install -e ".[all,dev]"
 docker pull ghcr.io/pvliesdonk/markdown-vault-mcp:latest
 ```
 
-The Docker image uses `[all]` (MCP + FastEmbed + API embeddings). By default, semantic search works locally with FastEmbed and can switch to Ollama/OpenAI when configured.
+<!-- DOMAIN-START -->
+The Docker image uses `[all]` (MCP + FastEmbed + API embeddings). By default, semantic search works locally with FastEmbed and can switch to Ollama/OpenAI when configured. A `compose.yml` ships at the repo root as a starting point — copy `.env.example` to `.env`, edit, and `docker compose up -d`.
 
 ### Linux packages (.deb / .rpm)
 
-Download `.deb` or `.rpm` packages from the [GitHub Releases](https://github.com/pvliesdonk/markdown-vault-mcp/releases) page. These install a systemd service with security hardening. See the [systemd deployment guide](https://pvliesdonk.github.io/markdown-vault-mcp/deployment/systemd/) for details.
+Download `.deb` or `.rpm` packages from the [GitHub Releases](https://github.com/pvliesdonk/markdown-vault-mcp/releases) page. Both install a hardened systemd unit; env configuration is sourced from `/etc/markdown-vault-mcp/env` (copy from the shipped `/etc/markdown-vault-mcp/env.example`). See the [systemd deployment guide](https://pvliesdonk.github.io/markdown-vault-mcp/deployment/systemd/) for details.
 
 ### Claude Desktop (.mcpb bundle)
 
 Download the `.mcpb` bundle from the [GitHub Releases](https://github.com/pvliesdonk/markdown-vault-mcp/releases) page. Double-click to install, or run:
+<!-- DOMAIN-END -->
 
 ```bash
 mcpb install markdown-vault-mcp-<version>.mcpb
 ```
 
+<!-- DOMAIN-START -->
 Claude Desktop opens a GUI wizard that prompts for required env vars — no manual JSON editing needed. See [Step 0 of the Claude Desktop guide](https://pvliesdonk.github.io/markdown-vault-mcp/guides/claude-desktop/#step-0-install-via-mcpb-bundle-easiest) for details.
 
 ### Claude Code plugin
@@ -486,18 +499,52 @@ For setup instructions, troubleshooting, and provider-specific guides, see the [
 ```bash
 git clone https://github.com/pvliesdonk/markdown-vault-mcp.git
 cd markdown-vault-mcp
-uv pip install -e ".[all,dev]"
+uv sync --all-extras --dev
 
 # Run tests
 uv run python -m pytest tests/ -x -q
 
 # Lint and format
-ruff check src/ tests/
-ruff format src/ tests/
+uv run ruff check src/ tests/
+uv run ruff format src/ tests/
 
 # Type check
-mypy src/
+uv run mypy src/ tests/
 ```
+<!-- DOMAIN-END -->
+
+## GitHub secrets
+
+CI workflows reference three repository secrets. Configure them via **Settings → Secrets and variables → Actions** or with `gh secret set`:
+
+| Secret | Used by | How to generate |
+|---|---|---|
+| `RELEASE_TOKEN` | `release.yml`, `copier-update.yml` | Fine-grained PAT at <https://github.com/settings/personal-access-tokens/new> with `contents: write` and `pull_requests: write` (the `copier-update` cron opens PRs). Scoped to this repo. |
+| `CODECOV_TOKEN` | `ci.yml` | <https://codecov.io> — sign in with GitHub, add the repo, copy the upload token from the repo settings page. |
+| `CLAUDE_CODE_OAUTH_TOKEN` | `claude.yml`, `claude-code-review.yml` | Run `claude setup-token` locally and paste the result. |
+
+`GITHUB_TOKEN` is auto-provided — no action needed.
+
+## Troubleshooting
+
+### Moving a scaffolded project
+
+`uv sync` creates `.venv/bin/*` scripts with absolute shebangs pointing at the venv Python. If you move the repo (`mv /old/path /new/path`), `uv run pytest` fails with `ModuleNotFoundError` because the stale shebang resolves to a different interpreter than the venv's site-packages.
+
+**Fix:**
+
+```bash
+rm -rf .venv
+uv sync --all-extras --dev
+```
+
+`uv run python -m pytest` also works as a one-shot workaround.
+
+### `uv.lock` refresh after `copier update`
+
+When `copier update` introduces new dependencies, CI runs `uv sync --frozen` which fails against a stale lockfile. Run `uv lock` locally and commit the refreshed `uv.lock` alongside accepting the copier-update PR.
+
+<!-- ===== TEMPLATE-OWNED SECTIONS END ===== -->
 
 ## License
 
