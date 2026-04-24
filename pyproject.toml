@@ -45,6 +45,15 @@ embeddings-api = ["httpx>=0.25", "numpy>=1.20"]
 embeddings = ["fastembed>=0.3", "numpy>=1.20"]
 all = ["fastmcp>=3.0,<4", "httpx>=0.25", "fastembed>=0.3", "numpy>=1.20"]
 # PROJECT-EXTRAS-END
+<<<<<<< before updating
+=======
+
+docs = [
+    "mkdocs-material>=9",
+    "mkdocstrings[python]>=0.28",
+]
+
+>>>>>>> after updating
 dev = [
     "pytest>=7.0",
     "pytest-asyncio>=0.21",
@@ -101,6 +110,7 @@ ignore = ["E501"]
 "src/markdown_vault_mcp/collection.py" = ["ARG002"]
 # Depends() and CurrentContext() calls in argument defaults are the standard
 # FastMCP dependency injection pattern — B008 is a false positive here.
+<<<<<<< before updating
 # Context/FastMCP/Collection imports must stay runtime (not TYPE_CHECKING) for
 # DI resolution — TC001/TC002.
 "src/markdown_vault_mcp/server.py" = ["B008", "TCH002"]
@@ -109,6 +119,20 @@ ignore = ["E501"]
 "src/markdown_vault_mcp/_server_resources.py" = ["B008", "TCH001", "TCH002"]
 "src/markdown_vault_mcp/_server_prompts.py" = ["B008", "TCH002"]
 "src/markdown_vault_mcp/_server_apps.py" = ["B008", "TCH001", "TCH002"]
+=======
+# Context/FastMCP/Service imports must stay runtime (not TYPE_CHECKING) for
+# DI resolution — TC001/TC002/TC003.
+"src/markdown_vault_mcp/cli.py" = ["B008"]
+"src/markdown_vault_mcp/_server_deps.py" = ["B008", "TC002", "TC003"]
+"src/markdown_vault_mcp/_server_apps.py" = ["B008", "TC001", "TC002"]
+"src/markdown_vault_mcp/tools.py" = ["B008", "TC001", "TC002"]
+"src/markdown_vault_mcp/resources.py" = ["B008", "TC001", "TC002"]
+"src/markdown_vault_mcp/prompts.py" = ["B008", "TC002"]
+"tests/conftest.py" = ["TC002", "TC003"]
+"tests/test_smoke.py" = ["TC002"]
+"tests/test_tools.py" = ["TC002"]
+# Add project-specific overrides below as needed.
+>>>>>>> after updating
 
 [tool.ruff.lint.isort]
 known-first-party = ["markdown_vault_mcp"]
@@ -168,6 +192,9 @@ ignore_errors = true
 venvPath = "."
 venv = ".venv"
 pythonVersion = "3.11"
+# src-layout editable installs use a .pth shim that Pyright does not execute;
+# point Pyright at src/ directly so IDE import resolution matches runtime.
+extraPaths = ["src"]
 
 [tool.semantic_release]
 version_toml = ["pyproject.toml:project.version"]
