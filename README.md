@@ -499,18 +499,20 @@ For setup instructions, troubleshooting, and provider-specific guides, see the [
 ```bash
 git clone https://github.com/pvliesdonk/markdown-vault-mcp.git
 cd markdown-vault-mcp
-uv pip install -e ".[all,dev]"
+uv sync --all-extras --dev
 
 # Run tests
 uv run python -m pytest tests/ -x -q
 
 # Lint and format
-ruff check src/ tests/
-ruff format src/ tests/
+uv run ruff check src/ tests/
+uv run ruff format src/ tests/
 
 # Type check
-mypy src/
+uv run mypy src/ tests/
 ```
+<!-- DOMAIN-END -->
+
 ## GitHub secrets
 
 CI workflows reference three repository secrets. Configure them via **Settings → Secrets and variables → Actions** or with `gh secret set`:
