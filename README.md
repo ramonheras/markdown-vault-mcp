@@ -1,17 +1,19 @@
 <!-- mcp-name: io.github.pvliesdonk/markdown-vault-mcp -->
 # markdown-vault-mcp
 
-<<<<<<< before updating
 [![CI](https://github.com/pvliesdonk/markdown-vault-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/pvliesdonk/markdown-vault-mcp/actions/workflows/ci.yml) [![codecov](https://codecov.io/gh/pvliesdonk/markdown-vault-mcp/graph/badge.svg)](https://codecov.io/gh/pvliesdonk/markdown-vault-mcp) [![PyPI](https://img.shields.io/pypi/v/markdown-vault-mcp)](https://pypi.org/project/markdown-vault-mcp/) [![Python](https://img.shields.io/pypi/pyversions/markdown-vault-mcp)](https://pypi.org/project/markdown-vault-mcp/) [![License](https://img.shields.io/github/license/pvliesdonk/markdown-vault-mcp)](LICENSE) [![Docker](https://img.shields.io/github/v/release/pvliesdonk/markdown-vault-mcp?label=ghcr.io&logo=docker)](https://github.com/pvliesdonk/markdown-vault-mcp/pkgs/container/markdown-vault-mcp) [![Docs](https://img.shields.io/badge/docs-GitHub%20Pages-blue)](https://pvliesdonk.github.io/markdown-vault-mcp/) [![llms.txt](https://img.shields.io/badge/llms.txt-available-brightgreen)](https://pvliesdonk.github.io/markdown-vault-mcp/llms.txt) [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/pvliesdonk/markdown-vault-mcp)
 
+<!-- DOMAIN-START -->
 A generic markdown collection [MCP](https://modelcontextprotocol.io/) server with FTS5 full-text search, semantic vector search, frontmatter-aware indexing, incremental reindexing, and non-markdown attachment support.
 
 **[Documentation](https://pvliesdonk.github.io/markdown-vault-mcp/)** | **[PyPI](https://pypi.org/project/markdown-vault-mcp/)** | **[Docker](https://github.com/pvliesdonk/markdown-vault-mcp/pkgs/container/markdown-vault-mcp)**
 
 Point it at a directory of Markdown files (an Obsidian vault, a docs folder, a Zettelkasten, a PARA vault) and it exposes search, read, write, and edit tools over the Model Context Protocol.
+<!-- DOMAIN-END -->
 
 ## Features
 
+<!-- DOMAIN-START -->
 - **Full-text search** — SQLite FTS5 with BM25 scoring, porter stemming
 - **Semantic search** — cosine similarity over embedding vectors (FastEmbed, Ollama, or OpenAI)
 - **Hybrid search** — Reciprocal Rank Fusion combining FTS5 and vector results
@@ -24,9 +26,11 @@ Point it at a directory of Markdown files (an Obsidian vault, a docs folder, a Z
 - **MCP tools** — 28 LLM-visible tools including search, read, write, edit, delete, rename, git history, and admin operations; plus 6 app-only tools for MCP Apps clients
 - **MCP resources** — 9 resources exposing vault configuration, statistics, tags, folders, document outlines, similar notes, recent notes, and an interactive SPA
 - **MCP prompts** — 6 prompt templates including template-driven note creation
+<!-- DOMAIN-END -->
 
 ## What you can do with it
 
+<!-- DOMAIN-START -->
 With this server mounted in Claude, you can:
 
 - **Capture a URL as a note.** "Fetch <url>, summarize as a Resource note under `3-Resources/`, and link any existing notes on the topic." — Claude composes `fetch` + `search` + `write`.
@@ -36,43 +40,9 @@ With this server mounted in Claude, you can:
 - **Split or merge captures.** "Split this Inbox note into two." / "Merge this into `<existing note>` instead of duplicating." — Claude composes `read` + `write` + `delete`.
 
 No external scheduler, no separate capture app — the vault sits behind your conversations and absorbs their output.
-=======
-[![CI](https://github.com/pvliesdonk/markdown-vault-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/pvliesdonk/markdown-vault-mcp/actions/workflows/ci.yml) [![codecov](https://codecov.io/gh/pvliesdonk/markdown-vault-mcp/graph/badge.svg)](https://codecov.io/gh/pvliesdonk/markdown-vault-mcp) [![PyPI](https://img.shields.io/pypi/v/markdown-vault-mcp)](https://pypi.org/project/markdown-vault-mcp/) [![Python](https://img.shields.io/pypi/pyversions/markdown-vault-mcp)](https://pypi.org/project/markdown-vault-mcp/) [![License](https://img.shields.io/github/license/pvliesdonk/markdown-vault-mcp)](LICENSE) [![Docker](https://img.shields.io/github/v/release/pvliesdonk/markdown-vault-mcp?label=ghcr.io&logo=docker)](https://github.com/pvliesdonk/markdown-vault-mcp/pkgs/container/markdown-vault-mcp) [![Docs](https://img.shields.io/badge/docs-GitHub%20Pages-blue)](https://pvliesdonk.github.io/markdown-vault-mcp/) [![llms.txt](https://img.shields.io/badge/llms.txt-available-brightgreen)](https://pvliesdonk.github.io/markdown-vault-mcp/llms.txt)
-
-Generic markdown collection MCP server with FTS5 + semantic search
-
-**[Documentation](https://pvliesdonk.github.io/markdown-vault-mcp/)** | **[PyPI](https://pypi.org/project/markdown-vault-mcp/)** | **[Docker](https://github.com/pvliesdonk/markdown-vault-mcp/pkgs/container/markdown-vault-mcp)**
-
-## Features
-
-<!-- DOMAIN-START -->
-<!-- Replace with 3-7 bullets describing what this MCP server does. Kept across copier update. -->
-
-- **[Capability 1]** — one-sentence description of a user-visible feature.
-- **[Capability 2]** — one-sentence description of another capability.
-- **MCP tools** — N LLM-visible tools exposed; see `src/markdown_vault_mcp/tools.py`.
-- **MCP resources** — M resources exposing domain state; see `src/markdown_vault_mcp/resources.py`.
-- **MCP prompts** — K prompt templates; see `src/markdown_vault_mcp/prompts.py`.
-<!-- DOMAIN-END -->
-
-## What you can do with it
-
-<!-- DOMAIN-START -->
-<!-- Replace with 3-5 concrete "you can ask Claude to X" examples. Kept across copier update. -->
-
-With this server mounted in an MCP client (Claude, etc.), you can:
-
-- **[Task 1]** — "[example user request]." Composes tools `[tool_a]` + `[tool_b]`.
-- **[Task 2]** — "[another example request]." Uses resource `[resource_x]`.
-- **[Task 3]** — "[third example]."
-
-Short, concrete prompts beat abstract feature lists — replace the
-`[Task N]` placeholders with prompts that actually work against your
-server's tool surface.
 <!-- DOMAIN-END -->
 
 <!-- ===== TEMPLATE-OWNED SECTIONS BELOW — DO NOT EDIT; CHANGES WILL BE OVERWRITTEN ON COPIER UPDATE ===== -->
->>>>>>> after updating
 
 ## Installation
 
@@ -82,7 +52,7 @@ server's tool surface.
 pip install markdown-vault-mcp
 ```
 
-<<<<<<< before updating
+<!-- DOMAIN-START -->
 With optional dependencies:
 
 ```bash
@@ -91,24 +61,14 @@ pip install markdown-vault-mcp[embeddings-api]  # Ollama/OpenAI embeddings via H
 pip install markdown-vault-mcp[embeddings]      # FastEmbed local embeddings
 pip install markdown-vault-mcp[all]             # MCP + FastEmbed + API embeddings
 ```
-=======
-If you add optional extras via the `PROJECT-EXTRAS-START` / `PROJECT-EXTRAS-END` sentinels in `pyproject.toml`, document them below:
-
-<!-- DOMAIN-START -->
-<!-- List optional extras and their purpose here (e.g. `pip install markdown-vault-mcp[embeddings]`). Kept across copier update. -->
 <!-- DOMAIN-END -->
->>>>>>> after updating
 
 ### From source
 
 ```bash
 git clone https://github.com/pvliesdonk/markdown-vault-mcp.git
 cd markdown-vault-mcp
-<<<<<<< before updating
-pip install -e ".[all,dev]"
-=======
 uv sync --all-extras --dev
->>>>>>> after updating
 ```
 
 ### Docker
@@ -117,33 +77,23 @@ uv sync --all-extras --dev
 docker pull ghcr.io/pvliesdonk/markdown-vault-mcp:latest
 ```
 
-<<<<<<< before updating
-The Docker image uses `[all]` (MCP + FastEmbed + API embeddings). By default, semantic search works locally with FastEmbed and can switch to Ollama/OpenAI when configured.
+<!-- DOMAIN-START -->
+The Docker image uses `[all]` (MCP + FastEmbed + API embeddings). By default, semantic search works locally with FastEmbed and can switch to Ollama/OpenAI when configured. A `compose.yml` ships at the repo root as a starting point — copy `.env.example` to `.env`, edit, and `docker compose up -d`.
 
 ### Linux packages (.deb / .rpm)
 
-Download `.deb` or `.rpm` packages from the [GitHub Releases](https://github.com/pvliesdonk/markdown-vault-mcp/releases) page. These install a systemd service with security hardening. See the [systemd deployment guide](https://pvliesdonk.github.io/markdown-vault-mcp/deployment/systemd/) for details.
+Download `.deb` or `.rpm` packages from the [GitHub Releases](https://github.com/pvliesdonk/markdown-vault-mcp/releases) page. Both install a hardened systemd unit; env configuration is sourced from `/etc/markdown-vault-mcp/env` (copy from the shipped `/etc/markdown-vault-mcp/env.example`). See the [systemd deployment guide](https://pvliesdonk.github.io/markdown-vault-mcp/deployment/systemd/) for details.
 
 ### Claude Desktop (.mcpb bundle)
 
 Download the `.mcpb` bundle from the [GitHub Releases](https://github.com/pvliesdonk/markdown-vault-mcp/releases) page. Double-click to install, or run:
-=======
-A `compose.yml` ships at the repo root as a starting point — copy `.env.example` to `.env`, edit, and `docker compose up -d`.
-
-### Linux packages (.deb / .rpm)
-
-Download `.deb` or `.rpm` packages from the [GitHub Releases](https://github.com/pvliesdonk/markdown-vault-mcp/releases) page. Both install a hardened systemd unit; env configuration is sourced from `/etc/markdown-vault-mcp/env` (copy from the shipped `/etc/markdown-vault-mcp/env.example`).
-
-### Claude Desktop (.mcpb bundle)
-
-Download the `.mcpb` bundle from the [GitHub Releases](https://github.com/pvliesdonk/markdown-vault-mcp/releases) page and double-click to install, or run:
->>>>>>> after updating
+<!-- DOMAIN-END -->
 
 ```bash
 mcpb install markdown-vault-mcp-<version>.mcpb
 ```
 
-<<<<<<< before updating
+<!-- DOMAIN-START -->
 Claude Desktop opens a GUI wizard that prompts for required env vars — no manual JSON editing needed. See [Step 0 of the Claude Desktop guide](https://pvliesdonk.github.io/markdown-vault-mcp/guides/claude-desktop/#step-0-install-via-mcpb-bundle-easiest) for details.
 
 ### Claude Code plugin
@@ -561,41 +511,6 @@ ruff format src/ tests/
 # Type check
 mypy src/
 ```
-=======
-Claude Desktop prompts for required env vars via a GUI wizard — no manual JSON editing needed.
-
-## Quick start
-
-```bash
-markdown-vault-mcp serve                                # stdio transport
-markdown-vault-mcp serve --transport http --port 8000   # streamable HTTP
-```
-
-For library usage (embedding the domain logic without the MCP transport), import from the `markdown_vault_mcp` package directly — see `src/markdown_vault_mcp/domain.py` for the entry point scaffold.
-
-## Configuration
-
-Core environment variables shared across all `fastmcp-pvl-core`-based services:
-
-| Variable | Default | Description |
-|---|---|---|
-| `FASTMCP_LOG_LEVEL` | `INFO` | Log level for FastMCP internals and app loggers (`DEBUG` / `INFO` / `WARNING` / `ERROR`). The `-v` CLI flag overrides to `DEBUG`. |
-| `FASTMCP_ENABLE_RICH_LOGGING` | `true` | Set to `false` for plain / structured JSON log output. |
-| `MARKDOWN_VAULT_MCP_EVENT_STORE_URL` | `memory://` | Event store backend for HTTP session persistence — `memory://` (dev), `file:///path` (survives restarts). |
-
-Domain-specific variables go below under [Domain configuration](#domain-configuration).
-
-## Post-scaffold checklist
-
-After `copier copy` and `gh repo create --push`:
-
-1. **Fill in the DOMAIN blocks** in this README (Features, What you can do with it, Domain configuration, Key design decisions) and in `CLAUDE.md`.
-2. Configure GitHub secrets — see below.
-3. Install dev dependencies: `uv sync --all-extras --dev`.
-4. Install pre-commit hooks: `uv run pre-commit install`.
-5. Run the gate locally: `uv run pytest -x -q && uv run ruff check --fix . && uv run ruff format . && uv run mypy src/ tests/`.
-6. Push the first commit — CI should be green.
-
 ## GitHub secrets
 
 CI workflows reference three repository secrets. Configure them via **Settings → Secrets and variables → Actions** or with `gh secret set`:
@@ -606,31 +521,13 @@ CI workflows reference three repository secrets. Configure them via **Settings �
 | `CODECOV_TOKEN` | `ci.yml` | <https://codecov.io> — sign in with GitHub, add the repo, copy the upload token from the repo settings page. |
 | `CLAUDE_CODE_OAUTH_TOKEN` | `claude.yml`, `claude-code-review.yml` | Run `claude setup-token` locally and paste the result. |
 
-```bash
-gh secret set RELEASE_TOKEN
-gh secret set CODECOV_TOKEN
-gh secret set CLAUDE_CODE_OAUTH_TOKEN
-```
-
 `GITHUB_TOKEN` is auto-provided — no action needed.
-
-## Local development
-
-The PR gate (matches CI):
-
-```bash
-uv run pytest -x -q                                  # tests
-uv run ruff check --fix . && uv run ruff format .    # lint + format
-uv run mypy src/ tests/                              # type-check
-```
-
-Pre-commit runs a subset of the gate on each commit; see `.pre-commit-config.yaml` for details, or [`CLAUDE.md`](CLAUDE.md) for the full Hard PR Acceptance Gates.
 
 ## Troubleshooting
 
 ### Moving a scaffolded project
 
-`uv sync` creates `.venv/bin/*` scripts with absolute shebangs pointing at the venv Python. If you move the repo after scaffolding (`mv /old/path /new/path`), `uv run pytest` fails with `ModuleNotFoundError: No module named 'fastmcp'` because the stale shebang resolves to a different interpreter than the venv's site-packages.
+`uv sync` creates `.venv/bin/*` scripts with absolute shebangs pointing at the venv Python. If you move the repo (`mv /old/path /new/path`), `uv run pytest` fails with `ModuleNotFoundError` because the stale shebang resolves to a different interpreter than the venv's site-packages.
 
 **Fix:**
 
@@ -639,45 +536,14 @@ rm -rf .venv
 uv sync --all-extras --dev
 ```
 
-`uv run python -m pytest` also works as a one-shot workaround (bypasses the stale entry-script shim).
+`uv run python -m pytest` also works as a one-shot workaround.
 
 ### `uv.lock` refresh after `copier update`
 
-When `copier update` introduces new dependencies (e.g. a new extra added to `pyproject.toml.jinja`), CI runs `uv sync --frozen` which fails against a stale lockfile. Run `uv lock` locally and commit the refreshed `uv.lock` alongside accepting the copier-update PR.
->>>>>>> after updating
-
-## License
-
-<<<<<<< before updating
-MIT
-=======
-- [Documentation](https://pvliesdonk.github.io/markdown-vault-mcp/)
-- [llms.txt](https://pvliesdonk.github.io/markdown-vault-mcp/llms.txt)
-- [FastMCP](https://gofastmcp.com)
-- [fastmcp-pvl-core](https://pypi.org/project/fastmcp-pvl-core/)
+When `copier update` introduces new dependencies, CI runs `uv sync --frozen` which fails against a stale lockfile. Run `uv lock` locally and commit the refreshed `uv.lock` alongside accepting the copier-update PR.
 
 <!-- ===== TEMPLATE-OWNED SECTIONS END ===== -->
 
-## Domain configuration
+## License
 
-<!-- DOMAIN-START -->
-<!-- Replace with a table of domain-specific env vars. Kept across copier update. -->
-
-Domain environment variables use the `MARKDOWN_VAULT_MCP_` prefix:
-
-| Variable | Default | Required | Description |
-|---|---|---|---|
-| `MARKDOWN_VAULT_MCP_EXAMPLE_VAR` | — | **Yes** | Replace this row with your first required setting. |
-| `MARKDOWN_VAULT_MCP_ANOTHER_VAR` | `default` | No | Replace with an optional setting. |
-
-Domain-config fields are composed inside `src/markdown_vault_mcp/config.py` between the `CONFIG-FIELDS-START` / `CONFIG-FIELDS-END` sentinels; env reads go through `fastmcp_pvl_core.env(_ENV_PREFIX, "SUFFIX", default)` so naming stays consistent.
-<!-- DOMAIN-END -->
-
-## Key design decisions
-
-<!-- DOMAIN-START -->
-<!-- Replace with 3-6 bullets describing non-obvious architectural decisions. Kept across copier update. -->
-
-_Replace this placeholder with a short list of the non-obvious design calls this service makes — e.g. "writes are append-only", "embeddings cached in SQLite", "auth uses OIDC bearer tokens". Three to six bullets is typically enough; link out to longer ADRs under `docs/decisions/` if you maintain any._
-<!-- DOMAIN-END -->
->>>>>>> after updating
+MIT
