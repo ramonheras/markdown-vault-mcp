@@ -69,3 +69,34 @@ def test_read_returns_none_when_path_unknown(doc_mgr):
     # nonexistent doc).
     with pytest.raises(ValueError):
         doc_mgr.read("missing.md", section="Anything")
+
+
+def test_read_section_duplicate_heading_returns_first_by_start_line(tmp_path):
+    """When a heading repeats, _read_section returns the first occurrence."""
+    a = tmp_path / "a.md"
+    # Each section body must be long enough that the total doc exceeds the
+    # 30-line short-doc bypass (HeadingChunker default), so we get per-section
+    # chunks rather than a single whole-document chunk.
+    body = (
+        "# A\n## Repeat\n"
+        + "\n".join(["first occurrence body"] * 16)
+        + "\n## Repeat\n"
+        + "\n".join(["second occurrence body"] * 16)
+        + "\n"
+    )
+    a.write_text(body, encoding="utf-8")
+    fts = FTSIndex(db_path=":memory:")
+    chunker = HeadingChunker()
+    for note in scan_directory(tmp_path, chunk_strategy=chunker):
+        fts.upsert_note(note)
+    mgr = DocumentManager(
+        fts=fts,
+        source_dir=tmp_path,
+        write_lock=threading.RLock(),
+        chunk_strategy=chunker,
+    )
+
+    nc = mgr.read("a.md", section="Repeat")
+    assert nc is not None
+    assert "first occurrence body" in nc.content
+    assert "second occurrence body" not in nc.content

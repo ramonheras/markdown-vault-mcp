@@ -409,9 +409,11 @@ class Collection:
 
         Args:
             path: Relative document path (e.g. ``"Journal/note.md"``).
-            section: When provided, return only the content of the heading
-                whose text matches *section* (case-insensitive).  Raises
-                :exc:`ValueError` if the section is not found.
+            section: When provided, return only the section whose heading
+                matches *section* exactly (case-sensitive). Pass the
+                ``heading`` value from a ``search`` result unchanged for
+                guaranteed match. ``None`` (the default) returns the whole
+                document. Raises :exc:`ValueError` if the section is not found.
 
         Returns:
             A :class:`~markdown_vault_mcp.types.NoteContent` instance, or ``None``

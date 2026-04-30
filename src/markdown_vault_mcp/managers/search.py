@@ -751,12 +751,16 @@ class SearchManager:
             meta = chunk_meta[key]
             if key in snippet_map:
                 content = snippet_map[key]
-            elif key in keyword_keys:
-                content = meta["content"]
-            else:
+            elif snippet_words > 0:
+                # Keyword survivor missing from snippet_map (rare FTS rank
+                # inversion), or semantic-only hit — apply the word-window
+                # helper as a uniform backstop so payload bounds hold.
                 content = _compute_snippet_for_semantic(
                     meta["content"], query, snippet_words=snippet_words
                 )
+            else:
+                # snippet_words == 0 → caller asked for the full chunk.
+                content = meta["content"]
             out.append(
                 SearchResult(
                     path=meta["path"],

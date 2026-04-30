@@ -76,7 +76,11 @@ class SearchResult:
         title: Document title.
         folder: Parent folder path.
         heading: Section heading this chunk falls under, or ``None`` for the intro.
-        content: Matched chunk text (not the full document).
+        content: Matched chunk text — a query-relevant snippet by default
+            (≤ ``snippet_words`` words, centred on matched terms). Pass
+            ``snippet_words=0`` to ``search`` for the full chunk verbatim,
+            or recover the full chunk after seeing a snippet via
+            ``read(path, section=heading)``.
         score: Relevance score. Higher is better; not comparable across search types.
         search_type: ``"keyword"`` (BM25) or ``"semantic"`` (cosine similarity).
         frontmatter: Parsed YAML frontmatter of the parent document.

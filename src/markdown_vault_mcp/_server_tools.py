@@ -187,9 +187,10 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
             path: Relative path to the document or attachment
                 (e.g. "Journal/note.md" or "assets/diagram.pdf").
                 Case-sensitive.
-            section: When provided, return only the content of the heading
-                matching this string (case-insensitive). Useful for recovering
-                full section text after a snippet-truncated search result.
+            section: When provided, return only the section whose heading
+                matches *section* exactly (case-sensitive). Pass the ``heading``
+                value from a ``search`` result unchanged for guaranteed match.
+                ``None`` (the default) returns the whole document.
                 Ignored for non-.md paths.
 
         Returns:
