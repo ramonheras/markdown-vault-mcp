@@ -21,9 +21,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Threshold below which a document is not split (single chunk).
-# Kept intentionally small so that multi-section test fixtures with compact
-# word-per-line layout (e.g. 9-line documents) still exercise the split path.
-_SHORT_DOC_LINES = 8
+_SHORT_DOC_LINES = 30
 
 
 @runtime_checkable
@@ -108,18 +106,6 @@ class HeadingChunker:
     def chunk(self, content: str, _metadata: dict[str, Any]) -> list[Chunk]:
         """Split content adaptively on heading boundaries.
 
-        In legacy mode (``max_chunk_words=None``) the short-document bypass
-        fires whenever the document is at or below ``short_doc_lines`` lines.
-
-        In adaptive mode (``max_chunk_words`` set) the bypass fires only when
-        the document is short *and* the total word count does not exceed
-        ``max_chunk_words``; a compact but oversize document is still split so
-        that the adaptive refinement can act on it.
-
-        When no H1/H2 heading exists in the document (adaptive mode), the
-        entire document is returned as a single chunk with the first heading
-        of any level used as chunk metadata.
-
         Args:
             content: Markdown body after frontmatter has been stripped.
             _metadata: Parsed frontmatter dict (unused).
@@ -129,46 +115,30 @@ class HeadingChunker:
         """
         lines = content.splitlines(keepends=True)
 
-        # Short-document bypass.
-        is_short = len(lines) <= self.short_doc_lines
-        if is_short:
-            if self.max_chunk_words is None:
-                # Legacy mode: bypass unconditionally.
-                return [
-                    Chunk(heading=None, heading_level=0, content=content, start_line=0)
-                ]
-            # Adaptive mode: bypass only when total words also fit in one chunk.
-            total_words = len(content.split())
-            if total_words <= self.max_chunk_words:
-                return [
-                    Chunk(heading=None, heading_level=0, content=content, start_line=0)
-                ]
-            # Fall through: short in lines but too many words — still split.
+        if len(lines) <= self.short_doc_lines:
+            return [Chunk(heading=None, heading_level=0, content=content, start_line=0)]
 
+        # Try the canonical H1+H2 split first.
         chunks = self._split_at_levels(lines, levels=(1, 2), base_line=0)
 
-        if not chunks and self.max_chunk_words is not None:
-            # No H1/H2 found in adaptive mode: treat the whole document as one
-            # chunk, extracting the first heading of any level for metadata.
-            heading: str | None = None
-            heading_level = 0
-            for line in lines:
-                m = re.match(r"^(#{1,6})\s+(.+)$", line.rstrip())
-                if m:
-                    heading = m.group(2).strip()
-                    heading_level = len(m.group(1))
+        # If H1/H2 yielded nothing, descend through H3..H6 to find any
+        # heading-level present in the doc.  This implements the spec's
+        # "single huge prose block ... leave as-is" guarantee — a doc with
+        # only H3 headings becomes chunked at H3 rather than dropped.
+        deepest_split_level = 2
+        if not chunks:
+            for level in (3, 4, 5, 6):
+                chunks = self._split_at_levels(lines, levels=(level,), base_line=0)
+                if chunks:
+                    deepest_split_level = level
                     break
-            return [
-                Chunk(
-                    heading=heading,
-                    heading_level=heading_level,
-                    content=content,
-                    start_line=0,
-                )
-            ]
 
-        if chunks and self.max_chunk_words is not None:
-            chunks = self._refine_oversize(chunks, current_level=2)
+        if not chunks:
+            # No headings at all → single chunk with no heading.
+            return [Chunk(heading=None, heading_level=0, content=content, start_line=0)]
+
+        if self.max_chunk_words is not None:
+            chunks = self._refine_oversize(chunks, current_level=deepest_split_level)
         return chunks
 
     # ------------------------------------------------------------------

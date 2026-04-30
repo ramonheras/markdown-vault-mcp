@@ -17,10 +17,14 @@ def _doc(*sections: tuple[int, str, int]) -> str:
 
 def test_max_chunk_words_none_preserves_h1_h2_only_behavior():
     """max_chunk_words=None keeps today's H1/H2-only splitting."""
-    body = _doc(
-        (1, "Top", 50),
-        (2, "Sub A", 50),
-        (3, "Deep", 800),  # H3, would not split today and must not split.
+    # Use one word per line so the fixture clears the 30-line short-doc bypass.
+    top_body = "\n".join(["lorem"] * 15)
+    sub_a_body = "\n".join(["lorem"] * 15)
+    deep_body = "\n".join(["lorem"] * 800)
+    body = (
+        f"# Top\n{top_body}\n"
+        f"## Sub A\n{sub_a_body}\n"
+        f"### Deep\n{deep_body}\n"  # H3, would not split today and must not split.
     )
     chunker = HeadingChunker(max_chunk_words=None)
     chunks = chunker.chunk(body, {})
@@ -32,11 +36,9 @@ def test_max_chunk_words_none_preserves_h1_h2_only_behavior():
 
 def test_oversize_h1_splits_at_h2():
     """An H1 chunk exceeding max_chunk_words is re-split at H2."""
-    body = _doc(
-        (1, "Top", 0),
-        (2, "Sub A", 300),
-        (2, "Sub B", 300),
-    )
+    # Use one word per line so the fixture clears the 30-line short-doc bypass.
+    sub_body = "\n".join(["lorem"] * 300)
+    body = f"# Top\n## Sub A\n{sub_body}\n## Sub B\n{sub_body}\n"
     chunker = HeadingChunker(max_chunk_words=200)
     chunks = chunker.chunk(body, {})
     assert [c.heading for c in chunks] == ["Sub A", "Sub B"]
@@ -45,16 +47,18 @@ def test_oversize_h1_splits_at_h2():
 
 def test_recursion_descends_to_h6():
     """An H1 chunk with deeply nested oversized sub-headings descends to H6."""
-    body = _doc(
-        (1, "L1", 0),
-        (2, "L2", 0),
-        (3, "L3", 0),
-        (4, "L4", 0),
-        (5, "L5", 0),
-        (6, "L6a", 50),
-        (6, "L6b", 50),
+    # Use a long enough body to clear the 30-line short-doc bypass.
+    long_body = "\n".join(["lorem"] * 50)  # 50 lines per body
+    body = (
+        f"# L1\n{long_body}\n"
+        f"## L2\n{long_body}\n"
+        f"### L3\n{long_body}\n"
+        f"#### L4\n{long_body}\n"
+        f"##### L5\n{long_body}\n"
+        "###### L6a\n" + " ".join(["lorem"] * 50) + "\n"
+        "###### L6b\n" + " ".join(["lorem"] * 50) + "\n"
     )
-    chunker = HeadingChunker(max_chunk_words=80)
+    chunker = HeadingChunker(max_chunk_words=40)
     chunks = chunker.chunk(body, {})
     headings = [c.heading for c in chunks]
     assert "L6a" in headings and "L6b" in headings
@@ -62,8 +66,8 @@ def test_recursion_descends_to_h6():
 
 def test_oversize_chunk_with_no_deeper_headings_stays_one_chunk():
     """A 1000-word H6 with no deeper headings stays as one chunk."""
-    body = "###### Solo\n" + " ".join(["lorem"] * 1000) + "\n"
-    chunker = HeadingChunker(max_chunk_words=200)
+    body = "###### Solo\n" + "\n".join(["lorem"] * 100) + "\n"
+    chunker = HeadingChunker(max_chunk_words=50)
     chunks = chunker.chunk(body, {})
     assert len(chunks) == 1
     assert chunks[0].heading == "Solo"
@@ -95,10 +99,9 @@ def test_short_doc_bypass_still_applies():
 
 def test_heading_level_and_start_line_propagated_through_recursion():
     """Refined sub-chunks carry correct heading_level and start_line."""
-    body = _doc(
-        (1, "Top", 0),
-        (2, "Inner", 300),
-    )
+    # Use one word per line so the fixture clears the 30-line short-doc bypass.
+    inner_body = "\n".join(["lorem"] * 300)
+    body = f"# Top\n## Inner\n{inner_body}\n"
     chunker = HeadingChunker(max_chunk_words=200)
     chunks = chunker.chunk(body, {})
     inner = next(c for c in chunks if c.heading == "Inner")
