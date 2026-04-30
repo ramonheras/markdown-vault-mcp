@@ -43,7 +43,8 @@ CREATE TABLE IF NOT EXISTS documents (
     folder TEXT NOT NULL DEFAULT '',
     frontmatter_json TEXT,
     content_hash TEXT NOT NULL,
-    modified_at REAL NOT NULL
+    modified_at REAL NOT NULL,
+    chunk_count INTEGER NOT NULL DEFAULT 1
 );
 
 CREATE TABLE IF NOT EXISTS sections (
@@ -178,6 +179,16 @@ def _open_connection(db_path: Path | str) -> sqlite3.Connection:
         CREATE INDEX IF NOT EXISTS idx_aliases_docid ON document_aliases(document_id);
         """
     )
+    # Migration: chunk_count was added 2026-04-30. ALTER TABLE is a no-op
+    # if the column already exists, but SQLite has no IF NOT EXISTS for
+    # columns, so we probe PRAGMA first.
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(documents)").fetchall()}
+    if "chunk_count" not in cols:
+        conn.execute(
+            "ALTER TABLE documents ADD COLUMN chunk_count INTEGER NOT NULL DEFAULT 1"
+        )
+        conn.commit()
+        logger.info("fts_index: migrated documents table — added chunk_count column")
     # Ensure foreign_keys stays ON for subsequent statements (executescript
     # does not guarantee this survives across statement boundaries in all
     # SQLite versions).
@@ -255,8 +266,8 @@ class FTSIndex:
         cur.execute(
             """
             INSERT INTO documents (path, title, folder, frontmatter_json,
-                                   content_hash, modified_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+                                   content_hash, modified_at, chunk_count)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 note.path,
@@ -265,6 +276,7 @@ class FTSIndex:
                 json.dumps(note.frontmatter, default=_json_default),
                 note.content_hash,
                 note.modified_at,
+                len(note.chunks),
             ),
         )
         if cur.lastrowid is None:
