@@ -222,16 +222,31 @@ class DocumentManager:
     # Read operations
     # ------------------------------------------------------------------
 
-    def read(self, path: str) -> NoteContent | None:
-        """Read the full content of a document from disk.
+    def read(self, path: str, *, section: str | None = None) -> NoteContent | None:
+        """Read a document or a single section from disk.
 
         Args:
             path: Relative document path (e.g. ``"Journal/note.md"``).
+            section: When provided, return only the chunk whose heading
+                matches *section* exactly. ``None`` returns the whole
+                document (today's behaviour).
 
         Returns:
-            A :class:`~markdown_vault_mcp.types.NoteContent` instance, or
-            ``None`` if the file does not exist.
+            A :class:`~markdown_vault_mcp.types.NoteContent`, or ``None`` if
+            the file does not exist (whole-document mode).
+
+        Raises:
+            ValueError: When *section* is provided and is empty / whitespace,
+                or when the document does not contain a chunk with that
+                heading. (Path-not-found also raises in section mode rather
+                than returning ``None``, since "no document" implies "no
+                section".)
         """
+        if section is not None:
+            if not section.strip():
+                raise ValueError("section must be a non-empty heading or None")
+            return self._read_section(path, section.strip())
+
         abs_path = (self._source_dir / path).resolve()
         if not abs_path.is_relative_to(self._source_dir.resolve()):
             return None
@@ -258,6 +273,55 @@ class DocumentManager:
             frontmatter=note.frontmatter,
             modified_at=note.modified_at,
             etag=etag,
+        )
+
+    def _read_section(self, path: str, heading: str) -> NoteContent:
+        """Return a NoteContent containing only the named section's chunk.
+
+        Args:
+            path: Relative document path.
+            heading: Exact heading string to match in the sections table.
+
+        Returns:
+            A :class:`~markdown_vault_mcp.types.NoteContent` with the
+            section's content.
+
+        Raises:
+            ValueError: If the document is not indexed or the heading is
+                not found.
+        """
+        doc_row = self._fts.get_note(path)
+        if doc_row is None:
+            raise ValueError(
+                f"Section '{heading}' not found in document {path}: "
+                "document is not indexed or does not exist"
+            )
+        section_row = self._fts._conn.execute(
+            """
+            SELECT s.content, s.heading, s.heading_level
+            FROM sections s
+            JOIN documents d ON d.id = s.document_id
+            WHERE d.path = ? AND s.heading = ?
+            ORDER BY s.start_line ASC
+            LIMIT 1
+            """,
+            (path, heading),
+        ).fetchone()
+        if section_row is None:
+            raise ValueError(f"Section '{heading}' not found in document {path}")
+
+        folder = str(Path(path).parent)
+        if folder == ".":
+            folder = ""
+
+        return NoteContent(
+            path=path,
+            title=doc_row["title"],
+            folder=folder,
+            content=section_row["content"],
+            frontmatter={},  # section reads do not synthesise frontmatter
+            modified_at=doc_row["modified_at"],
+            etag="",  # ETag is whole-file; not meaningful for a section
         )
 
     def read_attachment(self, path: str) -> AttachmentContent:
