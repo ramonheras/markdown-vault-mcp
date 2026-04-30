@@ -697,7 +697,16 @@ def load_config() -> CollectionConfig:
 
     # --- Search ranking and snippet truncation ---
     raw_chunks_per_doc = (_env("CHUNKS_PER_DOC") or "").strip()
-    chunks_per_doc = int(raw_chunks_per_doc) if raw_chunks_per_doc else 2
+    if raw_chunks_per_doc:
+        try:
+            chunks_per_doc = int(raw_chunks_per_doc)
+        except ValueError as exc:
+            raise ValueError(
+                f"MARKDOWN_VAULT_MCP_CHUNKS_PER_DOC must be a positive integer, "
+                f"got {raw_chunks_per_doc!r}"
+            ) from exc
+    else:
+        chunks_per_doc = 2
     if chunks_per_doc < 1:
         raise ValueError(
             f"chunks_per_doc must be >= 1, got {chunks_per_doc}; set "
@@ -706,13 +715,31 @@ def load_config() -> CollectionConfig:
     logger.debug("load_config: chunks_per_doc=%s", chunks_per_doc)
 
     raw_snippet_words = (_env("SNIPPET_WORDS") or "").strip()
-    snippet_words = int(raw_snippet_words) if raw_snippet_words else 200
+    if raw_snippet_words:
+        try:
+            snippet_words = int(raw_snippet_words)
+        except ValueError as exc:
+            raise ValueError(
+                f"MARKDOWN_VAULT_MCP_SNIPPET_WORDS must be a non-negative integer, "
+                f"got {raw_snippet_words!r}"
+            ) from exc
+    else:
+        snippet_words = 200
     if snippet_words < 0:
         raise ValueError(f"snippet_words must be >= 0, got {snippet_words}")
     logger.debug("load_config: snippet_words=%s", snippet_words)
 
     raw_alpha = (_env("LENGTH_DOWNWEIGHT_ALPHA") or "").strip()
-    length_downweight_alpha = float(raw_alpha) if raw_alpha else 0.25
+    if raw_alpha:
+        try:
+            length_downweight_alpha = float(raw_alpha)
+        except ValueError as exc:
+            raise ValueError(
+                f"MARKDOWN_VAULT_MCP_LENGTH_DOWNWEIGHT_ALPHA must be a non-negative "
+                f"float, got {raw_alpha!r}"
+            ) from exc
+    else:
+        length_downweight_alpha = 0.25
     if length_downweight_alpha < 0:
         raise ValueError(
             f"length_downweight_alpha must be >= 0, got {length_downweight_alpha}"
@@ -720,7 +747,16 @@ def load_config() -> CollectionConfig:
     logger.debug("load_config: length_downweight_alpha=%s", length_downweight_alpha)
 
     raw_max_chunk_words = (_env("MAX_CHUNK_WORDS") or "").strip()
-    max_chunk_words = int(raw_max_chunk_words) if raw_max_chunk_words else 400
+    if raw_max_chunk_words:
+        try:
+            max_chunk_words = int(raw_max_chunk_words)
+        except ValueError as exc:
+            raise ValueError(
+                f"MARKDOWN_VAULT_MCP_MAX_CHUNK_WORDS must be a positive integer, "
+                f"got {raw_max_chunk_words!r}"
+            ) from exc
+    else:
+        max_chunk_words = 400
     if max_chunk_words < 1:
         raise ValueError(f"max_chunk_words must be >= 1, got {max_chunk_words}")
     logger.debug("load_config: max_chunk_words=%s", max_chunk_words)

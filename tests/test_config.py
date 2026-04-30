@@ -1154,3 +1154,25 @@ class TestServerConfigComposition:
         assert config.server.transport == "http"
         assert config.server.bearer_token == "secret-token"
         assert config.server.base_url == "https://api.example.com"
+
+
+def test_search_ranking_config_rejects_malformed_int(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Bad env input names the offending variable in the error message."""
+    monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", str(tmp_path))
+    monkeypatch.setenv("MARKDOWN_VAULT_MCP_CHUNKS_PER_DOC", "foo")
+
+    with pytest.raises(ValueError, match="MARKDOWN_VAULT_MCP_CHUNKS_PER_DOC"):
+        load_config()
+
+
+def test_search_ranking_config_rejects_malformed_float(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Bad float env input names the offending variable in the error message."""
+    monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", str(tmp_path))
+    monkeypatch.setenv("MARKDOWN_VAULT_MCP_LENGTH_DOWNWEIGHT_ALPHA", "abc")
+
+    with pytest.raises(ValueError, match="MARKDOWN_VAULT_MCP_LENGTH_DOWNWEIGHT_ALPHA"):
+        load_config()
