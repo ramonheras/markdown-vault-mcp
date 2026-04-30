@@ -168,6 +168,7 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
     )
     async def read(
         path: str,
+        section: str | None = None,
         collection: Collection = Depends(get_collection),
     ) -> dict[str, Any]:
         """Read the full content of a document or attachment by path.
@@ -179,15 +180,22 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
 
         Do not guess paths — look them up first via 'search' or 'list_documents'.
 
+        To recover the full text of a specific section returned by 'search',
+        pass section=heading (the value from the result's 'heading' field).
+
         Args:
             path: Relative path to the document or attachment
                 (e.g. "Journal/note.md" or "assets/diagram.pdf").
                 Case-sensitive.
+            section: When provided, return only the content of the heading
+                matching this string (case-insensitive). Useful for recovering
+                full section text after a snippet-truncated search result.
+                Ignored for non-.md paths.
 
         Returns:
-            For .md: dict with path, title, folder, content (markdown body),
-            frontmatter (dict), modified_at (Unix timestamp),
-            etag (SHA-256 hex str or null).
+            For .md: dict with path, title, folder, content (markdown body
+            or section text when section= is given), frontmatter (dict),
+            modified_at (Unix timestamp), etag (SHA-256 hex str or null).
             For attachments: dict with path, mime_type (str or null),
             size_bytes (int), content_base64 (str), modified_at (Unix timestamp),
             etag (SHA-256 hex str or null).
@@ -196,13 +204,13 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
 
         Raises:
             ValueError: If no file exists at the given path, the extension is
-                not in the attachment allowlist, or the file exceeds the size
-                limit.
+                not in the attachment allowlist, the file exceeds the size
+                limit, or the requested section heading is not found.
         """
         if not path.endswith(".md"):
             attachment = await asyncio.to_thread(collection.read_attachment, path)
             return asdict(attachment)
-        note = await asyncio.to_thread(collection.read, path)
+        note = await asyncio.to_thread(collection.read, path, section=section)
         if note is None:
             raise ValueError(f"Document not found: {path}")
         return asdict(note)
