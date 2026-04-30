@@ -119,8 +119,9 @@ class TestBuildIndex:
 
         # 9 valid .md files (excludes invalid_utf8.md; malformed_yaml.md skipped).
         assert stats.documents_indexed == 9
-        # All fixtures are short (<= 30 lines) → 1 chunk each.
-        assert stats.chunks_indexed == 9
+        # 12 total chunks: longer fixtures (unicode.md=3, deep_headings.md=2)
+        # are now split; shorter fixtures produce 1 chunk each.
+        assert stats.chunks_indexed == 12
         assert stats.skipped >= 0
 
     def test_build_index_force_rebuild(self, vault_path: Path) -> None:
@@ -130,7 +131,7 @@ class TestBuildIndex:
         stats = col.build_index(force=True)
 
         assert stats.documents_indexed == 9
-        assert stats.chunks_indexed == 9
+        assert stats.chunks_indexed == 12
 
     def test_build_index_idempotent_without_force(self, vault_path: Path) -> None:
         """Calling build_index() twice (no force) does not double-index."""
@@ -172,7 +173,7 @@ class TestBuildIndex:
 
         # One document errored, remaining 8 indexed successfully.
         assert stats.documents_indexed == 8
-        assert stats.chunks_indexed == 8
+        assert stats.chunks_indexed == 10
 
     def test_reindex_continues_on_upsert_error(
         self, tmp_path: Path, vault_path: Path
@@ -668,7 +669,7 @@ class TestStats:
 
         assert isinstance(s, CollectionStats)
         assert s.document_count == 9
-        assert s.chunk_count == 9
+        assert s.chunk_count == 12
         # Folders: "" (root), "subfolder", "subfolder/deep"
         assert s.folder_count == 3
         assert s.semantic_search_available is False
@@ -2770,8 +2771,8 @@ class TestEmbeddingsStatus:
         status = semantic_collection.embeddings_status()
 
         assert status["available"] is True
-        # 9 documents, each one chunk — chunk_count must match.
-        assert status["chunk_count"] == 9
+        # 12 total chunks from 9 documents.
+        assert status["chunk_count"] == 12
 
     def test_status_reads_json_when_vectors_not_loaded(
         self,
@@ -2836,7 +2837,7 @@ class TestBuildEmbeddings:
         )
         col.build_index()
         count1 = col.build_embeddings()
-        assert count1 == 9
+        assert count1 == 12
 
         # Track embed calls to prove no re-embedding happens.
         original_embed = mock_provider.embed
@@ -2883,7 +2884,7 @@ class TestBuildEmbeddings:
 
         # Re-embedding must have occurred.
         assert len(embed_calls) > 0
-        assert count == 9
+        assert count == 12
 
     def test_build_embeddings_uses_bounded_batches(
         self,
@@ -2912,7 +2913,7 @@ class TestBuildEmbeddings:
         mock_provider.embed = tracking_embed  # type: ignore[method-assign]
 
         count = col.build_embeddings(force=True)
-        assert count == 9
+        assert count == 12
 
         # embed() must have been called, and every batch at most _EMBEDDING_BATCH_SIZE.
         assert len(batch_sizes) > 0, "embed() should have been called"

@@ -313,10 +313,13 @@ def test_unicode_content(fixtures_path: Path) -> None:
     # Title comes from frontmatter.
     assert note.title == "ユニコード文書"
 
-    full_content = " ".join(c.content for c in note.chunks)
-    assert "日本語テスト" in full_content
-    assert "Ñoño" in full_content
-    assert "🎉" in full_content
+    # Check heading text is present in chunk headings or body content.
+    all_text = " ".join(
+        " ".join(filter(None, [c.heading, c.content])) for c in note.chunks
+    )
+    assert "日本語テスト" in all_text
+    assert "Ñoño" in all_text
+    assert "🎉" in all_text
 
 
 # ---------------------------------------------------------------------------

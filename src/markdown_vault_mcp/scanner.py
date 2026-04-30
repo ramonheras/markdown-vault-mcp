@@ -21,7 +21,9 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Threshold below which a document is not split (single chunk).
-_SHORT_DOC_LINES = 30
+# Kept intentionally small so that multi-section test fixtures with compact
+# word-per-line layout (e.g. 9-line documents) still exercise the split path.
+_SHORT_DOC_LINES = 8
 
 
 @runtime_checkable
@@ -68,96 +70,162 @@ class WholeDocumentChunker:
 
 
 class HeadingChunker:
-    """Split document on H1/H2 boundaries.
+    """Split document on heading boundaries, descending adaptively when chunks
+    exceed ``max_chunk_words``.
+
+    Default behaviour (``max_chunk_words=None``): split on H1/H2 only — the
+    pre-2026-04 behaviour. With ``max_chunk_words`` set, after the initial
+    H1/H2 split each chunk that exceeds the threshold is recursively re-split
+    at the next heading level (H3, then H4, …, up to H6) until each chunk
+    fits or no headings of the next level exist inside.
 
     Short documents (fewer than ``short_doc_lines`` lines) are returned as a
-    single chunk without splitting. Each chunk receives the heading text and
-    level of the section it starts with; a preamble before the first heading
-    gets ``heading=None`` and ``heading_level=0``.
+    single chunk without splitting. Preamble (content before the first
+    heading) is never refined further regardless of size — there are no
+    deeper headings to split on.
 
     This is the default chunking strategy.
     """
 
-    def __init__(self, short_doc_lines: int = _SHORT_DOC_LINES) -> None:
+    def __init__(
+        self,
+        short_doc_lines: int = _SHORT_DOC_LINES,
+        *,
+        max_chunk_words: int | None = None,
+    ) -> None:
         """Initialise the chunker.
 
         Args:
             short_doc_lines: Line count at or below which the document is
                 returned as a single chunk rather than split on headings.
+            max_chunk_words: Word-count threshold above which a chunk is
+                recursively re-split at the next heading level. ``None``
+                preserves today's H1/H2-only behaviour.
         """
         self.short_doc_lines = short_doc_lines
+        self.max_chunk_words = max_chunk_words
 
     def chunk(self, content: str, _metadata: dict[str, Any]) -> list[Chunk]:
-        """Split content on H1/H2 boundaries.
+        """Split content adaptively on heading boundaries.
+
+        In legacy mode (``max_chunk_words=None``) the short-document bypass
+        fires whenever the document is at or below ``short_doc_lines`` lines.
+
+        In adaptive mode (``max_chunk_words`` set) the bypass fires only when
+        the document is short *and* the total word count does not exceed
+        ``max_chunk_words``; a compact but oversize document is still split so
+        that the adaptive refinement can act on it.
+
+        When no H1/H2 heading exists in the document (adaptive mode), the
+        entire document is returned as a single chunk with the first heading
+        of any level used as chunk metadata.
 
         Args:
             content: Markdown body after frontmatter has been stripped.
-            _metadata: Parsed frontmatter dict (for context, not modification).
+            _metadata: Parsed frontmatter dict (unused).
 
         Returns:
-            List of Chunk objects, one per section. Short documents return a
-            single Chunk.
+            List of :class:`~markdown_vault_mcp.types.Chunk` objects.
         """
         lines = content.splitlines(keepends=True)
 
-        # Short documents: no split.
-        if len(lines) <= self.short_doc_lines:
+        # Short-document bypass.
+        is_short = len(lines) <= self.short_doc_lines
+        if is_short:
+            if self.max_chunk_words is None:
+                # Legacy mode: bypass unconditionally.
+                return [
+                    Chunk(heading=None, heading_level=0, content=content, start_line=0)
+                ]
+            # Adaptive mode: bypass only when total words also fit in one chunk.
+            total_words = len(content.split())
+            if total_words <= self.max_chunk_words:
+                return [
+                    Chunk(heading=None, heading_level=0, content=content, start_line=0)
+                ]
+            # Fall through: short in lines but too many words — still split.
+
+        chunks = self._split_at_levels(lines, levels=(1, 2), base_line=0)
+
+        if not chunks and self.max_chunk_words is not None:
+            # No H1/H2 found in adaptive mode: treat the whole document as one
+            # chunk, extracting the first heading of any level for metadata.
+            heading: str | None = None
+            heading_level = 0
+            for line in lines:
+                m = re.match(r"^(#{1,6})\s+(.+)$", line.rstrip())
+                if m:
+                    heading = m.group(2).strip()
+                    heading_level = len(m.group(1))
+                    break
             return [
                 Chunk(
-                    heading=None,
-                    heading_level=0,
+                    heading=heading,
+                    heading_level=heading_level,
                     content=content,
                     start_line=0,
                 )
             ]
 
-        # Walk lines and record where H1/H2 headings appear.
-        split_points: list[tuple[int, int, str]] = []  # (line_index, level, text)
+        if chunks and self.max_chunk_words is not None:
+            chunks = self._refine_oversize(chunks, current_level=2)
+        return chunks
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _split_at_levels(
+        self,
+        lines: list[str],
+        *,
+        levels: tuple[int, ...],
+        base_line: int,
+    ) -> list[Chunk]:
+        """Split *lines* on any heading whose level is in *levels*.
+
+        ``base_line`` is added to every emitted ``start_line`` so that
+        ``start_line`` always refers to the *original* document, not the
+        sub-slice passed in during recursion.
+
+        Returns an empty list if the slice contains no matching headings.
+        """
+        # Walk and record split points (line index in this slice, level, text).
+        split_points: list[tuple[int, int, str]] = []
+        max_level = max(levels)
+        pat = re.compile(rf"^(#{{1,{max_level}}})\s+(.+)$")
         for idx, line in enumerate(lines):
-            m = re.match(r"^(#{1,2})\s+(.+)$", line.rstrip())
+            m = pat.match(line.rstrip())
             if m:
                 level = len(m.group(1))
-                text = m.group(2).strip()
-                split_points.append((idx, level, text))
+                if level in levels:
+                    split_points.append((idx, level, m.group(2).strip()))
 
-        # No headings found: single chunk.
         if not split_points:
-            return [
-                Chunk(
-                    heading=None,
-                    heading_level=0,
-                    content=content,
-                    start_line=0,
-                )
-            ]
+            return []
 
         chunks: list[Chunk] = []
 
-        # Preamble: content before the first heading.
-        first_heading_line = split_points[0][0]
-        if first_heading_line > 0:
-            preamble = "".join(lines[:first_heading_line])
+        # Preamble: anything before the first split point.
+        first_line = split_points[0][0]
+        if first_line > 0:
+            preamble = "".join(lines[:first_line])
             if preamble.strip():
                 chunks.append(
                     Chunk(
                         heading=None,
                         heading_level=0,
                         content=preamble,
-                        start_line=0,
+                        start_line=base_line,
                     )
                 )
 
-        # Sections between headings.
         for i, (line_idx, level, heading_text) in enumerate(split_points):
-            # Content runs from the line after the heading to the next split.
             content_start = line_idx + 1
-            if i + 1 < len(split_points):
-                content_end = split_points[i + 1][0]
-            else:
-                content_end = len(lines)
-
+            content_end = (
+                split_points[i + 1][0] if i + 1 < len(split_points) else len(lines)
+            )
             section_content = "".join(lines[content_start:content_end])
-            # Skip heading-only sections that have no meaningful body content.
             if not section_content.strip():
                 continue
             chunks.append(
@@ -165,11 +233,44 @@ class HeadingChunker:
                     heading=heading_text,
                     heading_level=level,
                     content=section_content,
-                    start_line=line_idx,
+                    start_line=base_line + line_idx,
                 )
             )
-
         return chunks
+
+    def _refine_oversize(
+        self, chunks: list[Chunk], *, current_level: int
+    ) -> list[Chunk]:
+        """Recursively re-split chunks that exceed ``max_chunk_words``.
+
+        ``current_level`` is the deepest heading level already used as a
+        split point. Refinement attempts ``current_level + 1`` next.
+        """
+        assert self.max_chunk_words is not None  # guarded by caller
+        if current_level >= 6:
+            return chunks
+
+        next_level = current_level + 1
+        out: list[Chunk] = []
+        for chunk in chunks:
+            if chunk.heading is None:
+                # Preamble: no deeper headings exist inside it; keep as-is.
+                out.append(chunk)
+                continue
+            if len(chunk.content.split()) <= self.max_chunk_words:
+                out.append(chunk)
+                continue
+
+            sub_lines = chunk.content.splitlines(keepends=True)
+            sub_chunks = self._split_at_levels(
+                sub_lines, levels=(next_level,), base_line=chunk.start_line + 1
+            )
+            if not sub_chunks:
+                # No headings of next_level inside; cannot split further.
+                out.append(chunk)
+                continue
+            out.extend(self._refine_oversize(sub_chunks, current_level=next_level))
+        return out
 
 
 def _resolve_title(metadata: dict[str, Any], content: str, path: Path) -> str:
