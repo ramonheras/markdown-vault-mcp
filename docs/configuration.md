@@ -39,7 +39,7 @@ All configuration is via environment variables. Most use the `MARKDOWN_VAULT_MCP
 | `MARKDOWN_VAULT_MCP_LENGTH_DOWNWEIGHT_ALPHA` | `0.25` | float ≥ 0 | Strength of the per-channel length downweight: `score / (1 + alpha · log(chunk_count))`. `0` disables. Operator-only (no per-call override). |
 | `MARKDOWN_VAULT_MCP_MAX_CHUNK_WORDS` | `400` | int ≥ 1 | Threshold above which the adaptive chunker recursively re-splits at deeper heading levels. Set very large (e.g. `100000`) to disable adaptive splitting. |
 
-The first three knobs adjust *ranking and rendering* — they take effect immediately. `MAX_CHUNK_WORDS` changes the chunk *index*; a reindex is required for the new value to take effect.
+The first three knobs adjust *ranking and rendering* — they take effect immediately. `MAX_CHUNK_WORDS` changes the chunk *index*; a reindex is required for the new value to take effect. **Upgrading note:** `search` now returns snippets (≤ ~200 words) by default — set `snippet_words=0` per call or `MARKDOWN_VAULT_MCP_SNIPPET_WORDS=0` globally to restore full-chunk output. Existing vaults are also re-chunked on the next `reindex` when `MAX_CHUNK_WORDS` is set.
 
 ## Search and Embeddings
 

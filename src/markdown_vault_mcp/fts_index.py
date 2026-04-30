@@ -184,11 +184,21 @@ def _open_connection(db_path: Path | str) -> sqlite3.Connection:
     # columns, so we probe PRAGMA first.
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(documents)").fetchall()}
     if "chunk_count" not in cols:
-        conn.execute(
-            "ALTER TABLE documents ADD COLUMN chunk_count INTEGER NOT NULL DEFAULT 1"
-        )
-        conn.commit()
-        logger.info("fts_index: migrated documents table — added chunk_count column")
+        try:
+            conn.execute(
+                "ALTER TABLE documents ADD COLUMN chunk_count INTEGER NOT NULL DEFAULT 1"
+            )
+            conn.commit()
+            logger.info(
+                "fts_index: migrated documents table — added chunk_count column"
+            )
+        except sqlite3.OperationalError as exc:
+            if "duplicate column name" not in str(exc).lower():
+                raise
+            # Another process beat us to it; column now exists.
+            logger.debug(
+                "fts_index: chunk_count column already added by concurrent process"
+            )
     # Ensure foreign_keys stays ON for subsequent statements (executescript
     # does not guarantee this survives across statement boundaries in all
     # SQLite versions).
@@ -1273,6 +1283,75 @@ class FTSIndex:
               AND NOT EXISTS (SELECT 1 FROM links WHERE target_path = d.path)
             """
         )
+
+    def get_chunk_count(self, path: str) -> int:
+        """Return the chunk_count for a single document, defaulting to 1.
+
+        Args:
+            path: Relative document path.
+
+        Returns:
+            The ``chunk_count`` stored in the documents table, or ``1`` if
+            the document is not found.
+        """
+        row = self._conn.execute(
+            "SELECT chunk_count FROM documents WHERE path = ?", (path,)
+        ).fetchone()
+        return int(row["chunk_count"]) if row else 1
+
+    def get_chunk_counts(self, paths: Iterable[str]) -> dict[str, int]:
+        """Return a ``{path: chunk_count}`` map for the given paths.
+
+        Missing paths are omitted; callers should default to ``1``.
+
+        Args:
+            paths: Iterable of relative document paths to look up.
+
+        Returns:
+            Dict mapping each found path to its ``chunk_count`` value.
+        """
+        paths_list = list(paths)
+        if not paths_list:
+            return {}
+        placeholders = ",".join("?" * len(paths_list))
+        rows = self._conn.execute(
+            f"SELECT path, chunk_count FROM documents WHERE path IN ({placeholders})",
+            paths_list,
+        ).fetchall()
+        return {r["path"]: int(r["chunk_count"]) for r in rows}
+
+    def get_section(self, path: str, heading: str) -> dict[str, Any] | None:
+        """Return the first section row for (path, heading), or ``None``.
+
+        Returns a dict with keys ``'content'``, ``'heading'``,
+        ``'heading_level'`` on hit; ``None`` when the heading is not found
+        in the document.  Tie-breaks by ``start_line ASC``.
+
+        Args:
+            path: Relative document path.
+            heading: Exact heading string to match.
+
+        Returns:
+            A dict with section data, or ``None`` when not found.
+        """
+        row = self._conn.execute(
+            """
+            SELECT s.content, s.heading, s.heading_level
+            FROM sections s
+            JOIN documents d ON d.id = s.document_id
+            WHERE d.path = ? AND s.heading = ?
+            ORDER BY s.start_line ASC
+            LIMIT 1
+            """,
+            (path, heading),
+        ).fetchone()
+        if row is None:
+            return None
+        return {
+            "content": row["content"],
+            "heading": row["heading"],
+            "heading_level": row["heading_level"],
+        }
 
     def close(self) -> None:
         """Close the underlying database connection.

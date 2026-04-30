@@ -77,7 +77,10 @@ class HeadingChunker:
     pre-2026-04 behaviour. With ``max_chunk_words`` set, after the initial
     H1/H2 split each chunk that exceeds the threshold is recursively re-split
     at the next heading level (H3, then H4, …, up to H6) until each chunk
-    fits or no headings of the next level exist inside.
+    fits or no headings of the next level exist inside.  Note: the cap is
+    *soft*. A chunk with no deeper headings inside (e.g. a 5000-word section
+    under a single H2) stays at that size — no paragraph- or sentence-level
+    splitting is performed.
 
     Short documents (fewer than ``short_doc_lines`` lines) are returned as a
     single chunk without splitting. Preamble (content before the first

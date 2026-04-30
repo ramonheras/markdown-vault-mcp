@@ -352,21 +352,6 @@ class SearchManager:
             )
             return {}
 
-    def _fts_chunk_count_for(self, path: str) -> int:
-        """Look up parent doc chunk_count from the FTS index, default 1.
-
-        Args:
-            path: Relative document path.
-
-        Returns:
-            The ``chunk_count`` value stored in the documents table, or 1 if
-            the document is not found.
-        """
-        row = self._fts._conn.execute(
-            "SELECT chunk_count FROM documents WHERE path = ?", (path,)
-        ).fetchone()
-        return int(row["chunk_count"]) if row else 1
-
     def _row_matches_filters(self, path: str, filters: dict[str, str]) -> bool:
         """Return ``True`` if the document at *path* satisfies all *filters*.
 
@@ -590,7 +575,8 @@ class SearchManager:
         candidate_limit = max(limit * (chunks_per_doc + 4), 50)
         raw = vectors.search(query, limit=candidate_limit)
 
-        rows: list[_SemanticRow] = []
+        # Filter first, then batch-fetch chunk counts to avoid N+1 queries.
+        filtered: list[dict[str, Any]] = []
         for r in raw:
             if folder is not None:
                 r_folder = r.get("folder", "")
@@ -598,17 +584,21 @@ class SearchManager:
                     continue
             if filters and not self._row_matches_filters(r["path"], filters):
                 continue
-            rows.append(
-                _SemanticRow(
-                    path=r["path"],
-                    title=r["title"],
-                    folder=r["folder"],
-                    heading=r.get("heading"),
-                    content=r["content"],
-                    score=r["score"],
-                    chunk_count=self._fts_chunk_count_for(r["path"]),
-                )
+            filtered.append(r)
+
+        chunk_counts = self._fts.get_chunk_counts({r["path"] for r in filtered})
+        rows: list[_SemanticRow] = [
+            _SemanticRow(
+                path=r["path"],
+                title=r["title"],
+                folder=r["folder"],
+                heading=r.get("heading"),
+                content=r["content"],
+                score=r["score"],
+                chunk_count=chunk_counts.get(r["path"], 1),
             )
+            for r in filtered
+        ]
 
         downweighted = _apply_length_downweight(
             rows, alpha=self._length_downweight_alpha
@@ -666,7 +656,8 @@ class SearchManager:
 
         vectors = self._load_vectors()
         vec_raw = vectors.search(query, limit=candidate_limit)
-        vec_rows: list[_SemanticRow] = []
+        # Filter first, then batch-fetch chunk counts to avoid N+1 queries.
+        vec_filtered: list[dict[str, Any]] = []
         for r in vec_raw:
             if folder is not None:
                 r_folder = r.get("folder", "")
@@ -674,17 +665,21 @@ class SearchManager:
                     continue
             if filters and not self._row_matches_filters(r["path"], filters):
                 continue
-            vec_rows.append(
-                _SemanticRow(
-                    path=r["path"],
-                    title=r["title"],
-                    folder=r["folder"],
-                    heading=r.get("heading"),
-                    content=r["content"],
-                    score=r["score"],
-                    chunk_count=self._fts_chunk_count_for(r["path"]),
-                )
+            vec_filtered.append(r)
+
+        vec_chunk_counts = self._fts.get_chunk_counts({r["path"] for r in vec_filtered})
+        vec_rows: list[_SemanticRow] = [
+            _SemanticRow(
+                path=r["path"],
+                title=r["title"],
+                folder=r["folder"],
+                heading=r.get("heading"),
+                content=r["content"],
+                score=r["score"],
+                chunk_count=vec_chunk_counts.get(r["path"], 1),
             )
+            for r in vec_filtered
+        ]
         vec_rows = _apply_length_downweight(
             vec_rows, alpha=self._length_downweight_alpha
         )
@@ -693,6 +688,7 @@ class SearchManager:
         rrf_scores: dict[tuple[str, str | None], float] = {}
         chunk_meta: dict[tuple[str, str | None], dict[str, Any]] = {}
         keyword_keys: set[tuple[str, str | None]] = set()
+        vec_keys: set[tuple[str, str | None]] = set()
 
         for rank, fr in enumerate(fts_results, start=1):
             key = (fr.path, fr.heading)
@@ -713,6 +709,7 @@ class SearchManager:
         for rank, vr in enumerate(vec_rows, start=1):
             vkey = (vr.path, vr.heading)
             rrf_scores[vkey] = rrf_scores.get(vkey, 0.0) + 1.0 / (_RRF_K + rank)
+            vec_keys.add(vkey)
             chunk_meta.setdefault(
                 vkey,
                 {
@@ -724,6 +721,10 @@ class SearchManager:
                     "search_type": "semantic",
                 },
             )
+
+        # Chunks present in both channels get labelled "hybrid".
+        for key in keyword_keys & vec_keys:
+            chunk_meta[key]["search_type"] = "hybrid"
 
         sorted_keys = sorted(rrf_scores, key=lambda k: rrf_scores[k], reverse=True)
 

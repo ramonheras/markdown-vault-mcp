@@ -2620,12 +2620,12 @@ class TestHybridSearch:
     def test_hybrid_search_search_type_varies(
         self, semantic_collection: Collection
     ) -> None:
-        """Hybrid results can carry 'keyword' or 'semantic' search_type."""
+        """Hybrid results can carry 'keyword', 'semantic', or 'hybrid' search_type."""
         results = semantic_collection.search("document content", mode="hybrid", limit=9)
 
         types = {r.search_type for r in results}
         # With 9 docs and a broad query, at least one type should appear.
-        assert types.issubset({"keyword", "semantic"})
+        assert types.issubset({"keyword", "semantic", "hybrid"})
         assert len(types) >= 1
 
     def test_hybrid_search_folder_filter(

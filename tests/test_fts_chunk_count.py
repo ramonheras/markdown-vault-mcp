@@ -74,6 +74,32 @@ def test_chunk_count_updates_on_reupsert(tmp_path):
     assert v2_count == len(note_v2.chunks)
 
 
+def test_migration_no_crash_when_column_already_added(tmp_path):
+    """If a concurrent process added chunk_count first, our migration is a no-op."""
+    db_path = tmp_path / "race.sqlite3"
+    legacy = sqlite3.connect(db_path)
+    legacy.executescript(
+        """
+        CREATE TABLE documents (
+            id INTEGER PRIMARY KEY,
+            path TEXT UNIQUE NOT NULL,
+            title TEXT NOT NULL,
+            folder TEXT NOT NULL DEFAULT '',
+            frontmatter_json TEXT,
+            content_hash TEXT NOT NULL,
+            modified_at REAL NOT NULL,
+            chunk_count INTEGER NOT NULL DEFAULT 1
+        );
+        """
+    )
+    legacy.commit()
+    legacy.close()
+
+    # FTSIndex must not crash even though the column already exists.
+    fts = FTSIndex(db_path=db_path)
+    assert fts is not None
+
+
 def test_migration_adds_column_to_pre_existing_db(tmp_path):
     """Opening an FTS DB created without chunk_count adds the column."""
     db_path = tmp_path / "old.sqlite3"

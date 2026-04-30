@@ -296,17 +296,7 @@ class DocumentManager:
                 f"Section '{heading}' not found in document {path}: "
                 "document is not indexed or does not exist"
             )
-        section_row = self._fts._conn.execute(
-            """
-            SELECT s.content, s.heading, s.heading_level
-            FROM sections s
-            JOIN documents d ON d.id = s.document_id
-            WHERE d.path = ? AND s.heading = ?
-            ORDER BY s.start_line ASC
-            LIMIT 1
-            """,
-            (path, heading),
-        ).fetchone()
+        section_row = self._fts.get_section(path, heading)
         if section_row is None:
             raise ValueError(f"Section '{heading}' not found in document {path}")
 

@@ -633,3 +633,20 @@ def test_hybrid_search_uses_fts_snippet_for_keyword_hits(
         limit=10,
     )
     assert all(len(r.content.split()) <= 8 for r in results)
+
+
+def test_hybrid_search_labels_both_channel_hits_as_hybrid(
+    search_mgr_with_embeddings: SearchManager,
+) -> None:
+    """Chunks present in both channels are labelled 'hybrid'."""
+    results = search_mgr_with_embeddings.search(
+        "world",
+        mode="hybrid",
+        chunks_per_doc=10,
+        snippet_words=0,
+        limit=20,
+    )
+    # At least one result should be 'hybrid' (chunk hit in both channels).
+    assert any(r.search_type == "hybrid" for r in results), (
+        f"expected at least one 'hybrid' label; got {[r.search_type for r in results]}"
+    )

@@ -77,12 +77,14 @@ class SearchResult:
         folder: Parent folder path.
         heading: Section heading this chunk falls under, or ``None`` for the intro.
         content: Matched chunk text — a query-relevant snippet by default
-            (≤ ``snippet_words`` words, centred on matched terms). Pass
+            (approximately ``snippet_words`` words plus optional leading/trailing
+            ellipsis markers, centred on matched terms). Pass
             ``snippet_words=0`` to ``search`` for the full chunk verbatim,
             or recover the full chunk after seeing a snippet via
             ``read(path, section=heading)``.
         score: Relevance score. Higher is better; not comparable across search types.
-        search_type: ``"keyword"`` (BM25) or ``"semantic"`` (cosine similarity).
+        search_type: ``"keyword"`` (BM25), ``"semantic"`` (cosine similarity),
+            or ``"hybrid"`` (chunk appeared in both keyword and semantic channels).
         frontmatter: Parsed YAML frontmatter of the parent document.
     """
 
@@ -92,7 +94,7 @@ class SearchResult:
     heading: str | None
     content: str
     score: float
-    search_type: Literal["keyword", "semantic"]
+    search_type: Literal["keyword", "semantic", "hybrid"]
     frontmatter: dict[str, Any]
 
 
