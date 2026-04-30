@@ -204,6 +204,12 @@ class CollectionConfig:
     openai_api_key: str | None = None
     fastembed_model: str = "BAAI/bge-small-en-v1.5"
     fastembed_cache_dir: str | None = None
+
+    # Search ranking and snippet truncation
+    chunks_per_doc: int = 2
+    snippet_words: int = 200
+    length_downweight_alpha: float = 0.25
+    max_chunk_words: int = 400
     # CONFIG-FIELDS-END
 
     # Universal server fields delegated to fastmcp_pvl_core.ServerConfig.
@@ -689,6 +695,36 @@ def load_config() -> CollectionConfig:
         "load_config: fastembed_cache_dir=%s", fastembed_cache_dir or "not set"
     )
 
+    # --- Search ranking and snippet truncation ---
+    raw_chunks_per_doc = (_env("CHUNKS_PER_DOC") or "").strip()
+    chunks_per_doc = int(raw_chunks_per_doc) if raw_chunks_per_doc else 2
+    if chunks_per_doc < 1:
+        raise ValueError(
+            f"chunks_per_doc must be >= 1, got {chunks_per_doc}; set "
+            "MARKDOWN_VAULT_MCP_CHUNKS_PER_DOC to a positive integer."
+        )
+    logger.debug("load_config: chunks_per_doc=%s", chunks_per_doc)
+
+    raw_snippet_words = (_env("SNIPPET_WORDS") or "").strip()
+    snippet_words = int(raw_snippet_words) if raw_snippet_words else 200
+    if snippet_words < 0:
+        raise ValueError(f"snippet_words must be >= 0, got {snippet_words}")
+    logger.debug("load_config: snippet_words=%s", snippet_words)
+
+    raw_alpha = (_env("LENGTH_DOWNWEIGHT_ALPHA") or "").strip()
+    length_downweight_alpha = float(raw_alpha) if raw_alpha else 0.25
+    if length_downweight_alpha < 0:
+        raise ValueError(
+            f"length_downweight_alpha must be >= 0, got {length_downweight_alpha}"
+        )
+    logger.debug("load_config: length_downweight_alpha=%s", length_downweight_alpha)
+
+    raw_max_chunk_words = (_env("MAX_CHUNK_WORDS") or "").strip()
+    max_chunk_words = int(raw_max_chunk_words) if raw_max_chunk_words else 400
+    if max_chunk_words < 1:
+        raise ValueError(f"max_chunk_words must be >= 1, got {max_chunk_words}")
+    logger.debug("load_config: max_chunk_words=%s", max_chunk_words)
+
     return CollectionConfig(
         # CONFIG-FROM-ENV-START — domain fields populated from env; kept across copier update
         source_dir=source_dir,
@@ -731,6 +767,10 @@ def load_config() -> CollectionConfig:
         openai_api_key=openai_api_key,
         fastembed_model=fastembed_model,
         fastembed_cache_dir=fastembed_cache_dir,
+        chunks_per_doc=chunks_per_doc,
+        snippet_words=snippet_words,
+        length_downweight_alpha=length_downweight_alpha,
+        max_chunk_words=max_chunk_words,
         # CONFIG-FROM-ENV-END
         server=ServerConfig.from_env(_ENV_PREFIX),
     )
