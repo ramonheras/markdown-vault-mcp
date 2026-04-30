@@ -605,3 +605,31 @@ def test_semantic_search_applies_chunks_per_doc_cap_and_snippet(
     paths = [r.path for r in results]
     assert len(set(paths)) == len(paths)
     assert all(len(r.content.split()) <= 10 for r in results)
+
+
+def test_hybrid_search_caps_per_doc_after_rrf(
+    search_mgr_with_embeddings: SearchManager,
+) -> None:
+    results = search_mgr_with_embeddings.search(
+        "world",
+        mode="hybrid",
+        chunks_per_doc=1,
+        snippet_words=5,
+        limit=10,
+    )
+    paths = [r.path for r in results]
+    assert len(set(paths)) == len(paths)
+
+
+def test_hybrid_search_uses_fts_snippet_for_keyword_hits(
+    search_mgr_with_embeddings: SearchManager,
+) -> None:
+    """Bound payload size in hybrid mode."""
+    results = search_mgr_with_embeddings.search(
+        "world",
+        mode="hybrid",
+        chunks_per_doc=2,
+        snippet_words=3,
+        limit=10,
+    )
+    assert all(len(r.content.split()) <= 8 for r in results)

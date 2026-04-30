@@ -184,6 +184,15 @@ class _SemanticRow:
     chunk_count: int
 
 
+@dataclass
+class _CapRow:
+    """Adapter row for the post-RRF cap step (only needs .path / .score)."""
+
+    path: str
+    heading: str | None
+    score: float
+
+
 class SearchManager:
     """Manages search, listing, and query operations against the vault.
 
@@ -480,7 +489,14 @@ class SearchManager:
 
         # hybrid
         self._require_vectors()
-        return self._hybrid_search(query, limit=limit, filters=filters, folder=folder)
+        return self._hybrid_search(
+            query,
+            limit=limit,
+            filters=filters,
+            folder=folder,
+            chunks_per_doc=eff_cap,
+            snippet_words=eff_snip,
+        )
 
     def _keyword_search(
         self,
@@ -622,109 +638,138 @@ class SearchManager:
         limit: int,
         filters: dict[str, str] | None,
         folder: str | None,
+        chunks_per_doc: int,
+        snippet_words: int,
     ) -> list[SearchResult]:
         """RRF merge of keyword and semantic results.
 
         Each result set is ranked independently.  Merged score:
         ``1 / (k + rank)`` where k=60.  Results appearing in both sets
-        have their scores summed.  Returns top *limit* by total RRF score.
+        have their scores summed.  Returns top *limit* by total RRF score,
+        after applying per-channel length downweight and a per-doc cap on the
+        merged sorted list.
         """
-        # Fetch more candidates than needed so RRF has enough to rank.
-        candidate_limit = max(limit * 2, 20)
-
-        # Flush deferred embedding updates so results are consistent.
         self._flush_embeddings()
+        candidate_limit = max(limit * (chunks_per_doc + 4), 50)
 
-        fts_results = self._fts.search(
-            query, limit=candidate_limit, filters=filters, folder=folder
+        fts_raw: list[FTSResult] = self._fts.search(
+            query,
+            limit=candidate_limit,
+            filters=filters,
+            folder=folder,
+            snippet_words=None,  # full content; snippet applied later
         )
+        # Apply length downweight inside the keyword channel.
+        fts_results: list[FTSResult] = _apply_length_downweight(
+            fts_raw, alpha=self._length_downweight_alpha
+        )
+
         vectors = self._load_vectors()
-        vec_results = vectors.search(query, limit=candidate_limit)
-
-        # Build a key for deduplication: (path, heading) identifies a chunk.
-        # Use a dict to accumulate RRF scores and store metadata.
-        rrf_scores: dict[tuple[str, str | None], float] = {}
-        # Store the best metadata dict keyed by (path, heading).
-        chunk_meta: dict[tuple[str, str | None], dict[str, Any]] = {}
-
-        for rank, r in enumerate(fts_results, start=1):
-            key = (r.path, r.heading)
-            rrf_scores[key] = rrf_scores.get(key, 0.0) + 1.0 / (_RRF_K + rank)
-            if key not in chunk_meta:
-                chunk_meta[key] = {
-                    "path": r.path,
-                    "title": r.title,
-                    "folder": r.folder,
-                    "heading": r.heading,
-                    "content": r.content,
-                    "search_type": "keyword",
-                }
-
-        for rank, vr in enumerate(vec_results, start=1):
-            # Apply folder prefix filter to semantic results.
+        vec_raw = vectors.search(query, limit=candidate_limit)
+        vec_rows: list[_SemanticRow] = []
+        for r in vec_raw:
             if folder is not None:
-                vr_folder = vr.get("folder", "")
-                if vr_folder != folder and not vr_folder.startswith(folder + "/"):
+                r_folder = r.get("folder", "")
+                if r_folder != folder and not r_folder.startswith(folder + "/"):
                     continue
-
-            # Apply tag filters to semantic results via frontmatter lookup.
-            if filters:
-                note_row = self._fts.get_note(vr["path"])
-                if note_row is None:
-                    continue
-                fm_raw = note_row.get("frontmatter_json")
-                fm: dict[str, Any] = {}
-                if fm_raw:
-                    with contextlib.suppress(json.JSONDecodeError, TypeError):
-                        fm = json.loads(fm_raw)
-                skip = False
-                for fk, fv in filters.items():
-                    fm_val = fm.get(fk)
-                    if fm_val is None:
-                        skip = True
-                        break
-                    if isinstance(fm_val, list):
-                        if str(fv) not in [str(v) for v in fm_val]:
-                            skip = True
-                            break
-                    else:
-                        if str(fm_val) != str(fv):
-                            skip = True
-                            break
-                if skip:
-                    continue
-
-            heading = vr.get("heading")
-            vkey = (vr["path"], heading)
-            rrf_scores[vkey] = rrf_scores.get(vkey, 0.0) + 1.0 / (_RRF_K + rank)
-            if vkey not in chunk_meta:
-                chunk_meta[vkey] = {
-                    "path": vr["path"],
-                    "title": vr["title"],
-                    "folder": vr["folder"],
-                    "heading": heading,
-                    "content": vr["content"],
-                    "search_type": "semantic",
-                }
-
-        # Sort by descending RRF score, take top limit.
-        sorted_keys = sorted(rrf_scores, key=lambda k: rrf_scores[k], reverse=True)[
-            :limit
-        ]
-
-        return [
-            SearchResult(
-                path=chunk_meta[k]["path"],
-                title=chunk_meta[k]["title"],
-                folder=chunk_meta[k]["folder"],
-                heading=chunk_meta[k]["heading"],
-                content=chunk_meta[k]["content"],
-                score=rrf_scores[k],
-                search_type=chunk_meta[k]["search_type"],
-                frontmatter=self._get_frontmatter(chunk_meta[k]["path"]),
+            if filters and not self._row_matches_filters(r["path"], filters):
+                continue
+            vec_rows.append(
+                _SemanticRow(
+                    path=r["path"],
+                    title=r["title"],
+                    folder=r["folder"],
+                    heading=r.get("heading"),
+                    content=r["content"],
+                    score=r["score"],
+                    chunk_count=self._fts_chunk_count_for(r["path"]),
+                )
             )
-            for k in sorted_keys
+        vec_rows = _apply_length_downweight(
+            vec_rows, alpha=self._length_downweight_alpha
+        )
+
+        # RRF fusion on adjusted-rank order.
+        rrf_scores: dict[tuple[str, str | None], float] = {}
+        chunk_meta: dict[tuple[str, str | None], dict[str, Any]] = {}
+        keyword_keys: set[tuple[str, str | None]] = set()
+
+        for rank, fr in enumerate(fts_results, start=1):
+            key = (fr.path, fr.heading)
+            rrf_scores[key] = rrf_scores.get(key, 0.0) + 1.0 / (_RRF_K + rank)
+            keyword_keys.add(key)
+            chunk_meta.setdefault(
+                key,
+                {
+                    "path": fr.path,
+                    "title": fr.title,
+                    "folder": fr.folder,
+                    "heading": fr.heading,
+                    "content": fr.content,
+                    "search_type": "keyword",
+                },
+            )
+
+        for rank, vr in enumerate(vec_rows, start=1):
+            vkey = (vr.path, vr.heading)
+            rrf_scores[vkey] = rrf_scores.get(vkey, 0.0) + 1.0 / (_RRF_K + rank)
+            chunk_meta.setdefault(
+                vkey,
+                {
+                    "path": vr.path,
+                    "title": vr.title,
+                    "folder": vr.folder,
+                    "heading": vr.heading,
+                    "content": vr.content,
+                    "search_type": "semantic",
+                },
+            )
+
+        sorted_keys = sorted(rrf_scores, key=lambda k: rrf_scores[k], reverse=True)
+
+        cap_input = [
+            _CapRow(path=k[0], heading=k[1], score=rrf_scores[k]) for k in sorted_keys
         ]
+        capped = _apply_chunks_per_doc_cap(cap_input, n=chunks_per_doc, limit=limit)
+
+        keyword_capped = [c for c in capped if (c.path, c.heading) in keyword_keys]
+        snippet_map: dict[tuple[str, str | None], str] = {}
+        if snippet_words > 0 and keyword_capped:
+            survivor_keys = {(c.path, c.heading) for c in keyword_capped}
+            survivor_fts_rows = [
+                fts_r
+                for fts_r in fts_results
+                if (fts_r.path, fts_r.heading) in survivor_keys
+            ]
+            snippet_map = self._fetch_snippet_map(
+                query, survivor_fts_rows, snippet_words=snippet_words
+            )
+
+        out: list[SearchResult] = []
+        for c in capped:
+            key = (c.path, c.heading)
+            meta = chunk_meta[key]
+            if key in snippet_map:
+                content = snippet_map[key]
+            elif key in keyword_keys:
+                content = meta["content"]
+            else:
+                content = _compute_snippet_for_semantic(
+                    meta["content"], query, snippet_words=snippet_words
+                )
+            out.append(
+                SearchResult(
+                    path=meta["path"],
+                    title=meta["title"],
+                    folder=meta["folder"],
+                    heading=meta["heading"],
+                    content=content,
+                    score=rrf_scores[key],
+                    search_type=meta["search_type"],
+                    frontmatter=self._get_frontmatter(meta["path"]),
+                )
+            )
+        return out
 
     # ------------------------------------------------------------------
     # List / enumerate
