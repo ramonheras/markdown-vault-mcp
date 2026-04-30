@@ -28,12 +28,14 @@ _SHORT_DOC_LINES = 30
 class ChunkStrategy(Protocol):
     """Protocol for document chunking strategies."""
 
-    def chunk(self, content: str, metadata: dict[str, Any]) -> list[Chunk]:
+    def chunk(self, content: str, _metadata: dict[str, Any]) -> list[Chunk]:
         """Chunk the markdown body into sections.
 
         Args:
             content: Markdown body after frontmatter has been stripped.
-            metadata: Parsed frontmatter dict (for context, not modification).
+            _metadata: Parsed frontmatter dict (for context, not modification).
+                Underscore prefix marks the parameter as unused-by-default in
+                implementations; callers pass it positionally.
 
         Returns:
             List of Chunk objects.
