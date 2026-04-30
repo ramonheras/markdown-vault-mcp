@@ -88,6 +88,31 @@ def _apply_length_downweight(rows: list[_RankT], *, alpha: float) -> list[_RankT
     return [r for r, _ in adjusted]
 
 
+def _apply_chunks_per_doc_cap(
+    rows: list[_RankT], *, n: int, limit: int
+) -> list[_RankT]:
+    """Walk ``rows`` in order; keep at most ``n`` rows per ``path``; stop at ``limit``.
+
+    Each element must expose a ``path`` attribute. Order is preserved.
+
+    Raises:
+        ValueError: If ``n`` is less than 1.
+    """
+    if n < 1:
+        raise ValueError(f"chunks_per_doc cap must be >= 1, got {n}")
+    out: list[_RankT] = []
+    counts: dict[str, int] = {}
+    for row in rows:
+        path = row.path  # type: ignore[attr-defined]
+        if counts.get(path, 0) >= n:
+            continue
+        counts[path] = counts.get(path, 0) + 1
+        out.append(row)
+        if len(out) >= limit:
+            break
+    return out
+
+
 class SearchManager:
     """Manages search, listing, and query operations against the vault.
 
