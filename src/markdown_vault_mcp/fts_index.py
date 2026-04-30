@@ -575,22 +575,23 @@ class FTSIndex:
         limit: int = 10,
         folder: str | None = None,
         filters: dict[str, str] | None = None,
+        snippet_words: int | None = None,
     ) -> list[FTSResult]:
         """Full-text search using BM25 ranking.
-
-        Optionally filters results by folder prefix and/or frontmatter tag
-        key-value pairs.  Each entry in ``filters`` is ANDed.
 
         Args:
             query: FTS5 query string.
             limit: Maximum number of results to return.
             folder: If provided, only return documents whose ``folder``
                 starts with this string.
-            filters: Dict of ``{tag_key: tag_value}`` pairs.  All pairs must
-                match (AND semantics).
+            filters: Dict of ``{tag_key: tag_value}`` pairs (AND semantics).
+            snippet_words: When set to a positive integer, returned
+                ``content`` is replaced with FTS5's ``snippet()`` of the
+                matched content column, sized to approximately this many
+                tokens. ``None`` or ``0`` returns the full chunk.
 
         Returns:
-            List of :class:`~markdown_vault_mcp.types.FTSResult` objects ordered by
+            List of :class:`~markdown_vault_mcp.types.FTSResult` ordered by
             descending BM25 score.
         """
         # Build tag subquery filters (one per entry, ANDed).
@@ -609,9 +610,6 @@ class FTSIndex:
         folder_clause = ""
         folder_params: list[str] = []
         if folder is not None:
-            # Match exact folder or sub-folders.  Escape LIKE wildcards in the
-            # user-supplied folder value so that literal '%' and '_' characters
-            # are matched as-is rather than treated as SQL wildcards.
             escaped = _escape_like(folder)
             folder_clause = "AND (d.folder = ? OR d.folder LIKE ? ESCAPE '\\')"
             folder_params = [folder, escaped + "/%"]
@@ -620,14 +618,24 @@ class FTSIndex:
         if tag_clauses:
             tag_filter_sql = "AND " + " AND ".join(tag_clauses)
 
+        # column index 4 is the 'content' column in
+        #   notes_fts USING fts5(path, title, folder, heading, content, ...)
+        if snippet_words and snippet_words > 0:
+            content_expr = "snippet(notes_fts, 4, '', '', '…', ?) AS content"
+            snippet_params: list[object] = [snippet_words]
+        else:
+            content_expr = "f.content AS content"
+            snippet_params = []
+
         sql = f"""
             SELECT
                 f.path,
                 d.title,
                 d.folder,
                 f.heading,
-                f.content,
-                ABS(f.rank) AS score
+                {content_expr},
+                ABS(f.rank) AS score,
+                d.chunk_count AS chunk_count
             FROM notes_fts f
             JOIN documents d ON d.path = f.path
             WHERE notes_fts MATCH ?
@@ -640,13 +648,20 @@ class FTSIndex:
         if not query:
             return []
 
-        params: list[object] = [query, *folder_params, *tag_params, limit]
+        params: list[object] = [
+            *snippet_params,
+            query,
+            *folder_params,
+            *tag_params,
+            limit,
+        ]
         logger.debug(
-            "FTS search: query=%r folder=%r filters=%r limit=%d",
+            "FTS search: query=%r folder=%r filters=%r limit=%d snippet_words=%r",
             query,
             folder,
             filters,
             limit,
+            snippet_words,
         )
         try:
             cur = self._conn.execute(sql, params)
@@ -674,6 +689,7 @@ class FTSIndex:
                     heading=row["heading"] or None,
                     content=row["content"],
                     score=row["score"],
+                    chunk_count=row["chunk_count"],
                 )
             )
         return results

@@ -100,9 +100,12 @@ class FTSResult:
         path: Relative path of the document containing this chunk.
         title: Document title.
         folder: Parent folder path.
-        heading: Section heading this chunk falls under, or ``None`` for the intro.
-        content: Matched chunk text.
+        heading: Section heading this chunk falls under, or ``None``.
+        content: Matched chunk text — full chunk by default; truncated to a
+            tokenizer-aware snippet when ``snippet_words`` is passed to the
+            search call.
         score: BM25 relevance score (higher is better).
+        chunk_count: Total number of chunks belonging to the parent document.
     """
 
     path: str
@@ -111,6 +114,7 @@ class FTSResult:
     heading: str | None
     content: str
     score: float
+    chunk_count: int = 1
 
 
 @dataclass
