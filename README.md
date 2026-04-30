@@ -17,6 +17,8 @@ Point it at a directory of Markdown files (an Obsidian vault, a docs folder, a Z
 - **Full-text search** — SQLite FTS5 with BM25 scoring, porter stemming
 - **Semantic search** — cosine similarity over embedding vectors (FastEmbed, Ollama, or OpenAI)
 - **Hybrid search** — Reciprocal Rank Fusion combining FTS5 and vector results
+- **Diversity-aware ranking** — each search result list caps a single document at 2 chunks (configurable), downweights chunks of long documents, and returns sentence-scale snippets — bounded LLM context cost per query, with full chunk recovery via `read(path, section=heading)`
+- **Adaptive heading-level chunking** — long sections are recursively re-split at deeper heading levels (H1 → H6) until each chunk fits a configurable word budget, improving retrieval precision on synthesising essays without manual restructuring
 - **Frontmatter-aware** — indexes YAML frontmatter fields, supports required field enforcement
 - **Incremental reindexing** — hash-based change detection, only re-processes modified files
 - **Write operations** — create, edit, delete, rename documents with automatic index updates
