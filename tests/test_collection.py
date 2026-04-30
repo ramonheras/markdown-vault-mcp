@@ -3917,3 +3917,31 @@ class TestLoggingAuditSilentPaths:
         assert any(
             "_get_frontmatter: invalid JSON" in rec.message for rec in caplog.records
         )
+
+
+def test_collection_constructs_chunker_with_max_chunk_words(tmp_path):
+    """Collection plumbs max_chunk_words into HeadingChunker."""
+    from markdown_vault_mcp.collection import Collection
+    from markdown_vault_mcp.scanner import HeadingChunker
+
+    coll = Collection(source_dir=tmp_path, max_chunk_words=250)
+    assert isinstance(coll._chunk_strategy, HeadingChunker)
+    assert coll._chunk_strategy.max_chunk_words == 250
+
+
+def test_collection_search_honours_default_chunks_per_doc(tmp_path):
+    """A Collection-level search uses chunks_per_doc=2 by default."""
+    from markdown_vault_mcp.collection import Collection
+
+    (tmp_path / "long.md").write_text(
+        "# Top\n## A\nworld a\n## B\nworld b\n## C\nworld c\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "short.md").write_text("# Short\nworld\n", encoding="utf-8")
+    coll = Collection(source_dir=tmp_path)
+    coll.build_index()
+    results = coll.search("world", mode="keyword", limit=10)
+    counts: dict[str, int] = {}
+    for r in results:
+        counts[r.path] = counts.get(r.path, 0) + 1
+    assert counts.get("long.md", 0) <= 2

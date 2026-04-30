@@ -251,6 +251,10 @@ class CollectionConfig:
             "attachment_extensions": self.attachment_extensions,
             "max_attachment_size_mb": self.max_attachment_size_mb,
             "git_pull_interval_s": 0,
+            "chunks_per_doc": self.chunks_per_doc,
+            "snippet_words": self.snippet_words,
+            "length_downweight_alpha": self.length_downweight_alpha,
+            "max_chunk_words": self.max_chunk_words,
         }
 
         # Resolve embedding provider if embeddings_path is configured.

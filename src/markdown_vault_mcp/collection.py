@@ -137,6 +137,10 @@ class Collection:
         exclude_patterns: list[str] | None = None,
         attachment_extensions: list[str] | None = None,
         max_attachment_size_mb: float = 10.0,
+        chunks_per_doc: int = 2,
+        snippet_words: int = 200,
+        length_downweight_alpha: float = 0.25,
+        max_chunk_words: int = 400,
     ) -> None:
         self._source_dir = source_dir
         self._index_path = index_path
@@ -145,7 +149,14 @@ class Collection:
         self._read_only = read_only
         self._indexed_frontmatter_fields: list[str] = indexed_frontmatter_fields or []
         self._required_frontmatter = required_frontmatter
-        self._chunk_strategy = _resolve_chunk_strategy(chunk_strategy)
+        # Only inject max_chunk_words when the caller has not provided a
+        # custom ChunkStrategy instance or an explicit string name override.
+        if isinstance(chunk_strategy, str) and chunk_strategy == "heading":
+            self._chunk_strategy: ChunkStrategy = HeadingChunker(
+                max_chunk_words=max_chunk_words
+            )
+        else:
+            self._chunk_strategy = _resolve_chunk_strategy(chunk_strategy)
         self._on_write = on_write
         self._git_strategy = git_strategy
         self._git_pull_interval_s = git_pull_interval_s
@@ -217,6 +228,9 @@ class Collection:
             link_manager=self._link_mgr,
             flush_embeddings=self._index_mgr.flush_dirty_embeddings,
             rebuild_embeddings=lambda: self._index_mgr.build_embeddings(force=True),
+            chunks_per_doc=chunks_per_doc,
+            snippet_words=snippet_words,
+            length_downweight_alpha=length_downweight_alpha,
         )
         # 4. DocumentManager (needs index_mgr callbacks)
         self._doc_mgr = DocumentManager(
