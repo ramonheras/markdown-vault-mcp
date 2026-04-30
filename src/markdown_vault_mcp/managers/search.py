@@ -14,6 +14,7 @@ import json
 import logging
 import math
 import mimetypes
+import re as _re
 import sqlite3
 from dataclasses import replace as _dc_replace
 from pathlib import Path
@@ -48,6 +49,9 @@ logger = logging.getLogger(__name__)
 
 # RRF constant — standard value recommended in the original paper.
 _RRF_K = 60
+
+# Regex for extracting query tokens (alphanumeric sequences).
+_QUERY_TOKEN_RE = _re.compile(r"[A-Za-z0-9]+")
 
 # Maximum folder peers returned by get_context().
 _CONTEXT_FOLDER_PEERS_LIMIT = 20
@@ -111,6 +115,58 @@ def _apply_chunks_per_doc_cap(
         if len(out) >= limit:
             break
     return out
+
+
+def _compute_snippet_for_semantic(
+    content: str, query: str, *, snippet_words: int
+) -> str:
+    """Pick a ``snippet_words``-wide window from ``content``.
+
+    Returns the full content when ``snippet_words`` is 0, when the chunk is
+    already shorter, or as a fallback when no query tokens overlap (in which
+    case the first ``snippet_words`` words are returned with a trailing
+    ellipsis).
+
+    Uses simple case-insensitive substring matching on alphanumeric tokens.
+    """
+    if snippet_words <= 0:
+        return content
+
+    words = content.split()
+    if len(words) <= snippet_words:
+        return content
+
+    query_tokens = {t.lower() for t in _QUERY_TOKEN_RE.findall(query)}
+    if not query_tokens:
+        return " ".join(words[:snippet_words]) + " …"
+
+    # Normalise each word: keep alphanumeric chars, lower-case, fall back to
+    # the lowercased original if the regex strip leaves an empty string.
+    lower_words = [_QUERY_TOKEN_RE.sub("", w).lower() or w.lower() for w in words]
+
+    # Sliding window: maintain best_start / best_score, update incrementally.
+    best_start = 0
+    best_score = sum(1 for w in lower_words[:snippet_words] if w in query_tokens)
+    cur_score = best_score
+    for i in range(1, len(words) - snippet_words + 1):
+        if lower_words[i - 1] in query_tokens:
+            cur_score -= 1
+        if lower_words[i + snippet_words - 1] in query_tokens:
+            cur_score += 1
+        if cur_score > best_score:
+            best_score = cur_score
+            best_start = i
+
+    if best_score == 0:
+        # No literal overlap anywhere — fall back to first-N words.
+        return " ".join(words[:snippet_words]) + " …"
+
+    snippet = " ".join(words[best_start : best_start + snippet_words])
+    if best_start > 0:
+        snippet = "… " + snippet
+    if best_start + snippet_words < len(words):
+        snippet = snippet + " …"
+    return snippet
 
 
 class SearchManager:
