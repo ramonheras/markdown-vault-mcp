@@ -362,6 +362,8 @@ class Collection:
         mode: Literal["keyword", "semantic", "hybrid"] = "keyword",
         filters: dict[str, str] | None = None,
         folder: str | None = None,
+        chunks_per_doc: int | None = None,
+        snippet_words: int | None = None,
     ) -> list[SearchResult]:
         """Search the collection.
 
@@ -374,6 +376,10 @@ class Collection:
                 Only works for fields in ``indexed_frontmatter_fields``.
             folder: If provided, restrict results to documents in this folder
                 (and its sub-folders).
+            chunks_per_doc: Maximum number of chunks to return per document.
+                ``None`` uses the server default configured at startup.
+            snippet_words: Width of the snippet window in words.  ``0`` returns
+                the full chunk.  ``None`` uses the server default.
 
         Returns:
             List of :class:`~markdown_vault_mcp.types.SearchResult` ordered by
@@ -385,25 +391,34 @@ class Collection:
         """
         self._ensure_initialized()
         return self._search_mgr.search(
-            query, limit=limit, mode=mode, filters=filters, folder=folder
+            query,
+            limit=limit,
+            mode=mode,
+            filters=filters,
+            folder=folder,
+            chunks_per_doc=chunks_per_doc,
+            snippet_words=snippet_words,
         )
 
     # ------------------------------------------------------------------
     # Read / list
     # ------------------------------------------------------------------
 
-    def read(self, path: str) -> NoteContent | None:
+    def read(self, path: str, *, section: str | None = None) -> NoteContent | None:
         """Read the full content of a document from disk.
 
         Args:
             path: Relative document path (e.g. ``"Journal/note.md"``).
+            section: When provided, return only the content of the heading
+                whose text matches *section* (case-insensitive).  Raises
+                :exc:`ValueError` if the section is not found.
 
         Returns:
             A :class:`~markdown_vault_mcp.types.NoteContent` instance, or ``None``
             if the file does not exist.
         """
         self._ensure_initialized()
-        return self._doc_mgr.read(path)
+        return self._doc_mgr.read(path, section=section)
 
     def list(
         self,
