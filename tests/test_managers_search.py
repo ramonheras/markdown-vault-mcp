@@ -544,3 +544,64 @@ def test_keyword_search_returns_snippet(search_mgr: SearchManager) -> None:
         len(s.content.split()) <= len(lg.content.split())
         for s, lg in zip(short_results, long_results, strict=False)
     )
+
+
+@pytest.fixture()
+def search_mgr_with_embeddings(search_vault: Path) -> SearchManager:
+    """Build a SearchManager with a deterministic mock embedding provider."""
+    from markdown_vault_mcp.vector_index import VectorIndex
+    from tests.conftest import MockEmbeddingProvider
+
+    fts = FTSIndex(db_path=":memory:", indexed_frontmatter_fields=["tags"])
+    for note in scan_directory(search_vault):
+        fts.upsert_note(note)
+    fts.resolve_vault_wikilinks()
+    provider = MockEmbeddingProvider()
+    embeddings_path = search_vault / "embeddings"
+    vectors = VectorIndex(provider)
+    for note in scan_directory(search_vault):
+        texts = [c.content for c in note.chunks]
+        from pathlib import Path as _Path
+
+        meta = [
+            {
+                "path": note.path,
+                "title": note.title,
+                "folder": (
+                    ""
+                    if _Path(note.path).parent.as_posix() == "."
+                    else _Path(note.path).parent.as_posix()
+                ),
+                "heading": c.heading,
+                "content": c.content,
+            }
+            for c in note.chunks
+        ]
+        if texts:
+            vectors.add(texts, meta)
+    vectors.save(embeddings_path)
+    mgr = SearchManager(
+        fts=fts,
+        source_dir=search_vault,
+        embeddings_path=embeddings_path,
+        embedding_provider=provider,
+        indexed_frontmatter_fields=["tags"],
+    )
+    mgr._vectors = vectors
+    return mgr
+
+
+def test_semantic_search_applies_chunks_per_doc_cap_and_snippet(
+    search_mgr_with_embeddings: SearchManager,
+) -> None:
+    """Semantic mode honours chunks_per_doc and snippet_words."""
+    results = search_mgr_with_embeddings.search(
+        "world",
+        mode="semantic",
+        chunks_per_doc=1,
+        snippet_words=5,
+        limit=10,
+    )
+    paths = [r.path for r in results]
+    assert len(set(paths)) == len(paths)
+    assert all(len(r.content.split()) <= 10 for r in results)

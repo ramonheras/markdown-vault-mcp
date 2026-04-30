@@ -16,6 +16,7 @@ import math
 import mimetypes
 import re as _re
 import sqlite3
+from dataclasses import dataclass
 from dataclasses import replace as _dc_replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, TypeVar
@@ -168,6 +169,19 @@ def _compute_snippet_for_semantic(
     if best_start + snippet_words < len(words):
         snippet = snippet + " …"
     return snippet
+
+
+@dataclass
+class _SemanticRow:
+    """Adapter row for vector search results so they expose .score / .chunk_count."""
+
+    path: str
+    title: str
+    folder: str
+    heading: str | None
+    content: str
+    score: float
+    chunk_count: int
 
 
 class SearchManager:
@@ -329,6 +343,54 @@ class SearchManager:
             )
             return {}
 
+    def _fts_chunk_count_for(self, path: str) -> int:
+        """Look up parent doc chunk_count from the FTS index, default 1.
+
+        Args:
+            path: Relative document path.
+
+        Returns:
+            The ``chunk_count`` value stored in the documents table, or 1 if
+            the document is not found.
+        """
+        row = self._fts._conn.execute(
+            "SELECT chunk_count FROM documents WHERE path = ?", (path,)
+        ).fetchone()
+        return int(row["chunk_count"]) if row else 1
+
+    def _row_matches_filters(self, path: str, filters: dict[str, str]) -> bool:
+        """Return ``True`` if the document at *path* satisfies all *filters*.
+
+        Looks up frontmatter from the FTS index and checks each key/value
+        pair.  List-valued frontmatter fields are matched by membership.
+
+        Args:
+            path: Relative document path.
+            filters: Dict of ``{frontmatter_key: value}`` pairs.
+
+        Returns:
+            ``True`` if the document exists and all filter conditions are met.
+        """
+        note_row = self._fts.get_note(path)
+        if note_row is None:
+            return False
+        fm_raw = note_row.get("frontmatter_json")
+        fm: dict[str, Any] = {}
+        if fm_raw:
+            with contextlib.suppress(json.JSONDecodeError, TypeError):
+                fm = json.loads(fm_raw)
+        for key, value in filters.items():
+            fm_val = fm.get(key)
+            if fm_val is None:
+                return False
+            if isinstance(fm_val, list):
+                if str(value) not in [str(v) for v in fm_val]:
+                    return False
+            else:
+                if str(fm_val) != str(value):
+                    return False
+        return True
+
     def _effective_attachment_extensions(self) -> frozenset[str]:
         """Return the effective set of allowed attachment extensions.
 
@@ -408,7 +470,12 @@ class SearchManager:
         if mode == "semantic":
             self._require_vectors()
             return self._semantic_search(
-                query, limit=limit, filters=filters, folder=folder
+                query,
+                limit=limit,
+                filters=filters,
+                folder=folder,
+                chunks_per_doc=eff_cap,
+                snippet_words=eff_snip,
             )
 
         # hybrid
@@ -499,66 +566,54 @@ class SearchManager:
         limit: int,
         filters: dict[str, str] | None = None,
         folder: str | None = None,
+        chunks_per_doc: int,
+        snippet_words: int,
     ) -> list[SearchResult]:
-        # Flush deferred embedding updates so results are consistent.
         self._flush_embeddings()
         vectors = self._load_vectors()
-        # Fetch extra candidates so post-filtering still yields *limit* results.
-        candidate_limit = max(limit * 3, 30) if (folder or filters) else limit
+        candidate_limit = max(limit * (chunks_per_doc + 4), 50)
         raw = vectors.search(query, limit=candidate_limit)
 
-        results: list[SearchResult] = []
+        rows: list[_SemanticRow] = []
         for r in raw:
-            if len(results) >= limit:
-                break
-
-            # Apply folder prefix filter.
             if folder is not None:
                 r_folder = r.get("folder", "")
                 if r_folder != folder and not r_folder.startswith(folder + "/"):
                     continue
-
-            # Apply tag filters: check FTS index for each required tag.
-            if filters:
-                note_row = self._fts.get_note(r["path"])
-                if note_row is None:
-                    continue
-                fm_raw = note_row.get("frontmatter_json")
-                fm: dict[str, Any] = {}
-                if fm_raw:
-                    with contextlib.suppress(json.JSONDecodeError, TypeError):
-                        fm = json.loads(fm_raw)
-                match = True
-                for key, value in filters.items():
-                    fm_val = fm.get(key)
-                    if fm_val is None:
-                        match = False
-                        break
-                    # Support both scalar and list values.
-                    if isinstance(fm_val, list):
-                        if str(value) not in [str(v) for v in fm_val]:
-                            match = False
-                            break
-                    else:
-                        if str(fm_val) != str(value):
-                            match = False
-                            break
-                if not match:
-                    continue
-
-            results.append(
-                SearchResult(
+            if filters and not self._row_matches_filters(r["path"], filters):
+                continue
+            rows.append(
+                _SemanticRow(
                     path=r["path"],
                     title=r["title"],
                     folder=r["folder"],
                     heading=r.get("heading"),
                     content=r["content"],
                     score=r["score"],
-                    search_type="semantic",
-                    frontmatter=self._get_frontmatter(r["path"]),
+                    chunk_count=self._fts_chunk_count_for(r["path"]),
                 )
             )
-        return results
+
+        downweighted = _apply_length_downweight(
+            rows, alpha=self._length_downweight_alpha
+        )
+        capped = _apply_chunks_per_doc_cap(downweighted, n=chunks_per_doc, limit=limit)
+
+        return [
+            SearchResult(
+                path=r.path,
+                title=r.title,
+                folder=r.folder,
+                heading=r.heading,
+                content=_compute_snippet_for_semantic(
+                    r.content, query, snippet_words=snippet_words
+                ),
+                score=r.score,
+                search_type="semantic",
+                frontmatter=self._get_frontmatter(r.path),
+            )
+            for r in capped
+        ]
 
     def _hybrid_search(
         self,
