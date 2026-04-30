@@ -12,10 +12,12 @@ import contextlib
 import fnmatch
 import json
 import logging
+import math
 import mimetypes
 import sqlite3
+from dataclasses import replace as _dc_replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, TypeVar
 
 from markdown_vault_mcp.types import (
     AttachmentInfo,
@@ -49,6 +51,41 @@ _RRF_K = 60
 
 # Maximum folder peers returned by get_context().
 _CONTEXT_FOLDER_PEERS_LIMIT = 20
+
+_RankT = TypeVar("_RankT")
+
+
+def _apply_length_downweight(rows: list[_RankT], *, alpha: float) -> list[_RankT]:
+    """Re-rank ``rows`` by ``score / (1 + alpha * log(chunk_count))``.
+
+    Each element must expose ``score: float`` and ``chunk_count: int``
+    attributes.  Works for both :class:`FTSResult` and dataclass adapters
+    used by the semantic-channel pipeline.
+
+    Returns a new list sorted by descending adjusted score; input is not
+    mutated.
+    """
+    if alpha <= 0 or not rows:
+        return list(rows)
+
+    adjusted: list[tuple[_RankT, float]] = []
+    for row in rows:
+        chunk_count = max(1, getattr(row, "chunk_count", 1))
+        # log(1) = 0 -> factor = 1 -> no change for single-chunk docs.
+        factor = 1.0 + alpha * math.log(chunk_count)
+        new_score = row.score / factor  # type: ignore[attr-defined]
+        try:
+            new_row = _dc_replace(row, score=new_score)  # type: ignore[type-var]
+        except TypeError:
+            # Not a dataclass: fall back to a shallow copy.
+            import copy as _copy
+
+            new_row = _copy.copy(row)
+            new_row.score = new_score  # type: ignore[attr-defined]
+        adjusted.append((new_row, new_score))
+
+    adjusted.sort(key=lambda t: t[1], reverse=True)
+    return [r for r, _ in adjusted]
 
 
 class SearchManager:
