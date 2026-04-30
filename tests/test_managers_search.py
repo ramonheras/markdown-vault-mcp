@@ -517,3 +517,30 @@ class TestValidatePath:
         """Path traversal raises ValueError."""
         with pytest.raises(ValueError, match="traversal"):
             search_mgr._validate_path("../../etc/passwd.md")
+
+
+# ---------------------------------------------------------------------------
+# keyword pipeline — chunks_per_doc cap + snippet projection
+# ---------------------------------------------------------------------------
+
+
+def test_keyword_search_applies_chunks_per_doc_cap(search_mgr: SearchManager) -> None:
+    """Two chunks from the same doc cannot both occupy the top-N."""
+    # The search_vault fixture has single-chunk docs, so this test asserts
+    # the manager honours the chunks_per_doc parameter without erroring;
+    # the pathology case is exercised in tests/test_search_pipeline_integration.py.
+    results = search_mgr.search("world", mode="keyword", chunks_per_doc=1, limit=10)
+    paths_in_top = [r.path for r in results]
+    assert len(set(paths_in_top)) == len(paths_in_top)
+
+
+def test_keyword_search_returns_snippet(search_mgr: SearchManager) -> None:
+    """When snippet_words is set, content is shorter than (or equal to) the full chunk."""
+    long_results = search_mgr.search("world", mode="keyword", snippet_words=0, limit=10)
+    short_results = search_mgr.search(
+        "world", mode="keyword", snippet_words=3, limit=10
+    )
+    assert all(
+        len(s.content.split()) <= len(lg.content.split())
+        for s, lg in zip(short_results, long_results, strict=False)
+    )

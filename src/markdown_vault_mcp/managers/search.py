@@ -43,6 +43,7 @@ if TYPE_CHECKING:
     from markdown_vault_mcp.fts_index import FTSIndex
     from markdown_vault_mcp.managers.link import LinkManager
     from markdown_vault_mcp.providers import EmbeddingProvider
+    from markdown_vault_mcp.types import FTSResult
     from markdown_vault_mcp.vector_index import VectorIndex
 
 logger = logging.getLogger(__name__)
@@ -203,6 +204,9 @@ class SearchManager:
         link_manager: LinkManager | None = None,
         flush_embeddings: Callable[[], None] | None = None,
         rebuild_embeddings: Callable[[], None] | None = None,
+        chunks_per_doc: int = 2,
+        snippet_words: int = 200,
+        length_downweight_alpha: float = 0.25,
     ) -> None:
         self._fts = fts
         self._source_dir = source_dir
@@ -214,6 +218,9 @@ class SearchManager:
         self._link_manager = link_manager
         self._flush_embeddings = flush_embeddings or (lambda: None)
         self._rebuild_embeddings = rebuild_embeddings or (lambda: None)
+        self._chunks_per_doc = chunks_per_doc
+        self._snippet_words = snippet_words
+        self._length_downweight_alpha = length_downweight_alpha
 
         # Vector index is loaded lazily (only if embeddings_path is set).
         self._vectors: VectorIndex | None = None
@@ -355,6 +362,8 @@ class SearchManager:
         mode: Literal["keyword", "semantic", "hybrid"] = "keyword",
         filters: dict[str, str] | None = None,
         folder: str | None = None,
+        chunks_per_doc: int | None = None,
+        snippet_words: int | None = None,
     ) -> list[SearchResult]:
         """Search the collection.
 
@@ -369,6 +378,11 @@ class SearchManager:
                 ``indexed_frontmatter_fields``.
             folder: If provided, restrict results to documents in this
                 folder (and its sub-folders).
+            chunks_per_doc: Maximum number of chunks to return per document.
+                ``None`` uses the instance default (``self._chunks_per_doc``).
+            snippet_words: Width of the FTS5 snippet window in words.
+                ``0`` returns full chunk content.  ``None`` uses the instance
+                default (``self._snippet_words``).
 
         Returns:
             List of :class:`~markdown_vault_mcp.types.SearchResult` ordered
@@ -378,9 +392,17 @@ class SearchManager:
             ValueError: If *mode* is ``"semantic"`` or ``"hybrid"`` but no
                 embedding provider or embeddings path is configured.
         """
+        eff_cap = chunks_per_doc if chunks_per_doc is not None else self._chunks_per_doc
+        eff_snip = snippet_words if snippet_words is not None else self._snippet_words
+
         if mode == "keyword":
             return self._keyword_search(
-                query, limit=limit, filters=filters, folder=folder
+                query,
+                limit=limit,
+                filters=filters,
+                folder=folder,
+                chunks_per_doc=eff_cap,
+                snippet_words=eff_snip,
             )
 
         if mode == "semantic":
@@ -400,23 +422,75 @@ class SearchManager:
         limit: int,
         filters: dict[str, str] | None,
         folder: str | None,
+        chunks_per_doc: int,
+        snippet_words: int,
     ) -> list[SearchResult]:
-        fts_results = self._fts.search(
-            query, limit=limit, filters=filters, folder=folder
+        # Widen candidate pool so the cap doesn't starve us of `limit` rows.
+        candidate_limit = max(limit * (chunks_per_doc + 4), 50)
+
+        # Fetch raw content first (no snippet projection yet) so the length-
+        # downweight has full chunk_count info. Snippet projection runs only
+        # for survivors, via a second FTS query.
+        raw = self._fts.search(
+            query,
+            limit=candidate_limit,
+            filters=filters,
+            folder=folder,
+            snippet_words=None,
         )
+        downweighted = _apply_length_downweight(
+            raw, alpha=self._length_downweight_alpha
+        )
+        capped = _apply_chunks_per_doc_cap(downweighted, n=chunks_per_doc, limit=limit)
+
+        if snippet_words > 0:
+            snippets_by_key = self._fetch_snippet_map(
+                query, capped, snippet_words=snippet_words
+            )
+        else:
+            snippets_by_key = {}
+
         return [
             SearchResult(
                 path=r.path,
                 title=r.title,
                 folder=r.folder,
                 heading=r.heading,
-                content=r.content,
+                content=snippets_by_key.get((r.path, r.heading), r.content),
                 score=r.score,
                 search_type="keyword",
                 frontmatter=self._get_frontmatter(r.path),
             )
-            for r in fts_results
+            for r in capped
         ]
+
+    def _fetch_snippet_map(
+        self,
+        query: str,
+        survivors: list[FTSResult],
+        *,
+        snippet_words: int,
+    ) -> dict[tuple[str, str | None], str]:
+        """Re-query FTS with snippet projection, restricted to survivor paths.
+
+        Returns a ``{(path, heading): snippet}`` map. Falls back to the
+        survivor's own ``content`` field when an FTS row cannot be located
+        for a given key.
+        """
+        if not survivors:
+            return {}
+        candidate_n = max(len(survivors) * 4, 20)
+        rows = self._fts.search(
+            query,
+            limit=candidate_n,
+            snippet_words=snippet_words,
+        )
+        wanted = {(s.path, s.heading) for s in survivors}
+        return {
+            (r.path, r.heading): r.content
+            for r in rows
+            if (r.path, r.heading) in wanted
+        }
 
     def _semantic_search(
         self,
