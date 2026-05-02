@@ -287,7 +287,10 @@ class DocumentManager:
 
         Returns:
             A :class:`~markdown_vault_mcp.types.NoteContent` with the
-            section's content.
+            section's content.  ``frontmatter`` is always ``{}`` because
+            section reads do not synthesise per-section frontmatter; call
+            :meth:`read` without ``section=`` to get the full document's
+            frontmatter.
 
         Raises:
             ValueError: If the document is not indexed or the heading is

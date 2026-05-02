@@ -148,7 +148,7 @@ def _compute_snippet_for_semantic(
     }
     query_tokens.discard("")  # whitespace-only query words after stripping
     if not query_tokens:
-        return " ".join(words[:snippet_words]) + " …"
+        return " ".join(words[:snippet_words]) + "…"
 
     # Normalise each word: keep alphanumeric chars, lower-case, fall back to
     # the lowercased original if no alphanumeric chars were found.
@@ -171,13 +171,13 @@ def _compute_snippet_for_semantic(
 
     if best_score == 0:
         # No literal overlap anywhere — fall back to first-N words.
-        return " ".join(words[:snippet_words]) + " …"
+        return " ".join(words[:snippet_words]) + "…"
 
     snippet = " ".join(words[best_start : best_start + snippet_words])
     if best_start > 0:
-        snippet = "… " + snippet
+        snippet = "…" + snippet
     if best_start + snippet_words < len(words):
-        snippet = snippet + " …"
+        snippet = snippet + "…"
     return snippet
 
 
@@ -528,6 +528,7 @@ class SearchManager:
                 snippet_words=snippet_words,
                 folder=folder,
                 filters=filters,
+                candidate_limit=candidate_limit,
             )
         else:
             snippets_by_key = {}
@@ -568,20 +569,32 @@ class SearchManager:
         snippet_words: int,
         folder: str | None,
         filters: dict[str, str] | None,
+        candidate_limit: int = 50,
     ) -> dict[tuple[str, str | None], str]:
         """Re-query FTS with snippet projection, restricted to survivor paths.
 
-        Returns a ``{(path, heading): snippet}`` map. Pool is widened with the
-        same floor as the caller's initial fetch (``50``) and scoped via the
-        same ``folder`` / ``filters`` so a narrowly-scoped initial search
-        doesn't fall back to a global re-query.
+        Returns a ``{(path, heading): snippet}`` map. Pool is widened to at
+        least the caller's initial ``candidate_limit`` (so the snippet re-query
+        is never narrower than the ranking query) and scoped via the same
+        ``folder`` / ``filters`` so a narrowly-scoped initial search doesn't
+        fall back to a global re-query.
 
         The caller falls back to the survivor's own ``content`` when a key is
         missing from the map (rare FTS rank inversion).
+
+        Args:
+            query: The search query string.
+            survivors: FTS result rows that survived ranking and capping.
+            snippet_words: Width of the FTS5 snippet window.
+            folder: Folder restriction forwarded from the original search.
+            filters: Frontmatter filters forwarded from the original search.
+            candidate_limit: The caller's initial candidate pool size; used as
+                a floor so the snippet re-query is at least as wide as the
+                ranking query.
         """
         if not survivors:
             return {}
-        candidate_n = max(len(survivors) * 4, 50)
+        candidate_n = max(candidate_limit, len(survivors) * 4, 50)
         rows = self._fts.search(
             query,
             limit=candidate_n,
@@ -784,6 +797,7 @@ class SearchManager:
                 snippet_words=snippet_words,
                 folder=folder,
                 filters=filters,
+                candidate_limit=candidate_limit,
             )
 
         out: list[SearchResult] = []

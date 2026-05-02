@@ -19,7 +19,11 @@ def test_window_centered_on_densest_query_match():
     )
     out = _compute_snippet_for_semantic(content, "needle", snippet_words=10)
     assert "needle" in out
-    assert len(out.split()) <= 12  # 10 + slack for ellipses
+    # Ellipsis is flush with adjacent word ("…word"), so at most 10 words;
+    # allow 11 as slack for the edge case where the window starts at position 0
+    # (no leading ellipsis) but ends before the last word (trailing ellipsis
+    # glued to the last word, still 10 tokens total).
+    assert len(out.split()) <= 11
 
 
 def test_no_overlap_falls_back_to_first_n_words():
@@ -27,8 +31,9 @@ def test_no_overlap_falls_back_to_first_n_words():
     out = _compute_snippet_for_semantic(
         content, "completely-unrelated-token", snippet_words=10
     )
+    # The trailing ellipsis is flush: "word9…" — still 10 tokens from split().
     assert out.split()[0] == "word0"
-    assert len(out.split()) <= 12
+    assert len(out.split()) <= 11
 
 
 def test_short_chunk_returned_intact():
@@ -56,4 +61,4 @@ def test_window_matches_words_with_embedded_punctuation():
     # that also have punctuation.
     out = _compute_snippet_for_semantic(content, "isn't test-driven", snippet_words=10)
     assert "isn't" in out or "test-driven" in out
-    assert len(out.split()) <= 12  # 10 + ellipsis slack
+    assert len(out.split()) <= 11  # 10 words; ellipsis is flush ("…word" = 1 token)

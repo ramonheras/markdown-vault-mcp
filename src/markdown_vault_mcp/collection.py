@@ -156,6 +156,13 @@ class Collection:
                 max_chunk_words=max_chunk_words
             )
         else:
+            # NOTE: When a caller passes an explicit chunk_strategy instance
+            # (e.g. HeadingChunker(max_chunk_words=None) for legacy
+            # H1/H2-only behaviour), we do NOT override their construction
+            # with the Collection-level max_chunk_words.  The string "heading"
+            # path is the conventional default that picks up Collection's
+            # max_chunk_words; explicit instances are honoured as-is.
+            # See PR #433 review thread for context.
             self._chunk_strategy = _resolve_chunk_strategy(chunk_strategy)
         self._on_write = on_write
         self._git_strategy = git_strategy

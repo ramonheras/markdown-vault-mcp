@@ -195,7 +195,9 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
 
         Returns:
             For .md: dict with path, title, folder, content (markdown body
-            or section text when section= is given), frontmatter (dict),
+            or section text when section= is given), frontmatter (dict —
+            empty {} when section= is provided; call read(path) without
+            section= to get the full document's frontmatter),
             modified_at (Unix timestamp), etag (SHA-256 hex str or null).
             For attachments: dict with path, mime_type (str or null),
             size_bytes (int), content_base64 (str), modified_at (Unix timestamp),
