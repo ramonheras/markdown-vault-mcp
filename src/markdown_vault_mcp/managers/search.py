@@ -138,7 +138,15 @@ def _compute_snippet_for_semantic(
     if len(words) <= snippet_words:
         return content
 
-    query_tokens = {t.lower() for t in _QUERY_TOKEN_RE.findall(query)}
+    # Tokenize the query the same way we normalize content words: split on
+    # whitespace, then keep alphanumeric runs joined per word.  Symmetric
+    # with the per-word normalization below so a user query like
+    # ``"isn't"`` (→ ``"isnt"``) matches a content word ``"isn't"``
+    # (also → ``"isnt"``).
+    query_tokens = {
+        "".join(_QUERY_TOKEN_RE.findall(word)).lower() for word in query.split()
+    }
+    query_tokens.discard("")  # whitespace-only query words after stripping
     if not query_tokens:
         return " ".join(words[:snippet_words]) + " …"
 

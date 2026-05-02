@@ -46,13 +46,14 @@ def test_query_tokenization_is_case_insensitive():
 
 
 def test_window_matches_words_with_embedded_punctuation():
-    """Words with apostrophes/hyphens normalise to alphanumeric for matching."""
+    """Query and content with apostrophes/hyphens normalise symmetrically."""
     content = (
         " ".join(["filler"] * 20)
         + " isn't midway test-driven "
         + " ".join(["filler"] * 20)
     )
-    out = _compute_snippet_for_semantic(content, "isnt testdriven", snippet_words=10)
-    # The window should include both punctuation-bearing words.
+    # User types the literal punctuation form — must match content words
+    # that also have punctuation.
+    out = _compute_snippet_for_semantic(content, "isn't test-driven", snippet_words=10)
     assert "isn't" in out or "test-driven" in out
     assert len(out.split()) <= 12  # 10 + ellipsis slack
