@@ -569,7 +569,7 @@ class SearchManager:
         snippet_words: int,
         folder: str | None,
         filters: dict[str, str] | None,
-        candidate_limit: int = 50,
+        candidate_limit: int,
     ) -> dict[tuple[str, str | None], str]:
         """Re-query FTS with snippet projection, restricted to survivor paths.
 

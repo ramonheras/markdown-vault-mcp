@@ -650,3 +650,32 @@ def test_hybrid_search_labels_both_channel_hits_as_hybrid(
     assert any(r.search_type == "hybrid" for r in results), (
         f"expected at least one 'hybrid' label; got {[r.search_type for r in results]}"
     )
+
+
+def test_fetch_snippet_map_widens_pool_to_match_caller(
+    monkeypatch: pytest.MonkeyPatch,
+    search_mgr: SearchManager,
+) -> None:
+    """_fetch_snippet_map's second FTS query must use a candidate pool at
+    least as wide as the caller's initial candidate_limit, so survivors
+    ranked low in the initial pool aren't dropped from the snippet
+    projection."""
+    captured: list[int] = []
+
+    real_search = search_mgr._fts.search
+
+    def spy(*args, **kwargs):
+        if "snippet_words" in kwargs and (kwargs.get("snippet_words") or 0) > 0:
+            captured.append(int(kwargs.get("limit", 0)))
+        return real_search(*args, **kwargs)
+
+    monkeypatch.setattr(search_mgr._fts, "search", spy)
+
+    # Run a keyword search with a wide candidate_limit (default formula:
+    # max(limit * (chunks_per_doc + 4), 50) → 60 at limit=10, chunks_per_doc=2).
+    search_mgr.search("world", mode="keyword", limit=10)
+
+    assert captured, "snippet re-query did not run"
+    assert captured[0] >= 60, (
+        f"snippet re-query limit {captured[0]} < initial pool floor 60"
+    )

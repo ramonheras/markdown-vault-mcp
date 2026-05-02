@@ -233,7 +233,11 @@ class DocumentManager:
 
         Returns:
             A :class:`~markdown_vault_mcp.types.NoteContent`, or ``None`` if
-            the file does not exist (whole-document mode).
+            the file does not exist (whole-document mode). When ``section`` is
+            provided, the returned ``NoteContent.frontmatter`` is an empty dict
+            ``{}`` because section reads do not synthesise per-section frontmatter.
+            Call ``read(path)`` without ``section=`` to get the full document's
+            frontmatter.
 
         Raises:
             ValueError: When *section* is provided and is empty / whitespace,
