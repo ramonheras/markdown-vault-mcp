@@ -9,6 +9,7 @@ source directory, and optional collaborators.
 from __future__ import annotations
 
 import contextlib
+import copy
 import fnmatch
 import json
 import logging
@@ -84,9 +85,7 @@ def _apply_length_downweight(rows: list[_RankT], *, alpha: float) -> list[_RankT
             new_row = _dc_replace(row, score=new_score)  # type: ignore[type-var]
         except TypeError:
             # Not a dataclass: fall back to a shallow copy.
-            import copy as _copy
-
-            new_row = _copy.copy(row)
+            new_row = copy.copy(row)
             new_row.score = new_score  # type: ignore[attr-defined]
         adjusted.append((new_row, new_score))
 
@@ -110,9 +109,10 @@ def _apply_chunks_per_doc_cap(
     counts: dict[str, int] = {}
     for row in rows:
         path = row.path  # type: ignore[attr-defined]
-        if counts.get(path, 0) >= n:
+        c = counts.get(path, 0)
+        if c >= n:
             continue
-        counts[path] = counts.get(path, 0) + 1
+        counts[path] = c + 1
         out.append(row)
         if len(out) >= limit:
             break
@@ -143,8 +143,10 @@ def _compute_snippet_for_semantic(
         return " ".join(words[:snippet_words]) + " …"
 
     # Normalise each word: keep alphanumeric chars, lower-case, fall back to
-    # the lowercased original if the regex strip leaves an empty string.
-    lower_words = [_QUERY_TOKEN_RE.sub("", w).lower() or w.lower() for w in words]
+    # the lowercased original if no alphanumeric chars were found.
+    lower_words = [
+        "".join(_QUERY_TOKEN_RE.findall(w)).lower() or w.lower() for w in words
+    ]
 
     # Sliding window: maintain best_start / best_score, update incrementally.
     best_start = 0
@@ -513,24 +515,42 @@ class SearchManager:
 
         if snippet_words > 0:
             snippets_by_key = self._fetch_snippet_map(
-                query, capped, snippet_words=snippet_words
+                query,
+                capped,
+                snippet_words=snippet_words,
+                folder=folder,
+                filters=filters,
             )
         else:
             snippets_by_key = {}
 
-        return [
-            SearchResult(
-                path=r.path,
-                title=r.title,
-                folder=r.folder,
-                heading=r.heading,
-                content=snippets_by_key.get((r.path, r.heading), r.content),
-                score=r.score,
-                search_type="keyword",
-                frontmatter=self._get_frontmatter(r.path),
+        results: list[SearchResult] = []
+        for r in capped:
+            key = (r.path, r.heading)
+            if key in snippets_by_key:
+                content = snippets_by_key[key]
+            elif snippet_words > 0:
+                # Keyword survivor missing from snippet_map (rare FTS rank
+                # inversion) — apply the word-window helper so payload bounds
+                # hold.
+                content = _compute_snippet_for_semantic(
+                    r.content, query, snippet_words=snippet_words
+                )
+            else:
+                content = r.content
+            results.append(
+                SearchResult(
+                    path=r.path,
+                    title=r.title,
+                    folder=r.folder,
+                    heading=r.heading,
+                    content=content,
+                    score=r.score,
+                    search_type="keyword",
+                    frontmatter=self._get_frontmatter(r.path),
+                )
             )
-            for r in capped
-        ]
+        return results
 
     def _fetch_snippet_map(
         self,
@@ -538,19 +558,27 @@ class SearchManager:
         survivors: list[FTSResult],
         *,
         snippet_words: int,
+        folder: str | None,
+        filters: dict[str, str] | None,
     ) -> dict[tuple[str, str | None], str]:
         """Re-query FTS with snippet projection, restricted to survivor paths.
 
-        Returns a ``{(path, heading): snippet}`` map. Falls back to the
-        survivor's own ``content`` field when an FTS row cannot be located
-        for a given key.
+        Returns a ``{(path, heading): snippet}`` map. Pool is widened with the
+        same floor as the caller's initial fetch (``50``) and scoped via the
+        same ``folder`` / ``filters`` so a narrowly-scoped initial search
+        doesn't fall back to a global re-query.
+
+        The caller falls back to the survivor's own ``content`` when a key is
+        missing from the map (rare FTS rank inversion).
         """
         if not survivors:
             return {}
-        candidate_n = max(len(survivors) * 4, 20)
+        candidate_n = max(len(survivors) * 4, 50)
         rows = self._fts.search(
             query,
             limit=candidate_n,
+            folder=folder,
+            filters=filters,
             snippet_words=snippet_words,
         )
         wanted = {(s.path, s.heading) for s in survivors}
@@ -743,7 +771,11 @@ class SearchManager:
                 if (fts_r.path, fts_r.heading) in survivor_keys
             ]
             snippet_map = self._fetch_snippet_map(
-                query, survivor_fts_rows, snippet_words=snippet_words
+                query,
+                survivor_fts_rows,
+                snippet_words=snippet_words,
+                folder=folder,
+                filters=filters,
             )
 
         out: list[SearchResult] = []

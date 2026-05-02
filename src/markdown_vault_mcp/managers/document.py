@@ -281,6 +281,9 @@ class DocumentManager:
         Args:
             path: Relative document path.
             heading: Exact heading string to match in the sections table.
+                When a document contains multiple sections with the same
+                heading text (rare in practice), the first occurrence by
+                ``start_line`` is returned.
 
         Returns:
             A :class:`~markdown_vault_mcp.types.NoteContent` with the
