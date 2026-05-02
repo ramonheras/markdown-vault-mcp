@@ -109,3 +109,46 @@ def test_heading_level_and_start_line_propagated_through_recursion():
     # start_line points at the H2 line in the document.
     body_lines = body.splitlines()
     assert body_lines[inner.start_line].lstrip().startswith("## Inner")
+
+
+def test_legacy_mode_h3_only_doc_returns_single_chunk_no_heading():
+    """Legacy mode (max_chunk_words=None) preserves pre-PR behaviour:
+    a doc with only H3 headings returns one chunk with heading=None
+    (rather than being split at H3, which is the adaptive-mode behaviour).
+
+    Body uses 20 lines per section (one word per line) to clear the
+    30-line short-doc bypass, so the test exercises the H1/H2-only
+    heading logic rather than the short-doc fast-path.
+    """
+    body = (
+        "### A\n"
+        + "\n".join(["body"] * 20)
+        + "\n### B\n"
+        + "\n".join(["word"] * 20)
+        + "\n"
+    )
+    chunker = HeadingChunker(max_chunk_words=None)
+    chunks = chunker.chunk(body, {})
+    assert len(chunks) == 1
+    assert chunks[0].heading is None
+
+
+def test_adaptive_mode_h3_only_doc_splits_at_h3():
+    """Adaptive mode descends to H3 when H1/H2 are absent.
+
+    Body uses 20 lines per section (one word per line) to clear the
+    30-line short-doc bypass, which would otherwise return a single chunk
+    before the H3-descent code is reached.
+    """
+    body = (
+        "### A\n"
+        + "\n".join(["body"] * 20)
+        + "\n### B\n"
+        + "\n".join(["word"] * 20)
+        + "\n"
+    )
+    chunker = HeadingChunker(max_chunk_words=400)
+    chunks = chunker.chunk(body, {})
+    assert len(chunks) == 2
+    assert {c.heading for c in chunks} == {"A", "B"}
+    assert all(c.heading_level == 3 for c in chunks)

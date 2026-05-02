@@ -74,13 +74,18 @@ class HeadingChunker:
     exceed ``max_chunk_words``.
 
     Default behaviour (``max_chunk_words=None``): split on H1/H2 only — the
-    pre-2026-04 behaviour. With ``max_chunk_words`` set, after the initial
+    pre-2026-04 behaviour.  A document that contains only H3+ headings and no
+    H1/H2 headings returns a **single** ``heading=None`` chunk in legacy mode
+    (same as pre-2026-04).  With ``max_chunk_words`` set, after the initial
     H1/H2 split each chunk that exceeds the threshold is recursively re-split
     at the next heading level (H3, then H4, …, up to H6) until each chunk
-    fits or no headings of the next level exist inside.  Note: the cap is
-    *soft*. A chunk with no deeper headings inside (e.g. a 5000-word section
-    under a single H2) stays at that size — no paragraph- or sentence-level
-    splitting is performed.
+    fits or no headings of the next level exist inside.  In adaptive mode, if
+    H1/H2 yielded nothing the chunker descends H3→H6 to find the shallowest
+    heading level present — so a doc with only H3 headings is still split at
+    H3 rather than dropped into a single chunk.  Note: the cap is *soft*. A
+    chunk with no deeper headings inside (e.g. a 5000-word section under a
+    single H2) stays at that size — no paragraph- or sentence-level splitting
+    is performed.
 
     Short documents (fewer than ``short_doc_lines`` lines) are returned as a
     single chunk without splitting. Preamble (content before the first
@@ -126,12 +131,14 @@ class HeadingChunker:
         # Try the canonical H1+H2 split first.
         chunks = self._split_at_levels(lines, levels=(1, 2), base_line=0)
 
-        # If H1/H2 yielded nothing, descend through H3..H6 to find any
-        # heading-level present in the doc.  This implements the spec's
-        # "single huge prose block ... leave as-is" guarantee — a doc with
-        # only H3 headings becomes chunked at H3 rather than dropped.
+        # In adaptive mode, if H1/H2 yielded nothing, descend through H3..H6
+        # to find any heading-level present in the doc, so the cap/snippet
+        # pipeline still sees per-section chunks.  In legacy mode
+        # (max_chunk_words is None) we preserve the pre-2026-04 H1/H2-only
+        # behaviour: a doc with only deep headings falls through to the
+        # single-chunk-no-heading return below.
         deepest_split_level = 2
-        if not chunks:
+        if not chunks and self.max_chunk_words is not None:
             for level in (3, 4, 5, 6):
                 chunks = self._split_at_levels(lines, levels=(level,), base_line=0)
                 if chunks:

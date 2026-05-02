@@ -62,3 +62,17 @@ def test_window_matches_words_with_embedded_punctuation():
     out = _compute_snippet_for_semantic(content, "isn't test-driven", snippet_words=10)
     assert "isn't" in out or "test-driven" in out
     assert len(out.split()) <= 11  # 10 words; ellipsis is flush ("…word" = 1 token)
+
+
+def test_window_matches_hyphenated_query_against_split_content():
+    """A hyphenated query like 'se-cura' must match content where the parts
+    appear as standalone words (regression: prior symmetric tokenization
+    over-collapsed the query to {"secura"} only)."""
+    content = (
+        " ".join(["filler"] * 20)
+        + " The cura concept is etymologically central. "
+        + " ".join(["filler"] * 20)
+    )
+    out = _compute_snippet_for_semantic(content, "se-cura", snippet_words=10)
+    assert "cura" in out
+    assert len(out.split()) <= 11  # 10 + flush ellipsis
