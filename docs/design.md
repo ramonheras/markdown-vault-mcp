@@ -195,6 +195,44 @@ independently. Merged score: `1 / (k + rank)` where `k` is a constant
 
 This produces sensible merged rankings regardless of the raw score scales.
 
+### Search Ranking and Snippet Truncation
+
+Four complementary mechanisms improve result diversity and bound LLM context cost:
+
+1. **Cap document concentration.** No single document occupies more than `chunks_per_doc`
+   slots in the result list, regardless of search mode. Default cap: 2.
+2. **Length downweight.** Within each search channel (keyword or semantic), each chunk's
+   raw score is adjusted by `score / (1 + alpha · log(chunk_count_in_doc))` before ranking
+   or fusion. Long documents with many chunks slide down; short focused notes rise.
+3. **Snippet truncation.** `SearchResult.content` is truncated to approximately
+   `snippet_words` words (default 200). For keyword and hybrid results, FTS5's built-in
+   `snippet()` function selects a tokenizer-aware window centered on query terms. For
+   semantic-only results, a Python word-window scan picks the densest-matching window.
+   Full chunk recovery is available via `read(path, section=heading)`.
+4. **Adaptive heading-level chunking.** The `HeadingChunker` recursively re-splits
+   oversize chunks at deeper heading levels (H1 → H6) until each fits `max_chunk_words`
+   words or no sub-headings of the next level exist. Default threshold: 400 words.
+
+**Config knobs:**
+
+| Env var | Default | Description |
+|---|---|---|
+| `MARKDOWN_VAULT_MCP_CHUNKS_PER_DOC` | `2` | Per-document cap on result slots. |
+| `MARKDOWN_VAULT_MCP_SNIPPET_WORDS` | `200` | Approximate word budget for `SearchResult.content`. `0` = no truncation. |
+| `MARKDOWN_VAULT_MCP_LENGTH_DOWNWEIGHT_ALPHA` | `0.25` | Strength of length downweight. `0` disables. |
+| `MARKDOWN_VAULT_MCP_MAX_CHUNK_WORDS` | `400` | Adaptive chunker threshold. Set very high to disable. |
+
+**Pipeline order:** Per-channel length downweight → fuse (RRF for hybrid) → cap per path → snippet projection → return `limit` results.
+
+**Non-goal:** No frontmatter-based ranking. The MCP must not require, recommend, or
+special-case any frontmatter convention on vault content (no `kind`, no `noindex`, no
+`boost`). Vault organisation is the user's choice; the server treats all `.md` files
+structurally identically.
+
+**Migration note:** A reindex is required for the adaptive chunker change to take effect
+(the new chunk boundaries and `documents.chunk_count` column differ from older indexes).
+The existing `reindex` MCP tool and startup reindex path handle this automatically.
+
 ### Chunking Strategy
 
 A `ChunkStrategy` protocol enables extensible chunking:
@@ -219,6 +257,11 @@ class ChunkStrategy(Protocol):
 - `HeadingChunker`: split on H1/H2 boundaries. Short documents stay as single
   chunk. Each chunk inherits the document's frontmatter. Default.
 - `WholeDocumentChunker`: one chunk per document. Good for short documents.
+
+**Adaptive heading-level chunking**: When `max_chunk_words` is set, oversize
+chunks are recursively re-split at deeper heading levels (H1 → H6) until each
+fits or no headings of the next level exist inside. `max_chunk_words=None`
+preserves the legacy H1/H2-only behaviour.
 
 **Future** (deferred):
 - `SlidingWindowChunker`: fixed-size overlapping windows with configurable

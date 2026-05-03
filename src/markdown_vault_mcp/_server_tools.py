@@ -86,6 +86,8 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
         mode: Literal["keyword", "semantic", "hybrid"] = "keyword",
         folder: str | None = None,
         filters: dict[str, str] | None = None,
+        chunks_per_doc: int | None = None,
+        snippet_words: int | None = None,
         collection: Collection = Depends(get_collection),
     ) -> list[dict[str, Any]]:
         """Find documents matching a query using full-text or semantic search.
@@ -94,6 +96,10 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
         mode="hybrid" when 'stats' shows semantic_search_available=True —
         hybrid fuses keyword and vector results for best quality. Use
         mode="semantic" for pure vector similarity.
+
+        The 'content' field in each result is a snippet by default, not the
+        full document. Use read(path, section=heading) to retrieve the full
+        text of a specific section.
 
         Args:
             query: Natural language or keyword query string.
@@ -110,6 +116,12 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
                 Multiple filters are ANDed. For list fields (e.g. tags),
                 this checks membership — {"tags": "pacing"} matches any
                 document where "pacing" appears in the tags list.
+            chunks_per_doc: Maximum number of chunks to return per document.
+                Omit to use the server default. Set to 1 to get only the
+                top-ranked chunk per document (deduplicates results by path).
+            snippet_words: Width of the snippet window in words. Omit to use
+                the server default. Set to 0 to return full chunk content.
+                Use read(path, section=heading) for full section recovery.
 
         Returns:
             List of result dicts ranked by relevance. Each contains:
@@ -119,7 +131,8 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
             - folder (str): Parent folder path.
             - heading (str | None): Section heading of the matched chunk,
               or null for the document intro.
-            - content (str): Matched chunk text (not the full document).
+            - content (str): Snippet of the matched chunk (truncated by
+              snippet_words). Call read(path, section=heading) for full text.
             - score (float): BM25 relevance score (keyword mode) or cosine
               similarity 0.0-1.0 (semantic/hybrid); higher = better match.
             - search_type (str): "keyword" or "semantic".
@@ -140,6 +153,8 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
             mode=mode,
             folder=folder,
             filters=filters,
+            chunks_per_doc=chunks_per_doc,
+            snippet_words=snippet_words,
         )
         return [asdict(r) for r in results]
 
@@ -153,6 +168,7 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
     )
     async def read(
         path: str,
+        section: str | None = None,
         collection: Collection = Depends(get_collection),
     ) -> dict[str, Any]:
         """Read the full content of a document or attachment by path.
@@ -164,15 +180,25 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
 
         Do not guess paths — look them up first via 'search' or 'list_documents'.
 
+        To recover the full text of a specific section returned by 'search',
+        pass section=heading (the value from the result's 'heading' field).
+
         Args:
             path: Relative path to the document or attachment
                 (e.g. "Journal/note.md" or "assets/diagram.pdf").
                 Case-sensitive.
+            section: When provided, return only the section whose heading
+                matches *section* exactly (case-sensitive). Pass the ``heading``
+                value from a ``search`` result unchanged for guaranteed match.
+                ``None`` (the default) returns the whole document.
+                Ignored for non-.md paths.
 
         Returns:
-            For .md: dict with path, title, folder, content (markdown body),
-            frontmatter (dict), modified_at (Unix timestamp),
-            etag (SHA-256 hex str or null).
+            For .md: dict with path, title, folder, content (markdown body
+            or section text when section= is given), frontmatter (dict —
+            empty {} when section= is provided; call read(path) without
+            section= to get the full document's frontmatter),
+            modified_at (Unix timestamp), etag (SHA-256 hex str or null).
             For attachments: dict with path, mime_type (str or null),
             size_bytes (int), content_base64 (str), modified_at (Unix timestamp),
             etag (SHA-256 hex str or null).
@@ -181,13 +207,13 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
 
         Raises:
             ValueError: If no file exists at the given path, the extension is
-                not in the attachment allowlist, or the file exceeds the size
-                limit.
+                not in the attachment allowlist, the file exceeds the size
+                limit, or the requested section heading is not found.
         """
         if not path.endswith(".md"):
             attachment = await asyncio.to_thread(collection.read_attachment, path)
             return asdict(attachment)
-        note = await asyncio.to_thread(collection.read, path)
+        note = await asyncio.to_thread(collection.read, path, section=section)
         if note is None:
             raise ValueError(f"Document not found: {path}")
         return asdict(note)

@@ -3251,6 +3251,85 @@ class TestGetDiffTool:
         assert [c["message"] for c in data] == ["edit v4", "edit v3"]
 
 
+async def test_search_tool_accepts_chunks_per_doc_and_snippet_words(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The `search` MCP tool surfaces chunks_per_doc and snippet_words."""
+    # Multi-line bodies so the docs split (clears the 30-line short-doc bypass).
+    long_body = (
+        "# Top\n"
+        + "\n".join(["world a"] * 12)
+        + "\n## A\n"
+        + "\n".join(["world a"] * 12)
+        + "\n## B\n"
+        + "\n".join(["world b"] * 12)
+        + "\n## C\n"
+        + "\n".join(["world c"] * 12)
+        + "\n"
+    )
+    (tmp_path / "long.md").write_text(long_body, encoding="utf-8")
+    (tmp_path / "short.md").write_text("# S\nworld\n", encoding="utf-8")
+
+    monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", str(tmp_path))
+    monkeypatch.setenv("MARKDOWN_VAULT_MCP_READ_ONLY", "true")
+    for var in _CLEAR_VARS:
+        monkeypatch.delenv(var, raising=False)
+
+    server = make_server()
+    async with Client(server) as client:
+        result = await client.call_tool(
+            "search",
+            {
+                "query": "world",
+                "mode": "keyword",
+                "chunks_per_doc": 1,
+                "snippet_words": 5,
+                "limit": 10,
+            },
+        )
+    results = _parse_tool_data(result)
+    paths = [r["path"] for r in results]
+    assert len(set(paths)) == len(paths)
+    assert all(len((r["content"] or "").split()) <= 8 for r in results)
+
+
+async def test_read_tool_returns_only_named_section(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The `read` MCP tool accepts section= and returns only that chunk."""
+    # 16 body lines per section: 2 heading + 16 + 2 heading + 16 + 1 = 37 lines
+    # which is above the 30-line short-doc bypass so the doc splits into chunks.
+    body = (
+        "# A\n## One\n"
+        + "\n".join(["first body"] * 16)
+        + "\n## Two\n"
+        + "\n".join(["second body"] * 16)
+        + "\n"
+    )
+    (tmp_path / "a.md").write_text(body, encoding="utf-8")
+
+    monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", str(tmp_path))
+    monkeypatch.setenv("MARKDOWN_VAULT_MCP_READ_ONLY", "true")
+    for var in _CLEAR_VARS:
+        monkeypatch.delenv(var, raising=False)
+
+    server = make_server()
+    async with Client(server) as client:
+        whole = await client.call_tool("read", {"path": "a.md"})
+        assert "first body" in whole.data["content"]
+        assert "second body" in whole.data["content"]
+
+        partial = await client.call_tool("read", {"path": "a.md", "section": "One"})
+        assert "first body" in partial.data["content"]
+        assert "second body" not in partial.data["content"]
+
+        with pytest.raises(Exception) as excinfo:
+            await client.call_tool("read", {"path": "a.md", "section": "Nope"})
+        assert "Nope" in str(excinfo.value)
+
+
 class TestGitToolsUntilParam:
     """Tool-level tests for the `until` param on get_history (issue #340)."""
 

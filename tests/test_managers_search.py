@@ -517,3 +517,165 @@ class TestValidatePath:
         """Path traversal raises ValueError."""
         with pytest.raises(ValueError, match="traversal"):
             search_mgr._validate_path("../../etc/passwd.md")
+
+
+# ---------------------------------------------------------------------------
+# keyword pipeline — chunks_per_doc cap + snippet projection
+# ---------------------------------------------------------------------------
+
+
+def test_keyword_search_applies_chunks_per_doc_cap(search_mgr: SearchManager) -> None:
+    """Two chunks from the same doc cannot both occupy the top-N."""
+    # The search_vault fixture has single-chunk docs, so this test asserts
+    # the manager honours the chunks_per_doc parameter without erroring;
+    # the pathology case is exercised in tests/test_search_pipeline_integration.py.
+    results = search_mgr.search("world", mode="keyword", chunks_per_doc=1, limit=10)
+    paths_in_top = [r.path for r in results]
+    assert len(set(paths_in_top)) == len(paths_in_top)
+
+
+def test_keyword_search_returns_snippet(search_mgr: SearchManager) -> None:
+    """When snippet_words is set, content is shorter than (or equal to) the full chunk."""
+    long_results = search_mgr.search("world", mode="keyword", snippet_words=0, limit=10)
+    short_results = search_mgr.search(
+        "world", mode="keyword", snippet_words=3, limit=10
+    )
+    assert all(
+        len(s.content.split()) <= len(lg.content.split())
+        for s, lg in zip(short_results, long_results, strict=False)
+    )
+
+
+@pytest.fixture()
+def search_mgr_with_embeddings(search_vault: Path) -> SearchManager:
+    """Build a SearchManager with a deterministic mock embedding provider."""
+    from markdown_vault_mcp.vector_index import VectorIndex
+    from tests.conftest import MockEmbeddingProvider
+
+    fts = FTSIndex(db_path=":memory:", indexed_frontmatter_fields=["tags"])
+    for note in scan_directory(search_vault):
+        fts.upsert_note(note)
+    fts.resolve_vault_wikilinks()
+    provider = MockEmbeddingProvider()
+    embeddings_path = search_vault / "embeddings"
+    vectors = VectorIndex(provider)
+    for note in scan_directory(search_vault):
+        texts = [c.content for c in note.chunks]
+        from pathlib import Path as _Path
+
+        meta = [
+            {
+                "path": note.path,
+                "title": note.title,
+                "folder": (
+                    ""
+                    if _Path(note.path).parent.as_posix() == "."
+                    else _Path(note.path).parent.as_posix()
+                ),
+                "heading": c.heading,
+                "content": c.content,
+            }
+            for c in note.chunks
+        ]
+        if texts:
+            vectors.add(texts, meta)
+    vectors.save(embeddings_path)
+    mgr = SearchManager(
+        fts=fts,
+        source_dir=search_vault,
+        embeddings_path=embeddings_path,
+        embedding_provider=provider,
+        indexed_frontmatter_fields=["tags"],
+    )
+    mgr._vectors = vectors
+    return mgr
+
+
+def test_semantic_search_applies_chunks_per_doc_cap_and_snippet(
+    search_mgr_with_embeddings: SearchManager,
+) -> None:
+    """Semantic mode honours chunks_per_doc and snippet_words."""
+    results = search_mgr_with_embeddings.search(
+        "world",
+        mode="semantic",
+        chunks_per_doc=1,
+        snippet_words=5,
+        limit=10,
+    )
+    paths = [r.path for r in results]
+    assert len(set(paths)) == len(paths)
+    assert all(len(r.content.split()) <= 10 for r in results)
+
+
+def test_hybrid_search_caps_per_doc_after_rrf(
+    search_mgr_with_embeddings: SearchManager,
+) -> None:
+    results = search_mgr_with_embeddings.search(
+        "world",
+        mode="hybrid",
+        chunks_per_doc=1,
+        snippet_words=5,
+        limit=10,
+    )
+    paths = [r.path for r in results]
+    assert len(set(paths)) == len(paths)
+
+
+def test_hybrid_search_uses_fts_snippet_for_keyword_hits(
+    search_mgr_with_embeddings: SearchManager,
+) -> None:
+    """Bound payload size in hybrid mode."""
+    results = search_mgr_with_embeddings.search(
+        "world",
+        mode="hybrid",
+        chunks_per_doc=2,
+        snippet_words=3,
+        limit=10,
+    )
+    assert all(len(r.content.split()) <= 8 for r in results)
+
+
+def test_hybrid_search_labels_both_channel_hits_as_hybrid(
+    search_mgr_with_embeddings: SearchManager,
+) -> None:
+    """Chunks present in both channels are labelled 'hybrid'."""
+    results = search_mgr_with_embeddings.search(
+        "world",
+        mode="hybrid",
+        chunks_per_doc=10,
+        snippet_words=0,
+        limit=20,
+    )
+    # At least one result should be 'hybrid' (chunk hit in both channels).
+    assert any(r.search_type == "hybrid" for r in results), (
+        f"expected at least one 'hybrid' label; got {[r.search_type for r in results]}"
+    )
+
+
+def test_fetch_snippet_map_widens_pool_to_match_caller(
+    monkeypatch: pytest.MonkeyPatch,
+    search_mgr: SearchManager,
+) -> None:
+    """_fetch_snippet_map's second FTS query must use a candidate pool at
+    least as wide as the caller's initial candidate_limit, so survivors
+    ranked low in the initial pool aren't dropped from the snippet
+    projection."""
+    captured: list[int] = []
+
+    real_search = search_mgr._fts.search
+
+    def spy(*args, **kwargs):
+        if "snippet_words" in kwargs and (kwargs.get("snippet_words") or 0) > 0:
+            captured.append(int(kwargs.get("limit", 0)))
+        return real_search(*args, **kwargs)
+
+    monkeypatch.setattr(search_mgr._fts, "search", spy)
+
+    # Run a keyword search with a wide candidate_limit (default formula:
+    # max(limit * (chunks_per_doc + 4), 50) → 60 at limit=10, chunks_per_doc=2).
+    search_mgr.search("world", mode="keyword", limit=10)
+
+    assert captured, "snippet re-query did not run"
+    assert captured[0] >= 60, (
+        f"snippet re-query limit {captured[0]} < initial pool floor 60"
+    )

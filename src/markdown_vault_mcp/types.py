@@ -76,9 +76,15 @@ class SearchResult:
         title: Document title.
         folder: Parent folder path.
         heading: Section heading this chunk falls under, or ``None`` for the intro.
-        content: Matched chunk text (not the full document).
+        content: Matched chunk text — a query-relevant snippet by default
+            (approximately ``snippet_words`` words plus optional leading/trailing
+            ellipsis markers, centred on matched terms). Pass
+            ``snippet_words=0`` to ``search`` for the full chunk verbatim,
+            or recover the full chunk after seeing a snippet via
+            ``read(path, section=heading)``.
         score: Relevance score. Higher is better; not comparable across search types.
-        search_type: ``"keyword"`` (BM25) or ``"semantic"`` (cosine similarity).
+        search_type: ``"keyword"`` (BM25), ``"semantic"`` (cosine similarity),
+            or ``"hybrid"`` (chunk appeared in both keyword and semantic channels).
         frontmatter: Parsed YAML frontmatter of the parent document.
     """
 
@@ -88,7 +94,7 @@ class SearchResult:
     heading: str | None
     content: str
     score: float
-    search_type: Literal["keyword", "semantic"]
+    search_type: Literal["keyword", "semantic", "hybrid"]
     frontmatter: dict[str, Any]
 
 
@@ -100,9 +106,12 @@ class FTSResult:
         path: Relative path of the document containing this chunk.
         title: Document title.
         folder: Parent folder path.
-        heading: Section heading this chunk falls under, or ``None`` for the intro.
-        content: Matched chunk text.
+        heading: Section heading this chunk falls under, or ``None``.
+        content: Matched chunk text — full chunk by default; truncated to a
+            tokenizer-aware snippet when ``snippet_words`` is passed to the
+            search call.
         score: BM25 relevance score (higher is better).
+        chunk_count: Total number of chunks belonging to the parent document.
     """
 
     path: str
@@ -111,6 +120,7 @@ class FTSResult:
     heading: str | None
     content: str
     score: float
+    chunk_count: int = 1
 
 
 @dataclass

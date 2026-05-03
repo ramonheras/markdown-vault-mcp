@@ -1,0 +1,78 @@
+"""Tests for snippet generation in SearchManager."""
+
+from __future__ import annotations
+
+from markdown_vault_mcp.managers.search import _compute_snippet_for_semantic
+
+
+def test_snippet_words_zero_returns_full_content():
+    content = " ".join(f"word{i}" for i in range(50))
+    assert (
+        _compute_snippet_for_semantic(content, "anything", snippet_words=0) == content
+    )
+
+
+def test_window_centered_on_densest_query_match():
+    """Slide a 10-word window; pick the one with most query tokens."""
+    content = (
+        " ".join(["filler"] * 20) + " needle midway needle " + " ".join(["filler"] * 20)
+    )
+    out = _compute_snippet_for_semantic(content, "needle", snippet_words=10)
+    assert "needle" in out
+    # Ellipsis is flush with adjacent word ("…word"), so at most 10 words;
+    # allow 11 as slack for the edge case where the window starts at position 0
+    # (no leading ellipsis) but ends before the last word (trailing ellipsis
+    # glued to the last word, still 10 tokens total).
+    assert len(out.split()) <= 11
+
+
+def test_no_overlap_falls_back_to_first_n_words():
+    content = " ".join(f"word{i}" for i in range(50))
+    out = _compute_snippet_for_semantic(
+        content, "completely-unrelated-token", snippet_words=10
+    )
+    # The trailing ellipsis is flush: "word9…" — still 10 tokens from split().
+    assert out.split()[0] == "word0"
+    assert len(out.split()) <= 11
+
+
+def test_short_chunk_returned_intact():
+    content = "five word chunk only here"
+    out = _compute_snippet_for_semantic(content, "chunk", snippet_words=200)
+    assert out == content
+
+
+def test_query_tokenization_is_case_insensitive():
+    content = (
+        " ".join(["filler"] * 20) + " Needle hit Needle " + " ".join(["filler"] * 20)
+    )
+    out = _compute_snippet_for_semantic(content, "NEEDLE", snippet_words=10)
+    assert "Needle" in out
+
+
+def test_window_matches_words_with_embedded_punctuation():
+    """Query and content with apostrophes/hyphens normalise symmetrically."""
+    content = (
+        " ".join(["filler"] * 20)
+        + " isn't midway test-driven "
+        + " ".join(["filler"] * 20)
+    )
+    # User types the literal punctuation form — must match content words
+    # that also have punctuation.
+    out = _compute_snippet_for_semantic(content, "isn't test-driven", snippet_words=10)
+    assert "isn't" in out or "test-driven" in out
+    assert len(out.split()) <= 11  # 10 words; ellipsis is flush ("…word" = 1 token)
+
+
+def test_window_matches_hyphenated_query_against_split_content():
+    """A hyphenated query like 'se-cura' must match content where the parts
+    appear as standalone words (regression: prior symmetric tokenization
+    over-collapsed the query to {"secura"} only)."""
+    content = (
+        " ".join(["filler"] * 20)
+        + " The cura concept is etymologically central. "
+        + " ".join(["filler"] * 20)
+    )
+    out = _compute_snippet_for_semantic(content, "se-cura", snippet_words=10)
+    assert "cura" in out
+    assert len(out.split()) <= 11  # 10 + flush ellipsis

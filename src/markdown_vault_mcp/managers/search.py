@@ -12,10 +12,14 @@ import contextlib
 import fnmatch
 import json
 import logging
+import math
 import mimetypes
+import re as _re
 import sqlite3
+from dataclasses import dataclass
+from dataclasses import replace as _dc_replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeVar
 
 from markdown_vault_mcp.types import (
     AttachmentInfo,
@@ -40,6 +44,7 @@ if TYPE_CHECKING:
     from markdown_vault_mcp.fts_index import FTSIndex
     from markdown_vault_mcp.managers.link import LinkManager
     from markdown_vault_mcp.providers import EmbeddingProvider
+    from markdown_vault_mcp.types import FTSResult
     from markdown_vault_mcp.vector_index import VectorIndex
 
 logger = logging.getLogger(__name__)
@@ -47,8 +52,179 @@ logger = logging.getLogger(__name__)
 # RRF constant — standard value recommended in the original paper.
 _RRF_K = 60
 
+# Regex for extracting query tokens (alphanumeric sequences).
+_QUERY_TOKEN_RE = _re.compile(r"[A-Za-z0-9]+")
+
 # Maximum folder peers returned by get_context().
 _CONTEXT_FOLDER_PEERS_LIMIT = 20
+
+
+class _ScorableRow(Protocol):
+    """Row contract consumed by the length-downweight helper.
+
+    Both :class:`~markdown_vault_mcp.types.FTSResult` and the local
+    :class:`_SemanticRow` adapter satisfy this Protocol structurally; no
+    nominal subclassing required.  All callers are dataclasses so
+    :func:`dataclasses.replace` is used to produce adjusted-score copies
+    without mutating the input.
+    """
+
+    score: float
+    chunk_count: int
+
+
+class _CappableRow(Protocol):
+    """Row contract consumed by the per-document cap helper."""
+
+    path: str
+
+
+_ScorableT = TypeVar("_ScorableT", bound=_ScorableRow)
+_CappableT = TypeVar("_CappableT", bound=_CappableRow)
+
+
+def _apply_length_downweight(
+    rows: list[_ScorableT], *, alpha: float
+) -> list[_ScorableT]:
+    """Re-rank ``rows`` by ``score / (1 + alpha * log(chunk_count))``.
+
+    Returns a new list sorted by descending adjusted score; input is not
+    mutated.  Callers must pass dataclass instances (every caller in this
+    codebase already does) so :func:`dataclasses.replace` can produce the
+    adjusted-score copies.
+    """
+    if alpha <= 0 or not rows:
+        return list(rows)
+
+    adjusted: list[tuple[_ScorableT, float]] = []
+    for row in rows:
+        chunk_count = max(1, row.chunk_count)
+        # log(1) = 0 -> factor = 1 -> no change for single-chunk docs.
+        factor = 1.0 + alpha * math.log(chunk_count)
+        new_score = row.score / factor
+        # Protocols can't promise __dataclass_fields__; the helper's
+        # contract is "callers pass dataclasses" (FTSResult / _SemanticRow
+        # / _CapRow all are), enforced at runtime by replace() itself.
+        new_row = _dc_replace(row, score=new_score)  # type: ignore[type-var]
+        adjusted.append((new_row, new_score))
+
+    adjusted.sort(key=lambda t: t[1], reverse=True)
+    return [r for r, _ in adjusted]
+
+
+def _apply_chunks_per_doc_cap(
+    rows: list[_CappableT], *, n: int, limit: int
+) -> list[_CappableT]:
+    """Walk ``rows`` in order; keep at most ``n`` rows per ``path``; stop at ``limit``.
+
+    Order is preserved.
+
+    Raises:
+        ValueError: If ``n`` is less than 1.
+    """
+    if n < 1:
+        raise ValueError(f"chunks_per_doc cap must be >= 1, got {n}")
+    out: list[_CappableT] = []
+    counts: dict[str, int] = {}
+    for row in rows:
+        path = row.path
+        c = counts.get(path, 0)
+        if c >= n:
+            continue
+        counts[path] = c + 1
+        out.append(row)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _compute_snippet_for_semantic(
+    content: str, query: str, *, snippet_words: int
+) -> str:
+    """Pick a ``snippet_words``-wide window from ``content``.
+
+    Returns the full content when ``snippet_words`` is 0, when the chunk is
+    already shorter, or as a fallback when no query tokens overlap (in which
+    case the first ``snippet_words`` words are returned with a trailing
+    ellipsis).
+
+    Uses simple case-insensitive substring matching on alphanumeric tokens.
+    """
+    if snippet_words <= 0:
+        return content
+
+    words = content.split()
+    if len(words) <= snippet_words:
+        return content
+
+    # Tokenize the query into both the joined-per-word form (matches our
+    # content normalization, e.g. "isn't" → "isnt") AND the individual
+    # alphanumeric runs (matches per-token content words, e.g. "se-cura"
+    # → {"se", "cura"} so a chunk that mentions "cura" alone still hits).
+    query_tokens: set[str] = set()
+    for word in query.split():
+        runs = _QUERY_TOKEN_RE.findall(word)
+        if not runs:
+            continue
+        # Joined form: runs concatenated.
+        query_tokens.add("".join(runs).lower())
+        # Individual runs: each alphanumeric span.
+        query_tokens.update(r.lower() for r in runs)
+    query_tokens.discard("")
+    if not query_tokens:
+        return " ".join(words[:snippet_words]) + "…"
+
+    # Normalise each word: keep alphanumeric chars, lower-case, fall back to
+    # the lowercased original if no alphanumeric chars were found.
+    lower_words = [
+        "".join(_QUERY_TOKEN_RE.findall(w)).lower() or w.lower() for w in words
+    ]
+
+    # Sliding window: maintain best_start / best_score, update incrementally.
+    best_start = 0
+    best_score = sum(1 for w in lower_words[:snippet_words] if w in query_tokens)
+    cur_score = best_score
+    for i in range(1, len(words) - snippet_words + 1):
+        if lower_words[i - 1] in query_tokens:
+            cur_score -= 1
+        if lower_words[i + snippet_words - 1] in query_tokens:
+            cur_score += 1
+        if cur_score > best_score:
+            best_score = cur_score
+            best_start = i
+
+    if best_score == 0:
+        # No literal overlap anywhere — fall back to first-N words.
+        return " ".join(words[:snippet_words]) + "…"
+
+    snippet = " ".join(words[best_start : best_start + snippet_words])
+    if best_start > 0:
+        snippet = "…" + snippet
+    if best_start + snippet_words < len(words):
+        snippet = snippet + "…"
+    return snippet
+
+
+@dataclass
+class _SemanticRow:
+    """Adapter row for vector search results so they expose .score / .chunk_count."""
+
+    path: str
+    title: str
+    folder: str
+    heading: str | None
+    content: str
+    score: float
+    chunk_count: int
+
+
+@dataclass
+class _CapRow:
+    """Adapter row for the post-RRF cap step (only needs .path / .score)."""
+
+    path: str
+    heading: str | None
+    score: float
 
 
 class SearchManager:
@@ -85,6 +261,9 @@ class SearchManager:
         link_manager: LinkManager | None = None,
         flush_embeddings: Callable[[], None] | None = None,
         rebuild_embeddings: Callable[[], None] | None = None,
+        chunks_per_doc: int = 2,
+        snippet_words: int = 200,
+        length_downweight_alpha: float = 0.25,
     ) -> None:
         self._fts = fts
         self._source_dir = source_dir
@@ -96,6 +275,9 @@ class SearchManager:
         self._link_manager = link_manager
         self._flush_embeddings = flush_embeddings or (lambda: None)
         self._rebuild_embeddings = rebuild_embeddings or (lambda: None)
+        self._chunks_per_doc = chunks_per_doc
+        self._snippet_words = snippet_words
+        self._length_downweight_alpha = length_downweight_alpha
 
         # Vector index is loaded lazily (only if embeddings_path is set).
         self._vectors: VectorIndex | None = None
@@ -204,6 +386,39 @@ class SearchManager:
             )
             return {}
 
+    def _row_matches_filters(self, path: str, filters: dict[str, str]) -> bool:
+        """Return ``True`` if the document at *path* satisfies all *filters*.
+
+        Looks up frontmatter from the FTS index and checks each key/value
+        pair.  List-valued frontmatter fields are matched by membership.
+
+        Args:
+            path: Relative document path.
+            filters: Dict of ``{frontmatter_key: value}`` pairs.
+
+        Returns:
+            ``True`` if the document exists and all filter conditions are met.
+        """
+        note_row = self._fts.get_note(path)
+        if note_row is None:
+            return False
+        fm_raw = note_row.get("frontmatter_json")
+        fm: dict[str, Any] = {}
+        if fm_raw:
+            with contextlib.suppress(json.JSONDecodeError, TypeError):
+                fm = json.loads(fm_raw)
+        for key, value in filters.items():
+            fm_val = fm.get(key)
+            if fm_val is None:
+                return False
+            if isinstance(fm_val, list):
+                if str(value) not in [str(v) for v in fm_val]:
+                    return False
+            else:
+                if str(fm_val) != str(value):
+                    return False
+        return True
+
     def _effective_attachment_extensions(self) -> frozenset[str]:
         """Return the effective set of allowed attachment extensions.
 
@@ -237,6 +452,8 @@ class SearchManager:
         mode: Literal["keyword", "semantic", "hybrid"] = "keyword",
         filters: dict[str, str] | None = None,
         folder: str | None = None,
+        chunks_per_doc: int | None = None,
+        snippet_words: int | None = None,
     ) -> list[SearchResult]:
         """Search the collection.
 
@@ -251,6 +468,11 @@ class SearchManager:
                 ``indexed_frontmatter_fields``.
             folder: If provided, restrict results to documents in this
                 folder (and its sub-folders).
+            chunks_per_doc: Maximum number of chunks to return per document.
+                ``None`` uses the instance default (``self._chunks_per_doc``).
+            snippet_words: Width of the FTS5 snippet window in words.
+                ``0`` returns full chunk content.  ``None`` uses the instance
+                default (``self._snippet_words``).
 
         Returns:
             List of :class:`~markdown_vault_mcp.types.SearchResult` ordered
@@ -260,20 +482,40 @@ class SearchManager:
             ValueError: If *mode* is ``"semantic"`` or ``"hybrid"`` but no
                 embedding provider or embeddings path is configured.
         """
+        eff_cap = chunks_per_doc if chunks_per_doc is not None else self._chunks_per_doc
+        eff_snip = snippet_words if snippet_words is not None else self._snippet_words
+
         if mode == "keyword":
             return self._keyword_search(
-                query, limit=limit, filters=filters, folder=folder
+                query,
+                limit=limit,
+                filters=filters,
+                folder=folder,
+                chunks_per_doc=eff_cap,
+                snippet_words=eff_snip,
             )
 
         if mode == "semantic":
             self._require_vectors()
             return self._semantic_search(
-                query, limit=limit, filters=filters, folder=folder
+                query,
+                limit=limit,
+                filters=filters,
+                folder=folder,
+                chunks_per_doc=eff_cap,
+                snippet_words=eff_snip,
             )
 
         # hybrid
         self._require_vectors()
-        return self._hybrid_search(query, limit=limit, filters=filters, folder=folder)
+        return self._hybrid_search(
+            query,
+            limit=limit,
+            filters=filters,
+            folder=folder,
+            chunks_per_doc=eff_cap,
+            snippet_words=eff_snip,
+        )
 
     def _keyword_search(
         self,
@@ -282,23 +524,114 @@ class SearchManager:
         limit: int,
         filters: dict[str, str] | None,
         folder: str | None,
+        chunks_per_doc: int,
+        snippet_words: int,
     ) -> list[SearchResult]:
-        fts_results = self._fts.search(
-            query, limit=limit, filters=filters, folder=folder
+        # Widen candidate pool so the cap doesn't starve us of `limit` rows.
+        candidate_limit = max(limit * (chunks_per_doc + 4), 50)
+
+        # Fetch raw content first (no snippet projection yet) so the length-
+        # downweight has full chunk_count info. Snippet projection runs only
+        # for survivors, via a second FTS query.
+        raw = self._fts.search(
+            query,
+            limit=candidate_limit,
+            filters=filters,
+            folder=folder,
+            snippet_words=None,
         )
-        return [
-            SearchResult(
-                path=r.path,
-                title=r.title,
-                folder=r.folder,
-                heading=r.heading,
-                content=r.content,
-                score=r.score,
-                search_type="keyword",
-                frontmatter=self._get_frontmatter(r.path),
+        downweighted = _apply_length_downweight(
+            raw, alpha=self._length_downweight_alpha
+        )
+        capped = _apply_chunks_per_doc_cap(downweighted, n=chunks_per_doc, limit=limit)
+
+        if snippet_words > 0:
+            snippets_by_key = self._fetch_snippet_map(
+                query,
+                capped,
+                snippet_words=snippet_words,
+                folder=folder,
+                filters=filters,
+                candidate_limit=candidate_limit,
             )
-            for r in fts_results
-        ]
+        else:
+            snippets_by_key = {}
+
+        results: list[SearchResult] = []
+        for r in capped:
+            key = (r.path, r.heading)
+            if key in snippets_by_key:
+                content = snippets_by_key[key]
+            elif snippet_words > 0:
+                # Keyword survivor missing from snippet_map (rare FTS rank
+                # inversion) — apply the word-window helper so payload bounds
+                # hold.
+                content = _compute_snippet_for_semantic(
+                    r.content, query, snippet_words=snippet_words
+                )
+            else:
+                content = r.content
+            results.append(
+                SearchResult(
+                    path=r.path,
+                    title=r.title,
+                    folder=r.folder,
+                    heading=r.heading,
+                    content=content,
+                    score=r.score,
+                    search_type="keyword",
+                    frontmatter=self._get_frontmatter(r.path),
+                )
+            )
+        return results
+
+    def _fetch_snippet_map(
+        self,
+        query: str,
+        survivors: list[FTSResult],
+        *,
+        snippet_words: int,
+        folder: str | None,
+        filters: dict[str, str] | None,
+        candidate_limit: int,
+    ) -> dict[tuple[str, str | None], str]:
+        """Re-query FTS with snippet projection, restricted to survivor paths.
+
+        Returns a ``{(path, heading): snippet}`` map. Pool is widened to at
+        least the caller's initial ``candidate_limit`` (so the snippet re-query
+        is never narrower than the ranking query) and scoped via the same
+        ``folder`` / ``filters`` so a narrowly-scoped initial search doesn't
+        fall back to a global re-query.
+
+        The caller falls back to the survivor's own ``content`` when a key is
+        missing from the map (rare FTS rank inversion).
+
+        Args:
+            query: The search query string.
+            survivors: FTS result rows that survived ranking and capping.
+            snippet_words: Width of the FTS5 snippet window.
+            folder: Folder restriction forwarded from the original search.
+            filters: Frontmatter filters forwarded from the original search.
+            candidate_limit: The caller's initial candidate pool size; used as
+                a floor so the snippet re-query is at least as wide as the
+                ranking query.
+        """
+        if not survivors:
+            return {}
+        candidate_n = max(candidate_limit, len(survivors) * 4, 50)
+        rows = self._fts.search(
+            query,
+            limit=candidate_n,
+            folder=folder,
+            filters=filters,
+            snippet_words=snippet_words,
+        )
+        wanted = {(s.path, s.heading) for s in survivors}
+        return {
+            (r.path, r.heading): r.content
+            for r in rows
+            if (r.path, r.heading) in wanted
+        }
 
     def _semantic_search(
         self,
@@ -307,66 +640,59 @@ class SearchManager:
         limit: int,
         filters: dict[str, str] | None = None,
         folder: str | None = None,
+        chunks_per_doc: int,
+        snippet_words: int,
     ) -> list[SearchResult]:
-        # Flush deferred embedding updates so results are consistent.
         self._flush_embeddings()
         vectors = self._load_vectors()
-        # Fetch extra candidates so post-filtering still yields *limit* results.
-        candidate_limit = max(limit * 3, 30) if (folder or filters) else limit
+        candidate_limit = max(limit * (chunks_per_doc + 4), 50)
         raw = vectors.search(query, limit=candidate_limit)
 
-        results: list[SearchResult] = []
+        # Filter first, then batch-fetch chunk counts to avoid N+1 queries.
+        filtered: list[dict[str, Any]] = []
         for r in raw:
-            if len(results) >= limit:
-                break
-
-            # Apply folder prefix filter.
             if folder is not None:
                 r_folder = r.get("folder", "")
                 if r_folder != folder and not r_folder.startswith(folder + "/"):
                     continue
+            if filters and not self._row_matches_filters(r["path"], filters):
+                continue
+            filtered.append(r)
 
-            # Apply tag filters: check FTS index for each required tag.
-            if filters:
-                note_row = self._fts.get_note(r["path"])
-                if note_row is None:
-                    continue
-                fm_raw = note_row.get("frontmatter_json")
-                fm: dict[str, Any] = {}
-                if fm_raw:
-                    with contextlib.suppress(json.JSONDecodeError, TypeError):
-                        fm = json.loads(fm_raw)
-                match = True
-                for key, value in filters.items():
-                    fm_val = fm.get(key)
-                    if fm_val is None:
-                        match = False
-                        break
-                    # Support both scalar and list values.
-                    if isinstance(fm_val, list):
-                        if str(value) not in [str(v) for v in fm_val]:
-                            match = False
-                            break
-                    else:
-                        if str(fm_val) != str(value):
-                            match = False
-                            break
-                if not match:
-                    continue
-
-            results.append(
-                SearchResult(
-                    path=r["path"],
-                    title=r["title"],
-                    folder=r["folder"],
-                    heading=r.get("heading"),
-                    content=r["content"],
-                    score=r["score"],
-                    search_type="semantic",
-                    frontmatter=self._get_frontmatter(r["path"]),
-                )
+        chunk_counts = self._fts.get_chunk_counts({r["path"] for r in filtered})
+        rows: list[_SemanticRow] = [
+            _SemanticRow(
+                path=r["path"],
+                title=r["title"],
+                folder=r["folder"],
+                heading=r.get("heading"),
+                content=r["content"],
+                score=r["score"],
+                chunk_count=chunk_counts.get(r["path"], 1),
             )
-        return results
+            for r in filtered
+        ]
+
+        downweighted = _apply_length_downweight(
+            rows, alpha=self._length_downweight_alpha
+        )
+        capped = _apply_chunks_per_doc_cap(downweighted, n=chunks_per_doc, limit=limit)
+
+        return [
+            SearchResult(
+                path=r.path,
+                title=r.title,
+                folder=r.folder,
+                heading=r.heading,
+                content=_compute_snippet_for_semantic(
+                    r.content, query, snippet_words=snippet_words
+                ),
+                score=r.score,
+                search_type="semantic",
+                frontmatter=self._get_frontmatter(r.path),
+            )
+            for r in capped
+        ]
 
     def _hybrid_search(
         self,
@@ -375,109 +701,158 @@ class SearchManager:
         limit: int,
         filters: dict[str, str] | None,
         folder: str | None,
+        chunks_per_doc: int,
+        snippet_words: int,
     ) -> list[SearchResult]:
         """RRF merge of keyword and semantic results.
 
         Each result set is ranked independently.  Merged score:
         ``1 / (k + rank)`` where k=60.  Results appearing in both sets
-        have their scores summed.  Returns top *limit* by total RRF score.
+        have their scores summed.  Returns top *limit* by total RRF score,
+        after applying per-channel length downweight and a per-doc cap on the
+        merged sorted list.
         """
-        # Fetch more candidates than needed so RRF has enough to rank.
-        candidate_limit = max(limit * 2, 20)
-
-        # Flush deferred embedding updates so results are consistent.
         self._flush_embeddings()
+        candidate_limit = max(limit * (chunks_per_doc + 4), 50)
 
-        fts_results = self._fts.search(
-            query, limit=candidate_limit, filters=filters, folder=folder
+        fts_raw: list[FTSResult] = self._fts.search(
+            query,
+            limit=candidate_limit,
+            filters=filters,
+            folder=folder,
+            snippet_words=None,  # full content; snippet applied later
         )
+        # Apply length downweight inside the keyword channel.
+        fts_results: list[FTSResult] = _apply_length_downweight(
+            fts_raw, alpha=self._length_downweight_alpha
+        )
+
         vectors = self._load_vectors()
-        vec_results = vectors.search(query, limit=candidate_limit)
-
-        # Build a key for deduplication: (path, heading) identifies a chunk.
-        # Use a dict to accumulate RRF scores and store metadata.
-        rrf_scores: dict[tuple[str, str | None], float] = {}
-        # Store the best metadata dict keyed by (path, heading).
-        chunk_meta: dict[tuple[str, str | None], dict[str, Any]] = {}
-
-        for rank, r in enumerate(fts_results, start=1):
-            key = (r.path, r.heading)
-            rrf_scores[key] = rrf_scores.get(key, 0.0) + 1.0 / (_RRF_K + rank)
-            if key not in chunk_meta:
-                chunk_meta[key] = {
-                    "path": r.path,
-                    "title": r.title,
-                    "folder": r.folder,
-                    "heading": r.heading,
-                    "content": r.content,
-                    "search_type": "keyword",
-                }
-
-        for rank, vr in enumerate(vec_results, start=1):
-            # Apply folder prefix filter to semantic results.
+        vec_raw = vectors.search(query, limit=candidate_limit)
+        # Filter first, then batch-fetch chunk counts to avoid N+1 queries.
+        vec_filtered: list[dict[str, Any]] = []
+        for r in vec_raw:
             if folder is not None:
-                vr_folder = vr.get("folder", "")
-                if vr_folder != folder and not vr_folder.startswith(folder + "/"):
+                r_folder = r.get("folder", "")
+                if r_folder != folder and not r_folder.startswith(folder + "/"):
                     continue
+            if filters and not self._row_matches_filters(r["path"], filters):
+                continue
+            vec_filtered.append(r)
 
-            # Apply tag filters to semantic results via frontmatter lookup.
-            if filters:
-                note_row = self._fts.get_note(vr["path"])
-                if note_row is None:
-                    continue
-                fm_raw = note_row.get("frontmatter_json")
-                fm: dict[str, Any] = {}
-                if fm_raw:
-                    with contextlib.suppress(json.JSONDecodeError, TypeError):
-                        fm = json.loads(fm_raw)
-                skip = False
-                for fk, fv in filters.items():
-                    fm_val = fm.get(fk)
-                    if fm_val is None:
-                        skip = True
-                        break
-                    if isinstance(fm_val, list):
-                        if str(fv) not in [str(v) for v in fm_val]:
-                            skip = True
-                            break
-                    else:
-                        if str(fm_val) != str(fv):
-                            skip = True
-                            break
-                if skip:
-                    continue
-
-            heading = vr.get("heading")
-            vkey = (vr["path"], heading)
-            rrf_scores[vkey] = rrf_scores.get(vkey, 0.0) + 1.0 / (_RRF_K + rank)
-            if vkey not in chunk_meta:
-                chunk_meta[vkey] = {
-                    "path": vr["path"],
-                    "title": vr["title"],
-                    "folder": vr["folder"],
-                    "heading": heading,
-                    "content": vr["content"],
-                    "search_type": "semantic",
-                }
-
-        # Sort by descending RRF score, take top limit.
-        sorted_keys = sorted(rrf_scores, key=lambda k: rrf_scores[k], reverse=True)[
-            :limit
-        ]
-
-        return [
-            SearchResult(
-                path=chunk_meta[k]["path"],
-                title=chunk_meta[k]["title"],
-                folder=chunk_meta[k]["folder"],
-                heading=chunk_meta[k]["heading"],
-                content=chunk_meta[k]["content"],
-                score=rrf_scores[k],
-                search_type=chunk_meta[k]["search_type"],
-                frontmatter=self._get_frontmatter(chunk_meta[k]["path"]),
+        vec_chunk_counts = self._fts.get_chunk_counts({r["path"] for r in vec_filtered})
+        vec_rows: list[_SemanticRow] = [
+            _SemanticRow(
+                path=r["path"],
+                title=r["title"],
+                folder=r["folder"],
+                heading=r.get("heading"),
+                content=r["content"],
+                score=r["score"],
+                chunk_count=vec_chunk_counts.get(r["path"], 1),
             )
-            for k in sorted_keys
+            for r in vec_filtered
         ]
+        vec_rows = _apply_length_downweight(
+            vec_rows, alpha=self._length_downweight_alpha
+        )
+
+        # RRF fusion on adjusted-rank order.
+        rrf_scores: dict[tuple[str, str | None], float] = {}
+        chunk_meta: dict[tuple[str, str | None], dict[str, Any]] = {}
+        keyword_keys: set[tuple[str, str | None]] = set()
+        vec_keys: set[tuple[str, str | None]] = set()
+
+        for rank, fr in enumerate(fts_results, start=1):
+            key = (fr.path, fr.heading)
+            rrf_scores[key] = rrf_scores.get(key, 0.0) + 1.0 / (_RRF_K + rank)
+            keyword_keys.add(key)
+            chunk_meta.setdefault(
+                key,
+                {
+                    "path": fr.path,
+                    "title": fr.title,
+                    "folder": fr.folder,
+                    "heading": fr.heading,
+                    "content": fr.content,
+                    "search_type": "keyword",
+                },
+            )
+
+        for rank, vr in enumerate(vec_rows, start=1):
+            vkey = (vr.path, vr.heading)
+            rrf_scores[vkey] = rrf_scores.get(vkey, 0.0) + 1.0 / (_RRF_K + rank)
+            vec_keys.add(vkey)
+            chunk_meta.setdefault(
+                vkey,
+                {
+                    "path": vr.path,
+                    "title": vr.title,
+                    "folder": vr.folder,
+                    "heading": vr.heading,
+                    "content": vr.content,
+                    "search_type": "semantic",
+                },
+            )
+
+        # Chunks present in both channels get labelled "hybrid".
+        for key in keyword_keys & vec_keys:
+            chunk_meta[key]["search_type"] = "hybrid"
+
+        sorted_keys = sorted(rrf_scores, key=lambda k: rrf_scores[k], reverse=True)
+
+        cap_input = [
+            _CapRow(path=k[0], heading=k[1], score=rrf_scores[k]) for k in sorted_keys
+        ]
+        capped = _apply_chunks_per_doc_cap(cap_input, n=chunks_per_doc, limit=limit)
+
+        keyword_capped = [c for c in capped if (c.path, c.heading) in keyword_keys]
+        snippet_map: dict[tuple[str, str | None], str] = {}
+        if snippet_words > 0 and keyword_capped:
+            survivor_keys = {(c.path, c.heading) for c in keyword_capped}
+            survivor_fts_rows = [
+                fts_r
+                for fts_r in fts_results
+                if (fts_r.path, fts_r.heading) in survivor_keys
+            ]
+            snippet_map = self._fetch_snippet_map(
+                query,
+                survivor_fts_rows,
+                snippet_words=snippet_words,
+                folder=folder,
+                filters=filters,
+                candidate_limit=candidate_limit,
+            )
+
+        out: list[SearchResult] = []
+        for c in capped:
+            key = (c.path, c.heading)
+            meta = chunk_meta[key]
+            if key in snippet_map:
+                content = snippet_map[key]
+            elif snippet_words > 0:
+                # Keyword survivor missing from snippet_map (rare FTS rank
+                # inversion), or semantic-only hit — apply the word-window
+                # helper as a uniform backstop so payload bounds hold.
+                content = _compute_snippet_for_semantic(
+                    meta["content"], query, snippet_words=snippet_words
+                )
+            else:
+                # snippet_words == 0 → caller asked for the full chunk.
+                content = meta["content"]
+            out.append(
+                SearchResult(
+                    path=meta["path"],
+                    title=meta["title"],
+                    folder=meta["folder"],
+                    heading=meta["heading"],
+                    content=content,
+                    score=rrf_scores[key],
+                    search_type=meta["search_type"],
+                    frontmatter=self._get_frontmatter(meta["path"]),
+                )
+            )
+        return out
 
     # ------------------------------------------------------------------
     # List / enumerate

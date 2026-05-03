@@ -52,8 +52,13 @@ Find documents matching a query using full-text or semantic search.
 | `mode` | string | `"keyword"` | `"keyword"` (FTS5/BM25), `"semantic"` (vector similarity), or `"hybrid"` (reciprocal rank fusion) |
 | `folder` | string | `null` | Restrict to documents under this folder path |
 | `filters` | object | `null` | Filter by indexed frontmatter field values (e.g. `{"tags": "pacing"}`) |
+| `chunks_per_doc` | int | server default (`2`) | Per-document cap on the result list. Overrides `MARKDOWN_VAULT_MCP_CHUNKS_PER_DOC` for this call. `0` is rejected. |
+| `snippet_words` | int | server default (`200`) | Approximate word budget for the `content` field. `0` returns the full chunk. Overrides `MARKDOWN_VAULT_MCP_SNIPPET_WORDS` for this call. |
 
-**Returns:** List of result dicts ranked by relevance. Each contains: `path`, `title`, `folder`, `content` (matched chunk), `score`, `frontmatter`.
+**Returns:** List of result dicts ranked by relevance. Each contains: `path`, `title`, `folder`, `heading`, `content` (snippet by default — see note below), `score`, `frontmatter`, `search_type`.
+
+!!! note "Snippet content and full-chunk recovery"
+    By default, `content` is a snippet of approximately 200 words centered on the query terms — not the full chunk. Pass `snippet_words=0` to receive the complete chunk. To read the full section after receiving a search result, call `read(path=result["path"], section=result["heading"])` — this returns the entire chunk from the index without re-reading the whole document.
 
 !!! tip "Choosing a search mode"
     - Use `mode="hybrid"` when semantic search is available — it combines keyword precision with semantic understanding
@@ -74,13 +79,17 @@ Find documents matching a query using full-text or semantic search.
 
 ### `read`
 
-Read the full content of a document or attachment by path.
+Read the full content of a document or attachment by path. When combined with search, the optional `section` parameter lets you retrieve the full content of a specific chunk without loading the entire document.
 
 **Parameters:**
 
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `path` | string | Relative path to the document or attachment (e.g. `"Journal/note.md"` or `"assets/diagram.pdf"`) |
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `path` | string | required | Relative path to the document or attachment (e.g. `"Journal/note.md"` or `"assets/diagram.pdf"`) |
+| `section` | string | `null` | Optional heading to select a single section chunk. Pass the `heading` field from a `search` result to retrieve the full chunk content. Raises an error if the heading is not found or is empty. |
+
+!!! tip "Recovering full chunks after search"
+    When `search` returns a snippet result, pass `result["heading"]` as the `section` parameter to recover the complete chunk: `read(path=result["path"], section=result["heading"])`. If the document has no sub-headings (preamble content), omit `section` to read the whole document.
 
 **Returns:**
 

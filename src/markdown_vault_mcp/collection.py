@@ -137,6 +137,10 @@ class Collection:
         exclude_patterns: list[str] | None = None,
         attachment_extensions: list[str] | None = None,
         max_attachment_size_mb: float = 10.0,
+        chunks_per_doc: int = 2,
+        snippet_words: int = 200,
+        length_downweight_alpha: float = 0.25,
+        max_chunk_words: int = 400,
     ) -> None:
         self._source_dir = source_dir
         self._index_path = index_path
@@ -145,7 +149,19 @@ class Collection:
         self._read_only = read_only
         self._indexed_frontmatter_fields: list[str] = indexed_frontmatter_fields or []
         self._required_frontmatter = required_frontmatter
-        self._chunk_strategy = _resolve_chunk_strategy(chunk_strategy)
+        # Only inject max_chunk_words when the caller has not provided a
+        # custom ChunkStrategy instance or an explicit string name override.
+        if isinstance(chunk_strategy, str) and chunk_strategy == "heading":
+            self._chunk_strategy: ChunkStrategy = HeadingChunker(
+                max_chunk_words=max_chunk_words
+            )
+        else:
+            # NOTE: When a caller passes an explicit chunk_strategy instance
+            # (e.g. HeadingChunker(max_chunk_words=None) for legacy H1/H2-only
+            # behaviour), we honour their construction as-is. The Collection-level
+            # max_chunk_words only takes effect for the conventional default
+            # ("heading" string), so explicit-instance callers retain full control.
+            self._chunk_strategy = _resolve_chunk_strategy(chunk_strategy)
         self._on_write = on_write
         self._git_strategy = git_strategy
         self._git_pull_interval_s = git_pull_interval_s
@@ -217,6 +233,9 @@ class Collection:
             link_manager=self._link_mgr,
             flush_embeddings=self._index_mgr.flush_dirty_embeddings,
             rebuild_embeddings=lambda: self._index_mgr.build_embeddings(force=True),
+            chunks_per_doc=chunks_per_doc,
+            snippet_words=snippet_words,
+            length_downweight_alpha=length_downweight_alpha,
         )
         # 4. DocumentManager (needs index_mgr callbacks)
         self._doc_mgr = DocumentManager(
@@ -348,6 +367,8 @@ class Collection:
         mode: Literal["keyword", "semantic", "hybrid"] = "keyword",
         filters: dict[str, str] | None = None,
         folder: str | None = None,
+        chunks_per_doc: int | None = None,
+        snippet_words: int | None = None,
     ) -> list[SearchResult]:
         """Search the collection.
 
@@ -360,6 +381,10 @@ class Collection:
                 Only works for fields in ``indexed_frontmatter_fields``.
             folder: If provided, restrict results to documents in this folder
                 (and its sub-folders).
+            chunks_per_doc: Maximum number of chunks to return per document.
+                ``None`` uses the server default configured at startup.
+            snippet_words: Width of the snippet window in words.  ``0`` returns
+                the full chunk.  ``None`` uses the server default.
 
         Returns:
             List of :class:`~markdown_vault_mcp.types.SearchResult` ordered by
@@ -371,25 +396,36 @@ class Collection:
         """
         self._ensure_initialized()
         return self._search_mgr.search(
-            query, limit=limit, mode=mode, filters=filters, folder=folder
+            query,
+            limit=limit,
+            mode=mode,
+            filters=filters,
+            folder=folder,
+            chunks_per_doc=chunks_per_doc,
+            snippet_words=snippet_words,
         )
 
     # ------------------------------------------------------------------
     # Read / list
     # ------------------------------------------------------------------
 
-    def read(self, path: str) -> NoteContent | None:
+    def read(self, path: str, *, section: str | None = None) -> NoteContent | None:
         """Read the full content of a document from disk.
 
         Args:
             path: Relative document path (e.g. ``"Journal/note.md"``).
+            section: When provided, return only the section whose heading
+                matches *section* exactly (case-sensitive). Pass the
+                ``heading`` value from a ``search`` result unchanged for
+                guaranteed match. ``None`` (the default) returns the whole
+                document. Raises :exc:`ValueError` if the section is not found.
 
         Returns:
             A :class:`~markdown_vault_mcp.types.NoteContent` instance, or ``None``
             if the file does not exist.
         """
         self._ensure_initialized()
-        return self._doc_mgr.read(path)
+        return self._doc_mgr.read(path, section=section)
 
     def list(
         self,

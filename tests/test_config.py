@@ -17,6 +17,55 @@ from markdown_vault_mcp.config import (
 )
 
 
+def test_search_ranking_config_defaults(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """New ranking/snippet knobs default to documented values when env unset."""
+    monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", str(tmp_path))
+    # Clear any test-runner-leaked overrides.
+    for var in (
+        "MARKDOWN_VAULT_MCP_CHUNKS_PER_DOC",
+        "MARKDOWN_VAULT_MCP_SNIPPET_WORDS",
+        "MARKDOWN_VAULT_MCP_LENGTH_DOWNWEIGHT_ALPHA",
+        "MARKDOWN_VAULT_MCP_MAX_CHUNK_WORDS",
+    ):
+        monkeypatch.delenv(var, raising=False)
+
+    cfg = load_config()
+    assert cfg.chunks_per_doc == 2
+    assert cfg.snippet_words == 200
+    assert cfg.length_downweight_alpha == 0.25
+    assert cfg.max_chunk_words == 400
+
+
+def test_search_ranking_config_env_overrides(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Env vars override the defaults."""
+    monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", str(tmp_path))
+    monkeypatch.setenv("MARKDOWN_VAULT_MCP_CHUNKS_PER_DOC", "1")
+    monkeypatch.setenv("MARKDOWN_VAULT_MCP_SNIPPET_WORDS", "0")
+    monkeypatch.setenv("MARKDOWN_VAULT_MCP_LENGTH_DOWNWEIGHT_ALPHA", "0.0")
+    monkeypatch.setenv("MARKDOWN_VAULT_MCP_MAX_CHUNK_WORDS", "100000")
+
+    cfg = load_config()
+    assert cfg.chunks_per_doc == 1
+    assert cfg.snippet_words == 0
+    assert cfg.length_downweight_alpha == 0.0
+    assert cfg.max_chunk_words == 100000
+
+
+def test_search_ranking_config_rejects_zero_chunks_per_doc(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """chunks_per_doc=0 is rejected at load_config time (no useful semantics)."""
+    monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", str(tmp_path))
+    monkeypatch.setenv("MARKDOWN_VAULT_MCP_CHUNKS_PER_DOC", "0")
+
+    with pytest.raises(ValueError, match="chunks_per_doc"):
+        load_config()
+
+
 class TestParseHelpers:
     """Test boolean and list parsing edge cases via load_config."""
 
@@ -1105,3 +1154,25 @@ class TestServerConfigComposition:
         assert config.server.transport == "http"
         assert config.server.bearer_token == "secret-token"
         assert config.server.base_url == "https://api.example.com"
+
+
+def test_search_ranking_config_rejects_malformed_int(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Bad env input names the offending variable in the error message."""
+    monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", str(tmp_path))
+    monkeypatch.setenv("MARKDOWN_VAULT_MCP_CHUNKS_PER_DOC", "foo")
+
+    with pytest.raises(ValueError, match="MARKDOWN_VAULT_MCP_CHUNKS_PER_DOC"):
+        load_config()
+
+
+def test_search_ranking_config_rejects_malformed_float(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Bad float env input names the offending variable in the error message."""
+    monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", str(tmp_path))
+    monkeypatch.setenv("MARKDOWN_VAULT_MCP_LENGTH_DOWNWEIGHT_ALPHA", "abc")
+
+    with pytest.raises(ValueError, match="MARKDOWN_VAULT_MCP_LENGTH_DOWNWEIGHT_ALPHA"):
+        load_config()
