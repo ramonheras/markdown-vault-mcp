@@ -9,7 +9,6 @@ source directory, and optional collaborators.
 from __future__ import annotations
 
 import contextlib
-import copy
 import fnmatch
 import json
 import logging
@@ -20,7 +19,7 @@ import sqlite3
 from dataclasses import dataclass
 from dataclasses import replace as _dc_replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, TypeVar
+from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeVar
 
 from markdown_vault_mcp.types import (
     AttachmentInfo,
@@ -59,34 +58,54 @@ _QUERY_TOKEN_RE = _re.compile(r"[A-Za-z0-9]+")
 # Maximum folder peers returned by get_context().
 _CONTEXT_FOLDER_PEERS_LIMIT = 20
 
-_RankT = TypeVar("_RankT")
+
+class _ScorableRow(Protocol):
+    """Row contract consumed by the length-downweight helper.
+
+    Both :class:`~markdown_vault_mcp.types.FTSResult` and the local
+    :class:`_SemanticRow` adapter satisfy this Protocol structurally; no
+    nominal subclassing required.  All callers are dataclasses so
+    :func:`dataclasses.replace` is used to produce adjusted-score copies
+    without mutating the input.
+    """
+
+    score: float
+    chunk_count: int
 
 
-def _apply_length_downweight(rows: list[_RankT], *, alpha: float) -> list[_RankT]:
+class _CappableRow(Protocol):
+    """Row contract consumed by the per-document cap helper."""
+
+    path: str
+
+
+_ScorableT = TypeVar("_ScorableT", bound=_ScorableRow)
+_CappableT = TypeVar("_CappableT", bound=_CappableRow)
+
+
+def _apply_length_downweight(
+    rows: list[_ScorableT], *, alpha: float
+) -> list[_ScorableT]:
     """Re-rank ``rows`` by ``score / (1 + alpha * log(chunk_count))``.
 
-    Each element must expose ``score: float`` and ``chunk_count: int``
-    attributes.  Works for both :class:`FTSResult` and dataclass adapters
-    used by the semantic-channel pipeline.
-
     Returns a new list sorted by descending adjusted score; input is not
-    mutated.
+    mutated.  Callers must pass dataclass instances (every caller in this
+    codebase already does) so :func:`dataclasses.replace` can produce the
+    adjusted-score copies.
     """
     if alpha <= 0 or not rows:
         return list(rows)
 
-    adjusted: list[tuple[_RankT, float]] = []
+    adjusted: list[tuple[_ScorableT, float]] = []
     for row in rows:
-        chunk_count = max(1, getattr(row, "chunk_count", 1))
+        chunk_count = max(1, row.chunk_count)
         # log(1) = 0 -> factor = 1 -> no change for single-chunk docs.
         factor = 1.0 + alpha * math.log(chunk_count)
-        new_score = row.score / factor  # type: ignore[attr-defined]
-        try:
-            new_row = _dc_replace(row, score=new_score)  # type: ignore[type-var]
-        except TypeError:
-            # Not a dataclass: fall back to a shallow copy.
-            new_row = copy.copy(row)
-            new_row.score = new_score  # type: ignore[attr-defined]
+        new_score = row.score / factor
+        # Protocols can't promise __dataclass_fields__; the helper's
+        # contract is "callers pass dataclasses" (FTSResult / _SemanticRow
+        # / _CapRow all are), enforced at runtime by replace() itself.
+        new_row = _dc_replace(row, score=new_score)  # type: ignore[type-var]
         adjusted.append((new_row, new_score))
 
     adjusted.sort(key=lambda t: t[1], reverse=True)
@@ -94,21 +113,21 @@ def _apply_length_downweight(rows: list[_RankT], *, alpha: float) -> list[_RankT
 
 
 def _apply_chunks_per_doc_cap(
-    rows: list[_RankT], *, n: int, limit: int
-) -> list[_RankT]:
+    rows: list[_CappableT], *, n: int, limit: int
+) -> list[_CappableT]:
     """Walk ``rows`` in order; keep at most ``n`` rows per ``path``; stop at ``limit``.
 
-    Each element must expose a ``path`` attribute. Order is preserved.
+    Order is preserved.
 
     Raises:
         ValueError: If ``n`` is less than 1.
     """
     if n < 1:
         raise ValueError(f"chunks_per_doc cap must be >= 1, got {n}")
-    out: list[_RankT] = []
+    out: list[_CappableT] = []
     counts: dict[str, int] = {}
     for row in rows:
-        path = row.path  # type: ignore[attr-defined]
+        path = row.path
         c = counts.get(path, 0)
         if c >= n:
             continue
