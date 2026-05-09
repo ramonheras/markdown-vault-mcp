@@ -256,7 +256,7 @@ def make_server(transport: str = "stdio") -> FastMCP:
     # spec-compliant ``create_download_link(origin_id, ttl_seconds)``
     # tool that collides with MV's existing ``create_download_link(path,
     # ttl_seconds)`` tool above.  Wiring both silently shadows one or the
-    # other depending on registration order.  Migration tracked in #438;
+    # other depending on registration order.  Migration tracked in #431;
     # do NOT add ``register_file_exchange(mcp, ...)`` here without first
     # resolving the name collision.
 
