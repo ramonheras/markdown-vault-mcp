@@ -12,7 +12,13 @@ from typing import TYPE_CHECKING, Any
 import pytest
 from fastmcp import Client
 
-from markdown_vault_mcp._server_apps import _compute_claude_app_domain, _hashed
+from markdown_vault_mcp._server_apps import (
+    _VAULT_APP_TOOL_NAMES,
+    _app_tool_meta,
+    _compute_claude_app_domain,
+    _hashed,
+    _rewrite_spa_app_tool_calls,
+)
 from markdown_vault_mcp.server import make_server
 
 if TYPE_CHECKING:
@@ -736,3 +742,46 @@ class TestAppToolLinkedData:
             result = await client.call_tool("show_context", {"path": "linked_b.md"})
             data = _parse_tool_data(result)
             assert "Tags:" in data["summary"]
+
+
+class TestSPARewriteValidation:
+    """Error-path coverage for `_rewrite_spa_app_tool_calls` and `_app_tool_meta`.
+
+    These guards run at module-import time on production code paths and
+    can't be exercised through the public MCP surface — direct unit
+    tests are the only way to cover them.
+
+    Regex matches are anchored to each production message's distinctive
+    prefix so a future error string change in an adjacent branch can't
+    silently satisfy the wrong assertion.
+    """
+
+    def test_rewrite_no_vault_calls_raises(self) -> None:
+        with pytest.raises(RuntimeError, match=r"^SPA shell rewrite found zero "):
+            _rewrite_spa_app_tool_calls("<html>no vault calls here</html>")
+
+    def test_rewrite_unexpected_tool_raises(self) -> None:
+        # Provide every declared name plus one typo so `missing` is empty
+        # and only the `unexpected` branch can fire — isolates the test
+        # from the production check ordering.
+        all_valid = " ".join(f"vault___{n}" for n in _VAULT_APP_TOOL_NAMES)
+        with pytest.raises(RuntimeError, match=r"^SPA references unknown vault tools:"):
+            _rewrite_spa_app_tool_calls(f"{all_valid} vault___vault_typo_unknown")
+
+    def test_rewrite_missing_declared_tool_raises(self) -> None:
+        # The "missing" branch only fires when at least 2 tools are declared.
+        # Assert that precondition explicitly so a future single-tool refactor
+        # produces a clear error message instead of a mysterious "expected
+        # RuntimeError, got nothing".
+        assert len(_VAULT_APP_TOOL_NAMES) >= 2, (
+            "test invariant: needs >=2 declared tools to trigger the missing branch"
+        )
+        name = sorted(_VAULT_APP_TOOL_NAMES)[0]
+        with pytest.raises(
+            RuntimeError, match=r"^SPA HTML doesn't reference declared vault tools:"
+        ):
+            _rewrite_spa_app_tool_calls(f"vault___{name}")
+
+    def test_app_tool_meta_unknown_raises(self) -> None:
+        with pytest.raises(ValueError, match=r"^Unknown vault app tool "):
+            _app_tool_meta("vault_unknown_tool")
