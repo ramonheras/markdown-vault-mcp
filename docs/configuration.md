@@ -17,6 +17,7 @@ All configuration is via environment variables. Most use the `MARKDOWN_VAULT_MCP
 | `MARKDOWN_VAULT_MCP_TEMPLATES_FOLDER` | string | `_templates` | No | Relative folder path used by the `create_from_template` prompt to discover/read template files |
 | `MARKDOWN_VAULT_MCP_PROMPTS_FOLDER` | path | — | No | Path to a directory of `.md` prompt files that extend or override built-in prompts |
 
+<!-- DOMAIN-CONFIG-VARS-START -->
 ## Server Identity
 
 | Variable | Type | Default | Description |
@@ -139,3 +140,4 @@ Boolean environment variables accept `true`, `1`, or `yes` (case-insensitive) as
 | [`examples/obsidian-readwrite.env`](https://github.com/pvliesdonk/markdown-vault-mcp/blob/main/examples/obsidian-readwrite.env) | Obsidian vault, read-write with git auto-commit |
 | [`examples/obsidian-oidc.env`](https://github.com/pvliesdonk/markdown-vault-mcp/blob/main/examples/obsidian-oidc.env) | Obsidian vault, read-only, OIDC authentication (Authelia) |
 | [`examples/ifcraftcorpus.env`](https://github.com/pvliesdonk/markdown-vault-mcp/blob/main/examples/ifcraftcorpus.env) | Strict frontmatter enforcement, read-only corpus |
+<!-- DOMAIN-CONFIG-VARS-END -->

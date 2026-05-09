@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING
 
 from fastmcp_pvl_core import (
     configure_logging_from_env,
+    maybe_start_debugpy,
     normalise_http_path,
 )
 
@@ -73,6 +74,14 @@ def _cmd_serve(args: argparse.Namespace) -> None:
             "pip install markdown-vault-mcp[mcp]"
         )
         sys.exit(1)
+
+    # Optional remote-debugger listener — placed in serve (not main) so
+    # non-server commands (index/search/reindex/--help) are never blocked
+    # by MARKDOWN_VAULT_MCP_DEBUG_WAIT=true.  No-op unless
+    # MARKDOWN_VAULT_MCP_DEBUG_PORT is set; debugpy is only present when
+    # the image was built with --build-arg DEBUG=true (a missing import
+    # logs a WARNING and continues).
+    maybe_start_debugpy(_ENV_PREFIX)
 
     transport = args.transport
     server = make_server(transport=transport)

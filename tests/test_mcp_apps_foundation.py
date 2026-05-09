@@ -12,7 +12,13 @@ from typing import TYPE_CHECKING, Any
 import pytest
 from fastmcp import Client
 
-from markdown_vault_mcp._server_apps import _compute_claude_app_domain
+from markdown_vault_mcp._server_apps import (
+    _VAULT_APP_TOOL_NAMES,
+    _app_tool_meta,
+    _compute_claude_app_domain,
+    _hashed,
+    _rewrite_spa_app_tool_calls,
+)
 from markdown_vault_mcp.server import make_server
 
 if TYPE_CHECKING:
@@ -378,7 +384,7 @@ class TestAppOnlyTools:
         server = make_server()
         async with Client(server) as client:
             result = await client.call_tool(
-                "vault___vault_context", {"path": "simple.md"}
+                _hashed("vault_context"), {"path": "simple.md"}
             )
             data = _parse_tool_data(result)
             assert data["path"] == "simple.md"
@@ -392,7 +398,7 @@ class TestAppOnlyTools:
         server = make_server()
         async with Client(server) as client:
             result = await client.call_tool(
-                "vault___vault_graph_neighborhood", {"path": "simple.md"}
+                _hashed("vault_graph_neighborhood"), {"path": "simple.md"}
             )
             data = _parse_tool_data(result)
             assert "nodes" in data
@@ -406,7 +412,7 @@ class TestAppOnlyTools:
     async def test_vault_graph_hubs(self) -> None:
         server = make_server()
         async with Client(server) as client:
-            result = await client.call_tool("vault___vault_graph_hubs", {})
+            result = await client.call_tool(_hashed("vault_graph_hubs"), {})
             data = _parse_tool_data(result)
             assert "nodes" in data
             assert "edges" in data
@@ -414,7 +420,7 @@ class TestAppOnlyTools:
     async def test_vault_list_root(self) -> None:
         server = make_server()
         async with Client(server) as client:
-            result = await client.call_tool("vault___vault_list", {})
+            result = await client.call_tool(_hashed("vault_list"), {})
             data = _parse_tool_data(result)
             assert "folders" in data
             assert "notes" in data
@@ -424,7 +430,7 @@ class TestAppOnlyTools:
         """Root listing must not include notes from subfolders."""
         server = make_server()
         async with Client(server) as client:
-            result = await client.call_tool("vault___vault_list", {})
+            result = await client.call_tool(_hashed("vault_list"), {})
             data = _parse_tool_data(result)
             for note in data["notes"]:
                 assert "/" not in note["path"], (
@@ -436,7 +442,7 @@ class TestAppOnlyTools:
         server = make_server()
         async with Client(server) as client:
             result = await client.call_tool(
-                "vault___vault_list", {"folder": "subfolder"}
+                _hashed("vault_list"), {"folder": "subfolder"}
             )
             data = _parse_tool_data(result)
             for note in data["notes"]:
@@ -465,7 +471,7 @@ class TestAppOnlyTools:
             monkeypatch.delenv(var, raising=False)
         server = make_server()
         async with Client(server) as client:
-            result = await client.call_tool("vault___vault_list", {})
+            result = await client.call_tool(_hashed("vault_list"), {})
             data = _parse_tool_data(result)
             # 'ai' must appear even though list_folders() only returns 'ai/llm'
             assert "ai" in data["folders"], (
@@ -478,7 +484,9 @@ class TestAppOnlyTools:
     async def test_vault_read(self) -> None:
         server = make_server()
         async with Client(server) as client:
-            result = await client.call_tool("vault___vault_read", {"path": "simple.md"})
+            result = await client.call_tool(
+                _hashed("vault_read"), {"path": "simple.md"}
+            )
             data = _parse_tool_data(result)
             assert data["path"] == "simple.md"
             assert "content" in data
@@ -488,7 +496,7 @@ class TestAppOnlyTools:
         server = make_server()
         async with Client(server) as client:
             result = await client.call_tool(
-                "vault___vault_read", {"path": "does-not-exist.md"}
+                _hashed("vault_read"), {"path": "does-not-exist.md"}
             )
             data = _parse_tool_data(result)
             assert data is None
@@ -497,7 +505,7 @@ class TestAppOnlyTools:
         server = make_server()
         async with Client(server) as client:
             result = await client.call_tool(
-                "vault___vault_search", {"query": "hello", "mode": "keyword"}
+                _hashed("vault_search"), {"query": "hello", "mode": "keyword"}
             )
             data = _parse_tool_data(result)
             assert isinstance(data, list)
@@ -596,7 +604,7 @@ class TestAppToolData:
     async def test_vault_graph_hubs(self) -> None:
         server = make_server()
         async with Client(server) as client:
-            result = await client.call_tool("vault___vault_graph_hubs", {})
+            result = await client.call_tool(_hashed("vault_graph_hubs"), {})
             data = _parse_tool_data(result)
             assert "nodes" in data
             assert "edges" in data
@@ -604,7 +612,7 @@ class TestAppToolData:
     async def test_vault_list_root(self) -> None:
         server = make_server()
         async with Client(server) as client:
-            result = await client.call_tool("vault___vault_list", {})
+            result = await client.call_tool(_hashed("vault_list"), {})
             data = _parse_tool_data(result)
             assert "folders" in data
             assert "notes" in data
@@ -615,7 +623,9 @@ class TestAppToolData:
     async def test_vault_read_note(self) -> None:
         server = make_server()
         async with Client(server) as client:
-            result = await client.call_tool("vault___vault_read", {"path": "simple.md"})
+            result = await client.call_tool(
+                _hashed("vault_read"), {"path": "simple.md"}
+            )
             data = _parse_tool_data(result)
             assert data["path"] == "simple.md"
             assert "content" in data
@@ -624,7 +634,7 @@ class TestAppToolData:
         server = make_server()
         async with Client(server) as client:
             result = await client.call_tool(
-                "vault___vault_search", {"query": "simple", "mode": "keyword"}
+                _hashed("vault_search"), {"query": "simple", "mode": "keyword"}
             )
             data = _parse_tool_data(result)
             assert isinstance(data, list)
@@ -642,7 +652,7 @@ class TestAppToolData:
         server = make_server()
         async with Client(server) as client:
             result = await client.call_tool(
-                "vault___vault_context", {"path": "does-not-exist.md"}
+                _hashed("vault_context"), {"path": "does-not-exist.md"}
             )
             data = _parse_tool_data(result)
             assert "error" in data
@@ -662,7 +672,7 @@ class TestAppToolData:
         server = make_server()
         async with Client(server) as client:
             result = await client.call_tool(
-                "vault___vault_search", {"query": "test", "mode": "semantic"}
+                _hashed("vault_search"), {"query": "test", "mode": "semantic"}
             )
             data = _parse_tool_data(result)
             assert isinstance(data, list)
@@ -678,7 +688,7 @@ class TestAppToolLinkedData:
         server = make_server()
         async with Client(server) as client:
             result = await client.call_tool(
-                "vault___vault_graph_neighborhood", {"path": "linked_a.md", "depth": 2}
+                _hashed("vault_graph_neighborhood"), {"path": "linked_a.md", "depth": 2}
             )
             data = _parse_tool_data(result)
             assert "nodes" in data
@@ -691,7 +701,7 @@ class TestAppToolLinkedData:
         server = make_server()
         async with Client(server) as client:
             result = await client.call_tool(
-                "vault___vault_graph_neighborhood", {"path": "linked_a.md", "depth": 2}
+                _hashed("vault_graph_neighborhood"), {"path": "linked_a.md", "depth": 2}
             )
             data = _parse_tool_data(result)
             edge_keys = [(e["from"], e["to"]) for e in data["edges"]]
@@ -700,7 +710,7 @@ class TestAppToolLinkedData:
     async def test_vault_graph_hubs_with_links(self) -> None:
         server = make_server()
         async with Client(server) as client:
-            result = await client.call_tool("vault___vault_graph_hubs", {})
+            result = await client.call_tool(_hashed("vault_graph_hubs"), {})
             data = _parse_tool_data(result)
             assert "nodes" in data
             assert "edges" in data
@@ -711,7 +721,7 @@ class TestAppToolLinkedData:
         server = make_server()
         async with Client(server) as client:
             result = await client.call_tool(
-                "vault___vault_context", {"path": "linked_a.md"}
+                _hashed("vault_context"), {"path": "linked_a.md"}
             )
             data = _parse_tool_data(result)
             assert data["path"] == "linked_a.md"
@@ -732,3 +742,46 @@ class TestAppToolLinkedData:
             result = await client.call_tool("show_context", {"path": "linked_b.md"})
             data = _parse_tool_data(result)
             assert "Tags:" in data["summary"]
+
+
+class TestSPARewriteValidation:
+    """Error-path coverage for `_rewrite_spa_app_tool_calls` and `_app_tool_meta`.
+
+    These guards run at module-import time on production code paths and
+    can't be exercised through the public MCP surface — direct unit
+    tests are the only way to cover them.
+
+    Regex matches are anchored to each production message's distinctive
+    prefix so a future error string change in an adjacent branch can't
+    silently satisfy the wrong assertion.
+    """
+
+    def test_rewrite_no_vault_calls_raises(self) -> None:
+        with pytest.raises(RuntimeError, match=r"^SPA shell rewrite found zero "):
+            _rewrite_spa_app_tool_calls("<html>no vault calls here</html>")
+
+    def test_rewrite_unexpected_tool_raises(self) -> None:
+        # Provide every declared name plus one typo so `missing` is empty
+        # and only the `unexpected` branch can fire — isolates the test
+        # from the production check ordering.
+        all_valid = " ".join(f"vault___{n}" for n in _VAULT_APP_TOOL_NAMES)
+        with pytest.raises(RuntimeError, match=r"^SPA references unknown vault tools:"):
+            _rewrite_spa_app_tool_calls(f"{all_valid} vault___vault_typo_unknown")
+
+    def test_rewrite_missing_declared_tool_raises(self) -> None:
+        # The "missing" branch only fires when at least 2 tools are declared.
+        # Assert that precondition explicitly so a future single-tool refactor
+        # produces a clear error message instead of a mysterious "expected
+        # RuntimeError, got nothing".
+        assert len(_VAULT_APP_TOOL_NAMES) >= 2, (
+            "test invariant: needs >=2 declared tools to trigger the missing branch"
+        )
+        name = sorted(_VAULT_APP_TOOL_NAMES)[0]
+        with pytest.raises(
+            RuntimeError, match=r"^SPA HTML doesn't reference declared vault tools:"
+        ):
+            _rewrite_spa_app_tool_calls(f"vault___{name}")
+
+    def test_app_tool_meta_unknown_raises(self) -> None:
+        with pytest.raises(ValueError, match=r"^Unknown vault app tool "):
+            _app_tool_meta("vault_unknown_tool")

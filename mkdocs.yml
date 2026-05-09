@@ -44,6 +44,9 @@ hooks:
 
 plugins:
   - search
+  # Generates llms.txt + llms-full.txt for the README badge.
+  # Sections mirror `nav:` below — keep them aligned when customising
+  # (both blocks are sentinel-protected so customise both as a unit).
   - llmstxt:
       full_output: llms-full.txt
       markdown_description: >
@@ -53,6 +56,8 @@ plugins:
         (plus 6 app-only tools), 9 resources, and 6 prompts over the Model
         Context Protocol.
       sections:
+        # PROJECT-LLMSTXT-SECTIONS-START — keep aligned with `nav:` below;
+        # kept across copier update.
         Getting Started:
           - index.md: Overview — features, quick start, and project links
           - installation.md: Installation from PyPI, uv, source, or Docker
@@ -88,6 +93,7 @@ plugins:
           - api/providers.md: Embedding provider API reference
           - api/types.md: All data types returned by the Collection API
           - api/exceptions.md: All exceptions raised by the library
+        # PROJECT-LLMSTXT-SECTIONS-END
   - mkdocstrings:
       handlers:
         python:
@@ -120,6 +126,9 @@ markdown_extensions:
   - md_in_html
 
 nav:
+  # PROJECT-NAV-START — replace with your real navigation; kept across copier
+  # update. Keep aligned with the `llmstxt` plugin's sentinel-protected
+  # `sections:` block above.
   - Home: index.md
   - Getting Started:
       - Installation: installation.md
@@ -155,3 +164,4 @@ nav:
       - Embedding Providers: api/providers.md
       - Types: api/types.md
       - Exceptions: api/exceptions.md
+  # PROJECT-NAV-END
