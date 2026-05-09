@@ -24,6 +24,8 @@ from fastmcp_pvl_core import (
     ArtifactStore,
     ServerConfig,
     build_auth,
+    register_file_exchange,
+    register_server_info_tool,
     resolve_auth_mode,
     wire_middleware_stack,
 )
@@ -129,6 +131,15 @@ def make_server(transport: str = "stdio") -> FastMCP:
       prompt files.  User prompts with the same name as a built-in override the
       built-in.  Default: disabled.
 
+    Args:
+        transport: ``"stdio"`` / ``"http"`` / ``"sse"``.  Used for the
+            ``ArtifactStore`` route guard (HTTP-only) and as ``transport=%s``
+            in the startup log.  MCP File Exchange wiring (when enabled) is
+            gated by ``register_file_exchange`` reading
+            ``MARKDOWN_VAULT_MCP_TRANSPORT`` / ``FASTMCP_TRANSPORT`` and
+            ``MARKDOWN_VAULT_MCP_FILE_EXCHANGE_ENABLED`` (default true on
+            HTTP/SSE, false on stdio).
+
     Returns:
         A fully configured :class:`~fastmcp.FastMCP` instance ready to run.
     """
@@ -159,9 +170,10 @@ def make_server(transport: str = "stdio") -> FastMCP:
         pkg_ver = "unknown"
 
     logger.info(
-        "Server config: version=%s name=%s auth=%s mode=%s vault=%s embeddings=%s",
+        "Server config: version=%s name=%s transport=%s auth=%s mode=%s vault=%s embeddings=%s",
         pkg_ver,
         server_name,
+        transport,
         auth_mode,
         "read-only" if is_read_only else "read-write",
         config.source_dir,
@@ -179,6 +191,22 @@ def make_server(transport: str = "stdio") -> FastMCP:
     # include_traceback=None infers from root log level (-v→DEBUG→tracebacks); transform_errors=False lets exceptions propagate to FastMCP's own handlers.
     wire_middleware_stack(mcp, include_traceback=None, transform_errors=False)
 
+    # Optional: enable opt-in per-subject authorization on tools / resources /
+    # prompts.  See fastmcp-pvl-core's README "Authorization" section for the
+    # design.  Tools, resources, and prompts opt in by setting
+    # ``meta={"required_scope": "<scope>"}``; absence of the key means
+    # unrestricted.  The middleware is only installed when ``acl_path`` is set.
+    #
+    # from fastmcp_pvl_core import (
+    #     AuthorizationMiddleware,
+    #     load_acl,
+    #     make_acl_authorizer,
+    # )
+    #
+    # if config.acl_path is not None:
+    #     authorizer = make_acl_authorizer(load_acl(config.acl_path))
+    #     mcp.add_middleware(AuthorizationMiddleware(authorizer=authorizer))
+
     register_tools(mcp, transport=transport)
     register_resources(mcp)
     register_apps(mcp)
@@ -188,6 +216,24 @@ def make_server(transport: str = "stdio") -> FastMCP:
         prompts_folder=config.prompts_folder,
     )
 
+    register_server_info_tool(
+        mcp,
+        server_name=server_name,
+        server_version=pkg_ver,
+        # DOMAIN-UPSTREAM-START — wire upstream version reporting for servers
+        # that talk to a remote service (paperless-mcp, etc.). The provider is
+        # a zero-arg callable; the simplest pattern is a module-level upstream
+        # client (typically constructed from env vars at import time) whose
+        # version method is referenced here.
+        # Uncomment the kwargs below as additional arguments to this call:
+        # upstream_version=lambda: _upstream_client.remote_version(),
+        # upstream_label="paperless",
+        # DOMAIN-UPSTREAM-END
+    )
+
+    # DOMAIN-WIRING-START — project-specific wiring (custom HTTP routes,
+    # transforms, mode toggles, alternative middleware, additional registrations);
+    # kept across copier update.
     # --- Artifact download endpoint (HTTP transports only) ---
     # The store is constructed here (not in lifespan) so the HTTP route
     # closure can bind to a concrete instance.  The tool handler reaches
@@ -203,6 +249,19 @@ def make_server(transport: str = "stdio") -> FastMCP:
         artifact_store = ArtifactStore(ttl_seconds=ARTIFACT_TTL_SECONDS)
         set_artifact_store(artifact_store)
         ArtifactStore.register_route(mcp, artifact_store)
+    # DOMAIN-WIRING-END
+
+    # To publish files from a tool body, capture the returned handle
+    # — see docs/guides/file-exchange.md for the module-level singleton
+    # pattern (e.g. ``_file_exchange = register_file_exchange(...)``).
+    register_file_exchange(
+        mcp,
+        namespace="markdown-vault-mcp",
+        env_prefix=_ENV_PREFIX,
+        transport="auto",
+        # produces=("application/octet-stream",),  # uncomment + customise per project
+        # consumer_sink=_my_sink,                  # uncomment if this server consumes file_refs
+    )
 
     # --- Visibility: hide write-tagged components in read-only mode ---
 

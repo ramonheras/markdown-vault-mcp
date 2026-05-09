@@ -2388,7 +2388,7 @@ class TestBuildBearerAuth:
         result = build_bearer_auth(config)
         assert "my-token" in result.tokens
         entry = result.tokens["my-token"]
-        assert entry["client_id"] == "bearer"
+        assert entry["client_id"] == "bearer-anon"
         assert entry["scopes"] == ["read", "write"]
 
     async def test_verify_correct_token_returns_access_token(self) -> None:
@@ -2396,7 +2396,7 @@ class TestBuildBearerAuth:
         verifier = build_bearer_auth(config)
         access = await verifier.verify_token("good-token")
         assert access is not None
-        assert access.client_id == "bearer"
+        assert access.client_id == "bearer-anon"
         assert access.scopes == ["read", "write"]
 
     async def test_verify_wrong_token_returns_none(self) -> None:
@@ -2781,33 +2781,34 @@ class TestBuildRemoteAuth:
         )
         assert build_remote_auth(config) is None
 
-    def test_discovery_fetch_failure_returns_none(self) -> None:
+    def test_discovery_fetch_failure_raises(self) -> None:
         from unittest.mock import patch
 
         import httpx
+        from fastmcp_pvl_core import ConfigurationError
 
         config = self._remote_config()
-        # Core's build_remote_auth catches httpx.HTTPError + ValueError; a
-        # bare Exception now propagates by design.
-        with patch("httpx.get", side_effect=httpx.ConnectError("connection failed")):
-            assert build_remote_auth(config) is None
+        # pvl-core 2.0 raises ConfigurationError on discovery failure
+        # (fail-fast at startup) instead of returning None.
+        with (
+            patch("httpx.get", side_effect=httpx.ConnectError("connection failed")),
+            pytest.raises(ConfigurationError, match="OIDC discovery failed"),
+        ):
+            build_remote_auth(config)
 
-    def test_httpx_import_error_returns_none(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        """Missing httpx gives a clear warning, not a confusing discovery message."""
+    def test_httpx_import_error_raises(self) -> None:
+        """Missing httpx aborts startup with ConfigurationError (pvl-core 2.0 contract)."""
         import sys as _sys
         from unittest.mock import patch
 
+        from fastmcp_pvl_core import ConfigurationError
+
         config = self._remote_config()
-        # Core logs the missing-httpx case at WARNING (was ERROR in MV).
         with (
             patch.dict(_sys.modules, {"httpx": None}),
-            caplog.at_level(logging.WARNING),
+            pytest.raises(ConfigurationError, match="remote-auth"),
         ):
-            assert build_remote_auth(config) is None
-        assert "remote_auth_skipped" in caplog.text
-        assert "httpx_missing" in caplog.text
+            build_remote_auth(config)
 
     def test_happy_path_returns_non_none(self) -> None:
         from unittest.mock import MagicMock, patch
@@ -2823,18 +2824,26 @@ class TestBuildRemoteAuth:
             result = build_remote_auth(config)
         assert result is not None
 
-    def test_missing_jwks_uri_returns_none(self) -> None:
+    def test_missing_jwks_uri_raises(self) -> None:
         from unittest.mock import MagicMock, patch
+
+        from fastmcp_pvl_core import ConfigurationError
 
         config = self._remote_config()
         mock_resp = MagicMock()
         mock_resp.json.return_value = {"issuer": "https://auth.example.com"}
         mock_resp.raise_for_status = MagicMock()
-        with patch("httpx.get", return_value=mock_resp):
-            assert build_remote_auth(config) is None
+        # pvl-core 2.0: incomplete discovery doc aborts startup.
+        with (
+            patch("httpx.get", return_value=mock_resp),
+            pytest.raises(ConfigurationError, match="incomplete"),
+        ):
+            build_remote_auth(config)
 
-    def test_missing_issuer_returns_none(self) -> None:
+    def test_missing_issuer_raises(self) -> None:
         from unittest.mock import MagicMock, patch
+
+        from fastmcp_pvl_core import ConfigurationError
 
         config = self._remote_config()
         mock_resp = MagicMock()
@@ -2842,8 +2851,11 @@ class TestBuildRemoteAuth:
             "jwks_uri": "https://auth.example.com/.well-known/jwks.json"
         }
         mock_resp.raise_for_status = MagicMock()
-        with patch("httpx.get", return_value=mock_resp):
-            assert build_remote_auth(config) is None
+        with (
+            patch("httpx.get", return_value=mock_resp),
+            pytest.raises(ConfigurationError, match="incomplete"),
+        ):
+            build_remote_auth(config)
 
     def test_audience_forwarded_when_set(self) -> None:
         from unittest.mock import MagicMock, patch

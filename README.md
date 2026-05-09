@@ -1,7 +1,7 @@
 <!-- mcp-name: io.github.pvliesdonk/markdown-vault-mcp -->
 # markdown-vault-mcp
 
-[![CI](https://github.com/pvliesdonk/markdown-vault-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/pvliesdonk/markdown-vault-mcp/actions/workflows/ci.yml) [![codecov](https://codecov.io/gh/pvliesdonk/markdown-vault-mcp/graph/badge.svg)](https://codecov.io/gh/pvliesdonk/markdown-vault-mcp) [![PyPI](https://img.shields.io/pypi/v/markdown-vault-mcp)](https://pypi.org/project/markdown-vault-mcp/) [![Python](https://img.shields.io/pypi/pyversions/markdown-vault-mcp)](https://pypi.org/project/markdown-vault-mcp/) [![License](https://img.shields.io/github/license/pvliesdonk/markdown-vault-mcp)](LICENSE) [![Docker](https://img.shields.io/github/v/release/pvliesdonk/markdown-vault-mcp?label=ghcr.io&logo=docker)](https://github.com/pvliesdonk/markdown-vault-mcp/pkgs/container/markdown-vault-mcp) [![Docs](https://img.shields.io/badge/docs-GitHub%20Pages-blue)](https://pvliesdonk.github.io/markdown-vault-mcp/) [![llms.txt](https://img.shields.io/badge/llms.txt-available-brightgreen)](https://pvliesdonk.github.io/markdown-vault-mcp/llms.txt) [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/pvliesdonk/markdown-vault-mcp)
+[![CI](https://github.com/pvliesdonk/markdown-vault-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/pvliesdonk/markdown-vault-mcp/actions/workflows/ci.yml) [![codecov](https://codecov.io/gh/pvliesdonk/markdown-vault-mcp/graph/badge.svg)](https://codecov.io/gh/pvliesdonk/markdown-vault-mcp) [![PyPI](https://img.shields.io/pypi/v/markdown-vault-mcp)](https://pypi.org/project/markdown-vault-mcp/) [![Python](https://img.shields.io/pypi/pyversions/markdown-vault-mcp)](https://pypi.org/project/markdown-vault-mcp/) [![License](https://img.shields.io/github/license/pvliesdonk/markdown-vault-mcp)](LICENSE) [![Docker](https://img.shields.io/github/v/release/pvliesdonk/markdown-vault-mcp?label=ghcr.io&logo=docker)](https://github.com/pvliesdonk/markdown-vault-mcp/pkgs/container/markdown-vault-mcp) [![Docs](https://img.shields.io/badge/docs-GitHub%20Pages-blue)](https://pvliesdonk.github.io/markdown-vault-mcp/) [![llms.txt](https://img.shields.io/badge/llms.txt-available-brightgreen)](https://pvliesdonk.github.io/markdown-vault-mcp/llms.txt) [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/pvliesdonk/markdown-vault-mcp) [![Template](https://img.shields.io/badge/dynamic/yaml?url=https://raw.githubusercontent.com/pvliesdonk/markdown-vault-mcp/main/.copier-answers.yml&query=%24._commit&label=template)](https://github.com/pvliesdonk/fastmcp-server-template)
 
 <!-- DOMAIN-START -->
 A generic markdown collection [MCP](https://modelcontextprotocol.io/) server with FTS5 full-text search, semantic vector search, frontmatter-aware indexing, incremental reindexing, and non-markdown attachment support.
@@ -72,7 +72,7 @@ pip install markdown-vault-mcp[all]             # MCP + FastEmbed + API embeddin
 ```bash
 git clone https://github.com/pvliesdonk/markdown-vault-mcp.git
 cd markdown-vault-mcp
-uv sync --all-extras --dev
+uv sync --all-extras --all-groups
 ```
 
 ### Docker
@@ -83,6 +83,8 @@ docker pull ghcr.io/pvliesdonk/markdown-vault-mcp:latest
 
 <!-- DOMAIN-START -->
 The Docker image uses `[all]` (MCP + FastEmbed + API embeddings). By default, semantic search works locally with FastEmbed and can switch to Ollama/OpenAI when configured. A `compose.yml` ships at the repo root as a starting point — copy `.env.example` to `.env`, edit, and `docker compose up -d`.
+
+To attach a remote Python debugger (development only — the protocol is unauthenticated), see [Remote debugging](docs/deployment/docker.md#remote-debugging).
 
 ### Linux packages (.deb / .rpm)
 
@@ -160,6 +162,10 @@ markdown-vault-mcp serve
 | `examples/ifcraftcorpus.env` | Strict frontmatter enforcement, read-only corpus |
 
 For reverse proxy (Traefik) and deployment setup, see [`docs/deployment.md`](docs/deployment.md).
+
+### Server info
+
+The server registers a built-in `get_server_info` tool (via `fastmcp_pvl_core.register_server_info_tool`) so operators can confirm the deployed version with a single MCP call. The response carries `server_name`, `server_version`, and `core_version`. Wire upstream version reporting (when applicable) inside the `DOMAIN-UPSTREAM-START` / `DOMAIN-UPSTREAM-END` sentinel in `src/markdown_vault_mcp/server.py`.
 
 ## Configuration
 
@@ -503,7 +509,7 @@ For setup instructions, troubleshooting, and provider-specific guides, see the [
 ```bash
 git clone https://github.com/pvliesdonk/markdown-vault-mcp.git
 cd markdown-vault-mcp
-uv sync --all-extras --dev
+uv sync --all-extras --all-groups
 
 # Run tests
 uv run python -m pytest tests/ -x -q
@@ -539,7 +545,7 @@ CI workflows reference three repository secrets. Configure them via **Settings �
 
 ```bash
 rm -rf .venv
-uv sync --all-extras --dev
+uv sync --all-extras --all-groups
 ```
 
 `uv run python -m pytest` also works as a one-shot workaround.

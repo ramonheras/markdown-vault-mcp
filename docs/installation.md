@@ -47,7 +47,7 @@ uv pip install markdown-vault-mcp[all]
 ```bash
 git clone https://github.com/pvliesdonk/markdown-vault-mcp.git
 cd markdown-vault-mcp
-pip install -e ".[all,dev]"
+uv sync --all-extras --all-groups
 ```
 
 ## Docker
@@ -123,3 +123,12 @@ markdown-vault-mcp --help
 export MARKDOWN_VAULT_MCP_SOURCE_DIR=/path/to/your/markdown/files
 markdown-vault-mcp search "hello world"
 ```
+
+<!-- DOMAIN-INSTALL-EXTRA-START -->
+
+## Project-specific notes
+
+_Add domain-specific install notes here, e.g. system dependencies, optional
+extras, or custom configuration steps._
+
+<!-- DOMAIN-INSTALL-EXTRA-END -->

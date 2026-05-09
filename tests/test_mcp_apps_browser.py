@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 from fastmcp import Client
 
+from markdown_vault_mcp._server_apps import _hashed
 from markdown_vault_mcp.server import make_server
 
 if TYPE_CHECKING:
@@ -155,7 +156,7 @@ class TestBrowserDataTools:
     async def test_vault_list_root(self) -> None:
         server = make_server()
         async with Client(server) as client:
-            result = await client.call_tool("vault___vault_list", {})
+            result = await client.call_tool(_hashed("vault_list"), {})
             data = _parse_tool_data(result)
             assert "folders" in data
             assert "notes" in data
@@ -168,7 +169,7 @@ class TestBrowserDataTools:
         server = make_server()
         async with Client(server) as client:
             result = await client.call_tool(
-                "vault___vault_list", {"folder": "subfolder"}
+                _hashed("vault_list"), {"folder": "subfolder"}
             )
             data = _parse_tool_data(result)
             assert "folders" in data
@@ -177,7 +178,9 @@ class TestBrowserDataTools:
     async def test_vault_read_note(self) -> None:
         server = make_server()
         async with Client(server) as client:
-            result = await client.call_tool("vault___vault_read", {"path": "simple.md"})
+            result = await client.call_tool(
+                _hashed("vault_read"), {"path": "simple.md"}
+            )
             data = _parse_tool_data(result)
             assert data["path"] == "simple.md"
             assert "title" in data
@@ -190,7 +193,7 @@ class TestBrowserDataTools:
         server = make_server()
         async with Client(server) as client:
             result = await client.call_tool(
-                "vault___vault_read", {"path": "full_frontmatter.md"}
+                _hashed("vault_read"), {"path": "full_frontmatter.md"}
             )
             data = _parse_tool_data(result)
             assert isinstance(data["frontmatter"], dict)
@@ -200,7 +203,7 @@ class TestBrowserDataTools:
         server = make_server()
         async with Client(server) as client:
             result = await client.call_tool(
-                "vault___vault_search", {"query": "simple", "mode": "keyword"}
+                _hashed("vault_search"), {"query": "simple", "mode": "keyword"}
             )
             data = _parse_tool_data(result)
             assert isinstance(data, list)
@@ -214,7 +217,7 @@ class TestBrowserDataTools:
         server = make_server()
         async with Client(server) as client:
             result = await client.call_tool(
-                "vault___vault_search",
+                _hashed("vault_search"),
                 {"query": "document", "mode": "keyword", "limit": 2},
             )
             data = _parse_tool_data(result)
@@ -223,7 +226,7 @@ class TestBrowserDataTools:
     async def test_notes_have_kind_field(self) -> None:
         server = make_server()
         async with Client(server) as client:
-            result = await client.call_tool("vault___vault_list", {})
+            result = await client.call_tool(_hashed("vault_list"), {})
             data = _parse_tool_data(result)
             for note in data["notes"]:
                 assert "kind" in note

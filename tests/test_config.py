@@ -1023,21 +1023,25 @@ class TestBuildRemoteAuthConfig:
         config = CollectionConfig(source_dir=Path("/tmp"))
         assert build_remote_auth(config) is None
 
-    def test_returns_none_on_discovery_failure(self) -> None:
+    def test_raises_on_discovery_failure(self) -> None:
         from unittest.mock import patch
 
         import httpx
+        from fastmcp_pvl_core import ConfigurationError
 
         config = CollectionConfig(
             source_dir=Path("/tmp"),
             base_url="https://mcp.example.com",
             oidc_config_url="https://auth.example.com/.well-known/openid-configuration",
         )
-        # Core's build_remote_auth catches httpx.HTTPError + ValueError (the
-        # realistic discovery failures) — narrower than MV's old bare
-        # ``except Exception``.  A bare Exception now propagates by design.
-        with patch("httpx.get", side_effect=httpx.ConnectError("fail")):
-            assert build_remote_auth(config) is None
+        # pvl-core 2.0 changed the contract: discovery failures now raise
+        # ConfigurationError instead of returning None — fail-fast at startup
+        # rather than silently disabling auth on a misconfigured deployment.
+        with (
+            patch("httpx.get", side_effect=httpx.ConnectError("fail")),
+            pytest.raises(ConfigurationError, match="OIDC discovery failed"),
+        ):
+            build_remote_auth(config)
 
     def test_happy_path(self) -> None:
         from unittest.mock import MagicMock, patch

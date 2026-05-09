@@ -4,6 +4,7 @@ A generic markdown collection [MCP](https://modelcontextprotocol.io/) server wit
 
 Point it at a directory of Markdown files — an Obsidian vault, a docs folder, a Zettelkasten, a PARA vault — and it exposes search, read, write, and edit tools over the [Model Context Protocol](https://modelcontextprotocol.io/).
 
+<!-- DOMAIN-INDEX-FEATURES-START -->
 ## Features
 
 - **Full-text search** — SQLite FTS5 with BM25 scoring, porter stemming
@@ -19,7 +20,9 @@ Point it at a directory of Markdown files — an Obsidian vault, a docs folder, 
 - **MCP resources** — vault configuration, statistics, tags, folders, document outlines, similar notes, and recent notes
 - **MCP prompts** — summarize, research, discuss, create from template, compare, and find related notes
 - **MCP Apps** — four browser-based views (Context Card, Graph Explorer, Vault Browser, Note Preview) for clients supporting the MCP Apps protocol
+<!-- DOMAIN-INDEX-FEATURES-END -->
 
+<!-- DOMAIN-INDEX-USE-CASES-START -->
 ## What you can do with it
 
 A few flows the server enables with an LLM on top — none of these require a bespoke prompt:
@@ -91,3 +94,4 @@ The library is fully synchronous — no asyncio in core modules. The MCP server 
 ## License
 
 [MIT](https://github.com/pvliesdonk/markdown-vault-mcp/blob/main/LICENSE)
+<!-- DOMAIN-INDEX-USE-CASES-END -->

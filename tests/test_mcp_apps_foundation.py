@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 from fastmcp import Client
 
-from markdown_vault_mcp._server_apps import _compute_claude_app_domain
+from markdown_vault_mcp._server_apps import _compute_claude_app_domain, _hashed
 from markdown_vault_mcp.server import make_server
 
 if TYPE_CHECKING:
@@ -378,7 +378,7 @@ class TestAppOnlyTools:
         server = make_server()
         async with Client(server) as client:
             result = await client.call_tool(
-                "vault___vault_context", {"path": "simple.md"}
+                _hashed("vault_context"), {"path": "simple.md"}
             )
             data = _parse_tool_data(result)
             assert data["path"] == "simple.md"
@@ -392,7 +392,7 @@ class TestAppOnlyTools:
         server = make_server()
         async with Client(server) as client:
             result = await client.call_tool(
-                "vault___vault_graph_neighborhood", {"path": "simple.md"}
+                _hashed("vault_graph_neighborhood"), {"path": "simple.md"}
             )
             data = _parse_tool_data(result)
             assert "nodes" in data
@@ -406,7 +406,7 @@ class TestAppOnlyTools:
     async def test_vault_graph_hubs(self) -> None:
         server = make_server()
         async with Client(server) as client:
-            result = await client.call_tool("vault___vault_graph_hubs", {})
+            result = await client.call_tool(_hashed("vault_graph_hubs"), {})
             data = _parse_tool_data(result)
             assert "nodes" in data
             assert "edges" in data
@@ -414,7 +414,7 @@ class TestAppOnlyTools:
     async def test_vault_list_root(self) -> None:
         server = make_server()
         async with Client(server) as client:
-            result = await client.call_tool("vault___vault_list", {})
+            result = await client.call_tool(_hashed("vault_list"), {})
             data = _parse_tool_data(result)
             assert "folders" in data
             assert "notes" in data
@@ -424,7 +424,7 @@ class TestAppOnlyTools:
         """Root listing must not include notes from subfolders."""
         server = make_server()
         async with Client(server) as client:
-            result = await client.call_tool("vault___vault_list", {})
+            result = await client.call_tool(_hashed("vault_list"), {})
             data = _parse_tool_data(result)
             for note in data["notes"]:
                 assert "/" not in note["path"], (
@@ -436,7 +436,7 @@ class TestAppOnlyTools:
         server = make_server()
         async with Client(server) as client:
             result = await client.call_tool(
-                "vault___vault_list", {"folder": "subfolder"}
+                _hashed("vault_list"), {"folder": "subfolder"}
             )
             data = _parse_tool_data(result)
             for note in data["notes"]:
@@ -465,7 +465,7 @@ class TestAppOnlyTools:
             monkeypatch.delenv(var, raising=False)
         server = make_server()
         async with Client(server) as client:
-            result = await client.call_tool("vault___vault_list", {})
+            result = await client.call_tool(_hashed("vault_list"), {})
             data = _parse_tool_data(result)
             # 'ai' must appear even though list_folders() only returns 'ai/llm'
             assert "ai" in data["folders"], (
@@ -478,7 +478,9 @@ class TestAppOnlyTools:
     async def test_vault_read(self) -> None:
         server = make_server()
         async with Client(server) as client:
-            result = await client.call_tool("vault___vault_read", {"path": "simple.md"})
+            result = await client.call_tool(
+                _hashed("vault_read"), {"path": "simple.md"}
+            )
             data = _parse_tool_data(result)
             assert data["path"] == "simple.md"
             assert "content" in data
@@ -488,7 +490,7 @@ class TestAppOnlyTools:
         server = make_server()
         async with Client(server) as client:
             result = await client.call_tool(
-                "vault___vault_read", {"path": "does-not-exist.md"}
+                _hashed("vault_read"), {"path": "does-not-exist.md"}
             )
             data = _parse_tool_data(result)
             assert data is None
@@ -497,7 +499,7 @@ class TestAppOnlyTools:
         server = make_server()
         async with Client(server) as client:
             result = await client.call_tool(
-                "vault___vault_search", {"query": "hello", "mode": "keyword"}
+                _hashed("vault_search"), {"query": "hello", "mode": "keyword"}
             )
             data = _parse_tool_data(result)
             assert isinstance(data, list)
@@ -596,7 +598,7 @@ class TestAppToolData:
     async def test_vault_graph_hubs(self) -> None:
         server = make_server()
         async with Client(server) as client:
-            result = await client.call_tool("vault___vault_graph_hubs", {})
+            result = await client.call_tool(_hashed("vault_graph_hubs"), {})
             data = _parse_tool_data(result)
             assert "nodes" in data
             assert "edges" in data
@@ -604,7 +606,7 @@ class TestAppToolData:
     async def test_vault_list_root(self) -> None:
         server = make_server()
         async with Client(server) as client:
-            result = await client.call_tool("vault___vault_list", {})
+            result = await client.call_tool(_hashed("vault_list"), {})
             data = _parse_tool_data(result)
             assert "folders" in data
             assert "notes" in data
@@ -615,7 +617,9 @@ class TestAppToolData:
     async def test_vault_read_note(self) -> None:
         server = make_server()
         async with Client(server) as client:
-            result = await client.call_tool("vault___vault_read", {"path": "simple.md"})
+            result = await client.call_tool(
+                _hashed("vault_read"), {"path": "simple.md"}
+            )
             data = _parse_tool_data(result)
             assert data["path"] == "simple.md"
             assert "content" in data
@@ -624,7 +628,7 @@ class TestAppToolData:
         server = make_server()
         async with Client(server) as client:
             result = await client.call_tool(
-                "vault___vault_search", {"query": "simple", "mode": "keyword"}
+                _hashed("vault_search"), {"query": "simple", "mode": "keyword"}
             )
             data = _parse_tool_data(result)
             assert isinstance(data, list)
@@ -642,7 +646,7 @@ class TestAppToolData:
         server = make_server()
         async with Client(server) as client:
             result = await client.call_tool(
-                "vault___vault_context", {"path": "does-not-exist.md"}
+                _hashed("vault_context"), {"path": "does-not-exist.md"}
             )
             data = _parse_tool_data(result)
             assert "error" in data
@@ -662,7 +666,7 @@ class TestAppToolData:
         server = make_server()
         async with Client(server) as client:
             result = await client.call_tool(
-                "vault___vault_search", {"query": "test", "mode": "semantic"}
+                _hashed("vault_search"), {"query": "test", "mode": "semantic"}
             )
             data = _parse_tool_data(result)
             assert isinstance(data, list)
@@ -678,7 +682,7 @@ class TestAppToolLinkedData:
         server = make_server()
         async with Client(server) as client:
             result = await client.call_tool(
-                "vault___vault_graph_neighborhood", {"path": "linked_a.md", "depth": 2}
+                _hashed("vault_graph_neighborhood"), {"path": "linked_a.md", "depth": 2}
             )
             data = _parse_tool_data(result)
             assert "nodes" in data
@@ -691,7 +695,7 @@ class TestAppToolLinkedData:
         server = make_server()
         async with Client(server) as client:
             result = await client.call_tool(
-                "vault___vault_graph_neighborhood", {"path": "linked_a.md", "depth": 2}
+                _hashed("vault_graph_neighborhood"), {"path": "linked_a.md", "depth": 2}
             )
             data = _parse_tool_data(result)
             edge_keys = [(e["from"], e["to"]) for e in data["edges"]]
@@ -700,7 +704,7 @@ class TestAppToolLinkedData:
     async def test_vault_graph_hubs_with_links(self) -> None:
         server = make_server()
         async with Client(server) as client:
-            result = await client.call_tool("vault___vault_graph_hubs", {})
+            result = await client.call_tool(_hashed("vault_graph_hubs"), {})
             data = _parse_tool_data(result)
             assert "nodes" in data
             assert "edges" in data
@@ -711,7 +715,7 @@ class TestAppToolLinkedData:
         server = make_server()
         async with Client(server) as client:
             result = await client.call_tool(
-                "vault___vault_context", {"path": "linked_a.md"}
+                _hashed("vault_context"), {"path": "linked_a.md"}
             )
             data = _parse_tool_data(result)
             assert data["path"] == "linked_a.md"

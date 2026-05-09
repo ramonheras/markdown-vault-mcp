@@ -2,6 +2,8 @@
 
 markdown-vault-mcp exposes MCP tools across several categories. Write tools are only available when `MARKDOWN_VAULT_MCP_READ_ONLY=false`.
 
+<!-- DOMAIN-TOOLS-LIST-START -->
+
 ## Quick Reference
 
 | Tool | Category | Description |
@@ -520,3 +522,4 @@ Open the Context Card view for a specific note, showing backlinks, outlinks, sim
 | `path` | string | Relative path to the document |
 
 **Returns:** For Apps-capable clients, opens the Context Card. For other clients, returns the context dossier as text.
+<!-- DOMAIN-TOOLS-LIST-END -->

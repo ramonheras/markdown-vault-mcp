@@ -32,10 +32,37 @@ from ._server_deps import get_collection
 logger = logging.getLogger(__name__)
 
 _VAULT_APP_URI = "ui://vault/app.html"
+_VAULT_APP_NAME = "vault"
 
 # All SPA dependencies are vendored inline (see scripts/vendor_spa.py).
 # No external CDN domains needed at runtime.
 _CDN_RESOURCE_DOMAINS: list[str] = []
+
+
+def _app_tool_meta(tool_name: str) -> dict[str, Any]:
+    """Build the per-tool meta dict for an app-only tool.
+
+    fastmcp 3.2.4 routes ``<hash>_<tool_name>`` calls via
+    :meth:`fastmcp.server.providers.base.Provider.get_tool_by_hash`, which
+    matches on ``meta["fastmcp"]["_tool_hash"]``.  Without the hash, the
+    SPA can never reach the tool — visibility=["app"] hides it from the
+    display-name path.
+    """
+    from fastmcp.server.providers.addressing import hash_tool
+
+    return {
+        "fastmcp": {
+            "app": _VAULT_APP_NAME,
+            "_tool_hash": hash_tool(_VAULT_APP_NAME, tool_name),
+        }
+    }
+
+
+def _hashed(tool_name: str) -> str:
+    """Return the ``<hash>_<tool_name>`` callable name for an app-only tool."""
+    from fastmcp.server.providers.addressing import hashed_backend_name
+
+    return hashed_backend_name(_VAULT_APP_NAME, tool_name)
 
 
 def _compute_claude_app_domain() -> str | None:
@@ -65,7 +92,28 @@ def _compute_claude_app_domain() -> str | None:
 # SPA shell HTML — loaded from static/app.html
 # ---------------------------------------------------------------------------
 
-_SPA_SHELL_HTML = (
+
+def _rewrite_spa_app_tool_calls(html: str) -> str:
+    """Rewrite SPA's ``vault___<tool>`` literals to fastmcp 3.2.4's hash form.
+
+    fastmcp 3.2.4 dropped the ``<app>___<tool>`` underscore-separator
+    routing introduced in 3.2.0 (commit a557b90); the dispatcher now only
+    accepts display names and ``<hex_hash>_<tool>`` (computed by
+    :func:`fastmcp.server.providers.addressing.hashed_backend_name`).  Do
+    the substitution once at import time so the wire HTML the SPA loads
+    is already addressed correctly — keeps the source HTML diff-readable
+    while letting the running app reach its tools.
+    """
+    import re
+
+    return re.sub(
+        r"vault___(vault_[a-z_]+)",
+        lambda m: _hashed(m.group(1)),
+        html,
+    )
+
+
+_SPA_SHELL_HTML = _rewrite_spa_app_tool_calls(
     importlib.resources.files("markdown_vault_mcp")
     .joinpath("static/app.html")
     .read_text(encoding="utf-8")
@@ -190,7 +238,7 @@ def register_apps(mcp: FastMCP) -> None:
             "idempotentHint": True,
             "openWorldHint": False,
         },
-        meta={"fastmcp": {"app": "vault"}},
+        meta=_app_tool_meta("vault_context"),
         app=AppConfig(resourceUri=_VAULT_APP_URI, visibility=["app"]),
     )
     async def vault_context(
@@ -281,7 +329,7 @@ def register_apps(mcp: FastMCP) -> None:
             "idempotentHint": True,
             "openWorldHint": False,
         },
-        meta={"fastmcp": {"app": "vault"}},
+        meta=_app_tool_meta("vault_graph_neighborhood"),
         app=AppConfig(resourceUri=_VAULT_APP_URI, visibility=["app"]),
     )
     async def vault_graph_neighborhood(
@@ -454,7 +502,7 @@ def register_apps(mcp: FastMCP) -> None:
             "idempotentHint": True,
             "openWorldHint": False,
         },
-        meta={"fastmcp": {"app": "vault"}},
+        meta=_app_tool_meta("vault_graph_hubs"),
         app=AppConfig(resourceUri=_VAULT_APP_URI, visibility=["app"]),
     )
     async def vault_graph_hubs(
@@ -545,7 +593,7 @@ def register_apps(mcp: FastMCP) -> None:
             "idempotentHint": True,
             "openWorldHint": False,
         },
-        meta={"fastmcp": {"app": "vault"}},
+        meta=_app_tool_meta("vault_list"),
         app=AppConfig(resourceUri=_VAULT_APP_URI, visibility=["app"]),
     )
     async def vault_list(
@@ -611,7 +659,7 @@ def register_apps(mcp: FastMCP) -> None:
             "idempotentHint": True,
             "openWorldHint": False,
         },
-        meta={"fastmcp": {"app": "vault"}},
+        meta=_app_tool_meta("vault_read"),
         app=AppConfig(resourceUri=_VAULT_APP_URI, visibility=["app"]),
     )
     async def vault_read(
@@ -649,7 +697,7 @@ def register_apps(mcp: FastMCP) -> None:
             "idempotentHint": True,
             "openWorldHint": False,
         },
-        meta={"fastmcp": {"app": "vault"}},
+        meta=_app_tool_meta("vault_search"),
         app=AppConfig(resourceUri=_VAULT_APP_URI, visibility=["app"]),
     )
     async def vault_search(

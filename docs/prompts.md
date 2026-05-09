@@ -2,6 +2,7 @@
 
 Prompt templates guide the LLM through multi-step workflows using the vault tools. Write prompts (`research`, `discuss`, `create_from_template`) are only available when `MARKDOWN_VAULT_MCP_READ_ONLY=false`.
 
+<!-- DOMAIN-PROMPTS-LIST-START -->
 ## Quick Reference
 
 | Prompt | Parameters | Category | Description |
@@ -218,3 +219,4 @@ In Claude Code, MCP prompts appear in the slash-command menu after the server is
 Every prompt can be invoked from prose ("use the propose-links prompt with scope='1-Projects'"). The model resolves the name and calls the prompt. This is the fallback — more typing, but works in any MCP client.
 
 The ambient-pattern flows above *only* use plain conversation; they don't have a prompt name to invoke. The trade-off: no menu shortcut, but no prompt to maintain either.
+<!-- DOMAIN-PROMPTS-LIST-END -->

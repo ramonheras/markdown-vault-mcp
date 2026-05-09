@@ -881,9 +881,11 @@ def build_remote_auth(config: CollectionConfig) -> Any:
     """Build a :class:`RemoteAuthProvider` from OIDC discovery.
 
     Delegates to :func:`fastmcp_pvl_core.build_remote_auth`.  Returns
-    ``None`` when ``base_url`` / ``oidc_config_url`` are missing, when
-    ``httpx`` is not installed, when discovery fails, or when the
-    discovery document is missing required keys.
+    ``None`` when ``base_url`` / ``oidc_config_url`` are missing.
+    Raises :class:`fastmcp_pvl_core.ConfigurationError` when ``httpx``
+    is not installed, when discovery fails, or when the discovery
+    document is missing required keys (fail-fast at startup, pvl-core
+    2.0 contract).
     """
     return _core_build_remote_auth(_server_from_collection(config))
 

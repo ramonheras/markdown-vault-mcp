@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 from fastmcp import Client
 
+from markdown_vault_mcp._server_apps import _hashed
 from markdown_vault_mcp.server import make_server
 
 if TYPE_CHECKING:
@@ -105,7 +106,7 @@ class TestContextCardHTML:
     async def test_call_server_tool_for_context(self) -> None:
         html = await self._get_html()
         assert "callServerTool" in html
-        assert "vault___vault_context" in html
+        assert _hashed("vault_context") in html
 
     async def test_clickable_link_items(self) -> None:
         html = await self._get_html()
@@ -153,7 +154,7 @@ class TestVaultContextToolData:
         server = make_server()
         async with Client(server) as client:
             result = await client.call_tool(
-                "vault___vault_context", {"path": "simple.md"}
+                _hashed("vault_context"), {"path": "simple.md"}
             )
             data = _parse_tool_data(result)
             assert data["path"] == "simple.md"
@@ -171,7 +172,7 @@ class TestVaultContextToolData:
         server = make_server()
         async with Client(server) as client:
             result = await client.call_tool(
-                "vault___vault_context", {"path": "full_frontmatter.md"}
+                _hashed("vault_context"), {"path": "full_frontmatter.md"}
             )
             data = _parse_tool_data(result)
             assert data["path"] == "full_frontmatter.md"
