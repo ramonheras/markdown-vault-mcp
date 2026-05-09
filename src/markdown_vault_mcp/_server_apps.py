@@ -47,10 +47,12 @@ _VAULT_APP_URI = "ui://vault/app.html"
 _VAULT_APP_NAME = "vault"
 
 # Single source of truth for the app-only tool names registered below.
-# ``_app_tool_meta`` rejects unknown names; ``_rewrite_spa_app_tool_calls``
-# rejects HTML literals not in this set; the SPA-side cross-check in
-# ``register_apps`` rejects expected names that aren't in the rewritten
-# HTML.  Add a name here when adding a new ``vault_*`` app tool.
+# Three independent checks fire at module import (before ``register_apps``
+# ever runs): ``_app_tool_meta`` rejects unknown names at decorator-call
+# time; ``_rewrite_spa_app_tool_calls`` rejects HTML literals not in this
+# set, and rejects names in this set that the SPA never calls.  Add a
+# name here when adding a new ``vault_*`` app tool — and add the matching
+# ``vault___<name>`` literal to ``static/app.html``.
 _VAULT_APP_TOOL_NAMES: frozenset[str] = frozenset(
     {
         "vault_context",
