@@ -16,6 +16,7 @@ import hashlib
 import importlib.resources
 import logging
 import os
+import re
 from dataclasses import asdict
 from typing import Any, Literal
 
@@ -47,12 +48,13 @@ _VAULT_APP_URI = "ui://vault/app.html"
 _VAULT_APP_NAME = "vault"
 
 # Single source of truth for the app-only tool names registered below.
-# Three independent checks fire at module import (before ``register_apps``
-# ever runs): ``_app_tool_meta`` rejects unknown names at decorator-call
-# time; ``_rewrite_spa_app_tool_calls`` rejects HTML literals not in this
-# set, and rejects names in this set that the SPA never calls.  Add a
-# name here when adding a new ``vault_*`` app tool — and add the matching
-# ``vault___<name>`` literal to ``static/app.html``.
+# Two checks fire at module import (via the ``_SPA_SHELL_HTML`` assignment):
+# ``_rewrite_spa_app_tool_calls`` rejects HTML literals not in this set, and
+# rejects declared names the SPA never calls.  A third check fires at
+# ``register_apps()`` call time (i.e. inside ``make_server()``):
+# ``_app_tool_meta`` is invoked as a decorator-arg expression and rejects
+# unknown names.  Add a name here when adding a new ``vault_*`` app tool —
+# and add the matching ``vault___<name>`` literal to ``static/app.html``.
 _VAULT_APP_TOOL_NAMES: frozenset[str] = frozenset(
     {
         "vault_context",
@@ -147,8 +149,6 @@ def _rewrite_spa_app_tool_calls(html: str) -> str:
       (SPA references a typo, or the constant is missing a tool the SPA
       already calls).
     """
-    import re
-
     captured: set[str] = set()
 
     def _capture(m: re.Match[str]) -> str:
