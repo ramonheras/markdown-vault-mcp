@@ -17,29 +17,6 @@ All configuration is via environment variables. Most use the `MARKDOWN_VAULT_MCP
 | `MARKDOWN_VAULT_MCP_TEMPLATES_FOLDER` | string | `_templates` | No | Relative folder path used by the `create_from_template` prompt to discover/read template files |
 | `MARKDOWN_VAULT_MCP_PROMPTS_FOLDER` | path | — | No | Path to a directory of `.md` prompt files that extend or override built-in prompts |
 
-## MCP File Exchange
-
-These variables control [MCP File Exchange](guides/file-exchange.md)
-participation — pass-by-reference file transfer between co-deployed
-servers (and HTTP fallback for remote clients). All are optional; the
-defaults are sensible for both stdio and HTTP deployments.
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `MARKDOWN_VAULT_MCP_FILE_EXCHANGE_ENABLED` | `true` on HTTP/SSE, `false` on stdio | Master switch. Set `false` to opt out entirely. |
-| `MARKDOWN_VAULT_MCP_FILE_EXCHANGE_PRODUCE` | `true` | Allow this server to mint `FileRef` objects via `handle.publish(...)`. |
-| `MARKDOWN_VAULT_MCP_FILE_EXCHANGE_CONSUME` | `true` | Master toggle for the consumer side. **Only effective when `consumer_sink=` is wired in `server.py`** — without that argument, `fetch_file` is never registered no matter how this var is set. See [the guide](guides/file-exchange.md#consuming-files-consumer_sink). |
-| `MARKDOWN_VAULT_MCP_FILE_EXCHANGE_TTL` | `3600` | Lifetime in seconds for download links and exchange-volume records. |
-
-The deployer also controls three **unprefixed** environment variables
-shared by every co-deployed server:
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `MCP_EXCHANGE_DIR` | unset | Path to a directory shared between co-deployed MCP servers. When set, the `exchange://` transfer method activates; when unset, only the HTTP method is available. |
-| `MCP_EXCHANGE_ID` | persisted in `.exchange-id` | Optional explicit exchange-group identifier; first server to start writes a UUID into `${MCP_EXCHANGE_DIR}/.exchange-id`, subsequent starts must agree. |
-| `MCP_EXCHANGE_NAMESPACE` | the server's `namespace=` argument | Override the namespace used in `exchange://` URIs for this process. |
-
 <!-- DOMAIN-CONFIG-VARS-START -->
 ## Server Identity
 

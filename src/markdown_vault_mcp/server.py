@@ -24,7 +24,6 @@ from fastmcp_pvl_core import (
     ArtifactStore,
     ServerConfig,
     build_auth,
-    register_file_exchange,
     register_server_info_tool,
     resolve_auth_mode,
     wire_middleware_stack,
@@ -134,11 +133,7 @@ def make_server(transport: str = "stdio") -> FastMCP:
     Args:
         transport: ``"stdio"`` / ``"http"`` / ``"sse"``.  Used for the
             ``ArtifactStore`` route guard (HTTP-only) and as ``transport=%s``
-            in the startup log.  MCP File Exchange wiring (when enabled) is
-            gated by ``register_file_exchange`` reading
-            ``MARKDOWN_VAULT_MCP_TRANSPORT`` / ``FASTMCP_TRANSPORT`` and
-            ``MARKDOWN_VAULT_MCP_FILE_EXCHANGE_ENABLED`` (default true on
-            HTTP/SSE, false on stdio).
+            in the startup log.
 
     Returns:
         A fully configured :class:`~fastmcp.FastMCP` instance ready to run.
@@ -153,9 +148,11 @@ def make_server(transport: str = "stdio") -> FastMCP:
         instructions = _build_default_instructions(read_only=is_read_only)
 
     auth = build_auth(config.server)
-    # Collapse to "none" whenever build_auth actually returned None (e.g.
-    # OIDC discovery failed) so the log reflects the real security posture,
-    # not whatever resolve_auth_mode would report from field presence alone.
+    # build_auth returns None only for mode="none" or precondition-miss inside an
+    # OIDC builder (missing required fields).  pvl-core 2.0 raises ConfigurationError
+    # on actual discovery failures (httpx missing, network error, malformed discovery
+    # doc), so this no longer needs to defend against the "discovery silently failed"
+    # case — fail-fast at startup means we never reach this line in that scenario.
     auth_mode = resolve_auth_mode(config.server) if auth is not None else "none"
     if auth_mode == "none":
         logger.warning(
@@ -216,6 +213,10 @@ def make_server(transport: str = "stdio") -> FastMCP:
         prompts_folder=config.prompts_folder,
     )
 
+    # ``register_server_info_tool`` is intentionally read-only and stays
+    # enabled in read-only mode (no ``tags={"write"}``) — operators need
+    # ``get_server_info`` to confirm the deployed version regardless of
+    # the read/write posture.
     register_server_info_tool(
         mcp,
         server_name=server_name,
@@ -251,17 +252,13 @@ def make_server(transport: str = "stdio") -> FastMCP:
         ArtifactStore.register_route(mcp, artifact_store)
     # DOMAIN-WIRING-END
 
-    # To publish files from a tool body, capture the returned handle
-    # — see docs/guides/file-exchange.md for the module-level singleton
-    # pattern (e.g. ``_file_exchange = register_file_exchange(...)``).
-    register_file_exchange(
-        mcp,
-        namespace="markdown-vault-mcp",
-        env_prefix=_ENV_PREFIX,
-        transport="auto",
-        # produces=("application/octet-stream",),  # uncomment + customise per project
-        # consumer_sink=_my_sink,                  # uncomment if this server consumes file_refs
-    )
+    # NOTE: pvl-core 2.0's ``register_file_exchange`` registers a
+    # spec-compliant ``create_download_link(origin_id, ttl_seconds)``
+    # tool that collides with MV's existing ``create_download_link(path,
+    # ttl_seconds)`` tool above.  Wiring both silently shadows one or the
+    # other depending on registration order.  Migration tracked in #438;
+    # do NOT add ``register_file_exchange(mcp, ...)`` here without first
+    # resolving the name collision.
 
     # --- Visibility: hide write-tagged components in read-only mode ---
 

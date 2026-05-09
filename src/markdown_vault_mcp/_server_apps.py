@@ -23,6 +23,18 @@ from fastmcp import FastMCP
 from fastmcp.apps import AppConfig, ResourceCSP
 from fastmcp.dependencies import Depends
 
+try:
+    from fastmcp.server.providers.addressing import (
+        hash_tool,
+        hashed_backend_name,
+    )
+except ImportError as exc:  # pragma: no cover - dep-pin guard
+    raise ImportError(
+        "fastmcp.server.providers.addressing is required for the MCP Apps "
+        "SPA tool routing (fastmcp >= 3.2.4). Pin fastmcp accordingly in "
+        "pyproject.toml."
+    ) from exc
+
 from markdown_vault_mcp.collection import Collection
 from markdown_vault_mcp.config import _ENV_PREFIX
 
@@ -33,6 +45,22 @@ logger = logging.getLogger(__name__)
 
 _VAULT_APP_URI = "ui://vault/app.html"
 _VAULT_APP_NAME = "vault"
+
+# Single source of truth for the app-only tool names registered below.
+# ``_app_tool_meta`` rejects unknown names; ``_rewrite_spa_app_tool_calls``
+# rejects HTML literals not in this set; the SPA-side cross-check in
+# ``register_apps`` rejects expected names that aren't in the rewritten
+# HTML.  Add a name here when adding a new ``vault_*`` app tool.
+_VAULT_APP_TOOL_NAMES: frozenset[str] = frozenset(
+    {
+        "vault_context",
+        "vault_graph_neighborhood",
+        "vault_graph_hubs",
+        "vault_list",
+        "vault_read",
+        "vault_search",
+    }
+)
 
 # All SPA dependencies are vendored inline (see scripts/vendor_spa.py).
 # No external CDN domains needed at runtime.
@@ -47,9 +75,16 @@ def _app_tool_meta(tool_name: str) -> dict[str, Any]:
     matches on ``meta["fastmcp"]["_tool_hash"]``.  Without the hash, the
     SPA can never reach the tool — visibility=["app"] hides it from the
     display-name path.
-    """
-    from fastmcp.server.providers.addressing import hash_tool
 
+    Raises ``ValueError`` if *tool_name* isn't in
+    :data:`_VAULT_APP_TOOL_NAMES` — keeps the registration sites and the
+    SPA-side validator in agreement on the expected name set.
+    """
+    if tool_name not in _VAULT_APP_TOOL_NAMES:
+        raise ValueError(
+            f"Unknown vault app tool {tool_name!r}; add to "
+            "_VAULT_APP_TOOL_NAMES if this is a new tool."
+        )
     return {
         "fastmcp": {
             "app": _VAULT_APP_NAME,
@@ -60,8 +95,6 @@ def _app_tool_meta(tool_name: str) -> dict[str, Any]:
 
 def _hashed(tool_name: str) -> str:
     """Return the ``<hash>_<tool_name>`` callable name for an app-only tool."""
-    from fastmcp.server.providers.addressing import hashed_backend_name
-
     return hashed_backend_name(_VAULT_APP_NAME, tool_name)
 
 
@@ -103,14 +136,52 @@ def _rewrite_spa_app_tool_calls(html: str) -> str:
     the substitution once at import time so the wire HTML the SPA loads
     is already addressed correctly — keeps the source HTML diff-readable
     while letting the running app reach its tools.
+
+    Raises ``RuntimeError`` if:
+
+    - zero ``vault___<tool>`` literals are found (vendored ``app.html``
+      has drifted or the regex is wrong);
+    - the captured set doesn't match :data:`_VAULT_APP_TOOL_NAMES`
+      (SPA references a typo, or the constant is missing a tool the SPA
+      already calls).
     """
     import re
 
-    return re.sub(
+    captured: set[str] = set()
+
+    def _capture(m: re.Match[str]) -> str:
+        name = m.group(1)
+        captured.add(name)
+        return _hashed(name)
+
+    new_html, count = re.subn(
         r"vault___(vault_[a-z_]+)",
-        lambda m: _hashed(m.group(1)),
+        _capture,
         html,
     )
+    if count == 0:
+        raise RuntimeError(
+            "SPA shell rewrite found zero 'vault___<tool>' literals in "
+            "static/app.html — fastmcp tool addressing has drifted. Check "
+            "that the vendored app.html still uses the underscore-literal "
+            "form expected by _rewrite_spa_app_tool_calls."
+        )
+    unexpected = captured - _VAULT_APP_TOOL_NAMES
+    if unexpected:
+        raise RuntimeError(
+            f"SPA references unknown vault tools: {sorted(unexpected)}. "
+            "Either fix the typo in static/app.html or add the name to "
+            "_VAULT_APP_TOOL_NAMES if it's a real new tool."
+        )
+    missing = _VAULT_APP_TOOL_NAMES - captured
+    if missing:
+        raise RuntimeError(
+            f"SPA HTML doesn't reference declared vault tools: "
+            f"{sorted(missing)}. Either remove the name from "
+            "_VAULT_APP_TOOL_NAMES or wire the SPA to call them."
+        )
+    logger.debug("spa_tool_addressing_rewritten count=%d", count)
+    return new_html
 
 
 _SPA_SHELL_HTML = _rewrite_spa_app_tool_calls(
