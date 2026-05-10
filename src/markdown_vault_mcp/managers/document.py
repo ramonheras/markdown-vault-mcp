@@ -261,10 +261,19 @@ class DocumentManager:
         if not abs_path.is_file():
             return None
 
-        # Enforce MAX_NOTE_READ_BYTES (whole-document reads only — section=
-        # reads short-circuit with an early return above).
-        if self._max_note_read_bytes > 0:
-            size_bytes = abs_path.stat().st_size
+        # Enforce MAX_NOTE_READ_BYTES (.md whole-document reads only — section=
+        # reads short-circuit with an early return above; non-.md paths fall
+        # through to parse_note() and return None on UnicodeDecodeError, same
+        # as historical behaviour, so the cap stays scoped to its env-var name).
+        is_md = path.lower().endswith(".md")
+        if is_md and self._max_note_read_bytes > 0:
+            try:
+                size_bytes = abs_path.stat().st_size
+            except OSError:
+                # File deleted/inaccessible between is_file() and stat() —
+                # match the surrounding parse_note OSError handling at the
+                # bottom of this method (return None, don't raise).
+                return None
             if size_bytes > self._max_note_read_bytes:
                 raise ValueError(
                     f"Document {path!r} is {size_bytes} bytes "

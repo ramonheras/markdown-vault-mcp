@@ -606,3 +606,74 @@ class TestReadNoteSizeGuard:
         msg = str(exc_info.value)
         assert "MAX_NOTE_READ_BYTES" in msg
         assert "section=" in msg
+
+    def test_read_stat_oserror_returns_none(self, tmp_path: Path) -> None:
+        """If stat() races with file deletion between is_file() and the
+        size-guard's stat, the method returns None (matching the
+        surrounding parse_note OSError handling) rather than propagating
+        an unhandled exception.
+
+        Implementation note: claude-review and gemini both flagged the
+        missing test; their suggested ``after_is_file`` flag pattern
+        doesn't work because ``Path.resolve()`` itself calls stat()
+        BEFORE ``is_file()`` (CPython 3.12: pathlib.py:1250 then 892),
+        so the flag gets set on the wrong call.  Filter by caller-frame
+        instead — only raise OSError when the stat() call originates
+        from the size guard at document.py.  Surgical, not heuristic.
+        """
+        import inspect
+        from unittest.mock import patch
+
+        note = tmp_path / "note.md"
+        note.write_text("# Note\n\ncontent that exceeds tiny limit")
+        note_resolved = note.resolve()
+        path_cls = type(note)
+        real_stat = path_cls.stat
+        triggered = [False]
+
+        def stat_with_race(self, *args, **kwargs):  # type: ignore[override]
+            if self == note_resolved:
+                frame = inspect.currentframe().f_back  # type: ignore[union-attr]
+                if frame and "managers/document.py" in frame.f_code.co_filename:
+                    triggered[0] = True
+                    raise OSError("simulated TOCTOU race")
+            return real_stat(self, *args, **kwargs)
+
+        mgr = DocumentManager(
+            fts=FTSIndex(db_path=":memory:"),
+            source_dir=tmp_path,
+            write_lock=threading.RLock(),
+            chunk_strategy=HeadingChunker(),
+            max_note_read_bytes=1,  # guarantees the size guard is entered
+        )
+
+        with patch.object(path_cls, "stat", stat_with_race):
+            result = mgr.read("note.md")
+
+        assert result is None, "expected None on OSError, got a NoteContent"
+        assert triggered[0], (
+            "size-guard stat() never fired — OSError catch was not exercised"
+        )
+
+    def test_read_non_md_path_skips_note_cap(self, tmp_path: Path) -> None:
+        """The note-read cap is scoped to .md files; non-.md paths must not
+        raise the MAX_NOTE_READ_BYTES error (which names a markdown-only
+        alternative `section=`).  parse_note may or may not succeed on the
+        binary depending on whether it happens to decode as UTF-8, but the
+        cap-error specifically must not fire."""
+        big_pdf = tmp_path / "big.pdf"
+        big_pdf.write_bytes(b"%PDF-1.4\n" + b"x" * 4096)  # well above 512 B cap
+
+        mgr = DocumentManager(
+            fts=FTSIndex(db_path=":memory:"),
+            source_dir=tmp_path,
+            write_lock=threading.RLock(),
+            chunk_strategy=HeadingChunker(),
+            max_note_read_bytes=512,
+        )
+        try:
+            mgr.read("big.pdf")
+        except ValueError as exc:
+            assert "MAX_NOTE_READ_BYTES" not in str(exc), (
+                f"non-.md read raised the note-cap error inappropriately; got: {exc}"
+            )
