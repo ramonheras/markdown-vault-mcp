@@ -105,7 +105,7 @@ class CollectionConfig:
             the built-in default list from
             :class:`~markdown_vault_mcp.collection.Collection`.
         max_attachment_size_mb: Maximum attachment file size in megabytes
-            (default ``10.0``).  ``0`` means unlimited.
+            (default ``1.0``).  ``0`` means unlimited.
         max_note_read_bytes: Maximum note content returned by a single read
             in bytes (default ``262144``, i.e. 256 KB).  ``0`` means unlimited.
         templates_folder: Vault-relative folder that holds note templates
@@ -177,7 +177,7 @@ class CollectionConfig:
     git_lfs: bool = True
     git_pull_interval_s: int = 600
     attachment_extensions: list[str] | None = None
-    max_attachment_size_mb: float = 10.0
+    max_attachment_size_mb: float = 1.0  # MB; 0 = unlimited
     max_note_read_bytes: int = 262144  # 256 KB; 0 = unlimited
     templates_folder: str = "_templates"
     prompts_folder: str | None = None
@@ -567,19 +567,19 @@ def load_config() -> CollectionConfig:
             max_attachment_size_mb = float(raw_max_attachment_size)
         except ValueError:
             logger.warning(
-                "load_config: invalid MAX_ATTACHMENT_SIZE_MB=%r, using default 10.0",
+                "load_config: invalid MAX_ATTACHMENT_SIZE_MB=%r, using default 1.0",
                 raw_max_attachment_size,
             )
-            max_attachment_size_mb = 10.0
+            max_attachment_size_mb = 1.0
         else:
             if max_attachment_size_mb < 0:
                 logger.warning(
-                    "load_config: MAX_ATTACHMENT_SIZE_MB=%r is negative, using default 10.0",
+                    "load_config: MAX_ATTACHMENT_SIZE_MB=%r is negative, using default 1.0",
                     max_attachment_size_mb,
                 )
-                max_attachment_size_mb = 10.0
+                max_attachment_size_mb = 1.0
     else:
-        max_attachment_size_mb = 10.0
+        max_attachment_size_mb = 1.0
     logger.debug("load_config: max_attachment_size_mb=%s", max_attachment_size_mb)
 
     raw_max_note_read_bytes = (_env("MAX_NOTE_READ_BYTES") or "").strip()

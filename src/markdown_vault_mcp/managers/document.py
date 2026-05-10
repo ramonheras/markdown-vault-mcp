@@ -102,7 +102,7 @@ class DocumentManager:
         read_only: bool = True,
         exclude_patterns: list[str] | None = None,
         attachment_extensions: list[str] | None = None,
-        max_attachment_size_mb: float = 10.0,
+        max_attachment_size_mb: float = 1.0,
         on_write_callback: Callable[[Path, str, str], None] | None = None,
         on_vector_update: Callable[[ParsedNote], None] | None = None,
         on_vector_dirty: Callable[[str], None] | None = None,

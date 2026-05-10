@@ -136,7 +136,7 @@ class Collection:
         git_pull_interval_s: int = 0,
         exclude_patterns: list[str] | None = None,
         attachment_extensions: list[str] | None = None,
-        max_attachment_size_mb: float = 10.0,
+        max_attachment_size_mb: float = 1.0,
         chunks_per_doc: int = 2,
         snippet_words: int = 200,
         length_downweight_alpha: float = 0.25,
