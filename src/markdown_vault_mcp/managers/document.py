@@ -349,11 +349,13 @@ class DocumentManager:
             limit_bytes = int(self._max_attachment_size_mb * 1024 * 1024)
             if size_bytes > limit_bytes:
                 raise ValueError(
-                    f"Attachment {path!r} is {size_bytes} bytes, which "
-                    f"exceeds the limit of {self._max_attachment_size_mb} MB "
-                    f"({limit_bytes} bytes). "
-                    "Raise MARKDOWN_VAULT_MCP_MAX_ATTACHMENT_SIZE_MB or set "
-                    "it to 0 to disable the limit."
+                    f"Attachment {path!r} is {size_bytes} bytes "
+                    f"({size_bytes / 1024 / 1024:.1f} MB), exceeds "
+                    f"MARKDOWN_VAULT_MCP_MAX_ATTACHMENT_SIZE_MB "
+                    f"({self._max_attachment_size_mb} MB). "
+                    f"Use create_download_link({path!r}) for HTTP transfer, "
+                    f"or raise MARKDOWN_VAULT_MCP_MAX_ATTACHMENT_SIZE_MB if "
+                    f"you need the bytes in context."
                 )
 
         mime_type, _ = mimetypes.guess_type(path)
@@ -531,12 +533,16 @@ class DocumentManager:
             if self._max_attachment_size_mb > 0:
                 limit_bytes = int(self._max_attachment_size_mb * 1024 * 1024)
                 if len(content) > limit_bytes:
+                    size_bytes = len(content)
                     raise ValueError(
-                        f"Content ({len(content)} bytes) exceeds the limit "
-                        f"of {self._max_attachment_size_mb} MB "
-                        f"({limit_bytes} bytes). "
-                        "Raise MARKDOWN_VAULT_MCP_MAX_ATTACHMENT_SIZE_MB or "
-                        "set it to 0 to disable the limit."
+                        f"Attachment {path!r} is {size_bytes} bytes "
+                        f"({size_bytes / 1024 / 1024:.1f} MB), exceeds "
+                        f"MARKDOWN_VAULT_MCP_MAX_ATTACHMENT_SIZE_MB "
+                        f"({self._max_attachment_size_mb} MB). "
+                        f"Use create_upload_link({path!r}) (#443, when available) "
+                        f"for out-of-band upload, or raise "
+                        f"MARKDOWN_VAULT_MCP_MAX_ATTACHMENT_SIZE_MB if you need "
+                        f"to write the bytes through context."
                     )
             created = not abs_path.is_file()
             abs_path.parent.mkdir(parents=True, exist_ok=True)

@@ -450,3 +450,48 @@ class TestCallbacks:
         mgr.delete("alpha.md")
         assert "alpha.md" in dirty_calls
         assert "delete" in write_calls
+
+
+# ---------------------------------------------------------------------------
+# Attachment size-cap error message tests
+# ---------------------------------------------------------------------------
+
+
+class TestReadAttachmentErrorMessage:
+    """The size-cap ValueError must point at create_download_link, not just 'raise the limit'."""
+
+    def test_error_mentions_create_download_link(self, doc_vault: Path) -> None:
+        big_file = doc_vault / "big.bin"
+        big_file.write_bytes(b"x" * (2 * 1024 * 1024))  # 2 MB
+
+        mgr = DocumentManager(
+            fts=FTSIndex(db_path=":memory:"),
+            source_dir=doc_vault,
+            write_lock=threading.RLock(),
+            chunk_strategy=HeadingChunker(),
+            attachment_extensions=["bin"],
+            max_attachment_size_mb=1.0,
+        )
+
+        with pytest.raises(ValueError, match="create_download_link"):
+            mgr.read_attachment("big.bin")
+
+
+class TestWriteAttachmentErrorMessage:
+    """The size-cap ValueError must point at create_upload_link, not just 'raise the limit'."""
+
+    def test_error_mentions_create_upload_link(self, doc_vault: Path) -> None:
+        big_content = b"x" * (2 * 1024 * 1024)  # 2 MB
+
+        mgr = DocumentManager(
+            fts=FTSIndex(db_path=":memory:"),
+            source_dir=doc_vault,
+            write_lock=threading.RLock(),
+            chunk_strategy=HeadingChunker(),
+            attachment_extensions=["bin"],
+            max_attachment_size_mb=1.0,
+            read_only=False,
+        )
+
+        with pytest.raises(ValueError, match="create_upload_link"):
+            mgr.write_attachment("big.bin", big_content)
