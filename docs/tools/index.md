@@ -94,10 +94,11 @@ Read the full content of a document or attachment by path. When combined with se
     When `search` returns a snippet result, pass `result["heading"]` as the `section` parameter to recover the complete chunk: `read(path=result["path"], section=result["heading"])`. If the document has no sub-headings (preamble content), omit `section` to read the whole document.
 
 **Context cost:** every byte returned counts against the LLM's context
-budget.  Reads above `MARKDOWN_VAULT_MCP_MAX_NOTE_READ_BYTES` (default
+budget. Reads above `MARKDOWN_VAULT_MCP_MAX_NOTE_READ_BYTES` (default
 256 KB for `.md`) or `MARKDOWN_VAULT_MCP_MAX_ATTACHMENT_SIZE_MB` (default
-1 MB for binaries) raise an error with the right alternative — `section=`
-for partial markdown reads, `create_download_link()` for binary transfer.
+1 MB for binaries) raise an error with the right alternative —
+`section=result["heading"]` for partial markdown reads (see the tip
+above), `create_download_link()` for binary transfer.
 
 **Returns:**
 
