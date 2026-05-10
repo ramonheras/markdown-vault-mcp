@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -1180,3 +1181,58 @@ def test_search_ranking_config_rejects_malformed_float(
 
     with pytest.raises(ValueError, match="MARKDOWN_VAULT_MCP_LENGTH_DOWNWEIGHT_ALPHA"):
         load_config()
+
+
+class TestMaxNoteReadBytesEnv:
+    """MARKDOWN_VAULT_MCP_MAX_NOTE_READ_BYTES env loader."""
+
+    def test_default_is_262144(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", str(tmp_path))
+        monkeypatch.delenv("MARKDOWN_VAULT_MCP_MAX_NOTE_READ_BYTES", raising=False)
+        config = load_config()
+        assert config.max_note_read_bytes == 262144
+
+    def test_override_via_env(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", str(tmp_path))
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_MAX_NOTE_READ_BYTES", "1048576")
+        config = load_config()
+        assert config.max_note_read_bytes == 1048576
+
+    def test_zero_disables_limit(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", str(tmp_path))
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_MAX_NOTE_READ_BYTES", "0")
+        config = load_config()
+        assert config.max_note_read_bytes == 0
+
+    def test_invalid_value_falls_back_to_default(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", str(tmp_path))
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_MAX_NOTE_READ_BYTES", "not-a-number")
+        with caplog.at_level(logging.WARNING):
+            config = load_config()
+        assert config.max_note_read_bytes == 262144
+        assert "MAX_NOTE_READ_BYTES" in caplog.text
+
+    def test_negative_value_falls_back_to_default(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", str(tmp_path))
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_MAX_NOTE_READ_BYTES", "-1")
+        with caplog.at_level(logging.WARNING):
+            config = load_config()
+        assert config.max_note_read_bytes == 262144
+        assert "MAX_NOTE_READ_BYTES" in caplog.text
+        assert "negative" in caplog.text.lower()

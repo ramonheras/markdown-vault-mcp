@@ -106,6 +106,8 @@ class CollectionConfig:
             :class:`~markdown_vault_mcp.collection.Collection`.
         max_attachment_size_mb: Maximum attachment file size in megabytes
             (default ``10.0``).  ``0`` means unlimited.
+        max_note_read_bytes: Maximum note content returned by a single read
+            in bytes (default ``262144``, i.e. 256 KB).  ``0`` means unlimited.
         templates_folder: Vault-relative folder that holds note templates
             (default ``"_templates"``).
         prompts_folder: Vault-relative folder from which user-defined MCP
@@ -176,6 +178,7 @@ class CollectionConfig:
     git_pull_interval_s: int = 600
     attachment_extensions: list[str] | None = None
     max_attachment_size_mb: float = 10.0
+    max_note_read_bytes: int = 262144  # 256 KB; 0 = unlimited
     templates_folder: str = "_templates"
     prompts_folder: str | None = None
     event_store_url: str | None = None
@@ -579,6 +582,27 @@ def load_config() -> CollectionConfig:
         max_attachment_size_mb = 10.0
     logger.debug("load_config: max_attachment_size_mb=%s", max_attachment_size_mb)
 
+    raw_max_note_read_bytes = (_env("MAX_NOTE_READ_BYTES") or "").strip()
+    if raw_max_note_read_bytes:
+        try:
+            max_note_read_bytes = int(raw_max_note_read_bytes)
+        except ValueError:
+            logger.warning(
+                "load_config: invalid MAX_NOTE_READ_BYTES=%r, using default 262144",
+                raw_max_note_read_bytes,
+            )
+            max_note_read_bytes = 262144
+        else:
+            if max_note_read_bytes < 0:
+                logger.warning(
+                    "load_config: MAX_NOTE_READ_BYTES=%r is negative, using default 262144",
+                    max_note_read_bytes,
+                )
+                max_note_read_bytes = 262144
+    else:
+        max_note_read_bytes = 262144
+    logger.debug("load_config: max_note_read_bytes=%s", max_note_read_bytes)
+
     raw_templates_folder = (_env("TEMPLATES_FOLDER") or "").strip()
     templates_folder = (
         raw_templates_folder.replace("\\", "/").strip("/") or "_templates"
@@ -785,6 +809,7 @@ def load_config() -> CollectionConfig:
         git_pull_interval_s=git_pull_interval_s,
         attachment_extensions=attachment_extensions,
         max_attachment_size_mb=max_attachment_size_mb,
+        max_note_read_bytes=max_note_read_bytes,
         templates_folder=templates_folder,
         prompts_folder=prompts_folder,
         event_store_url=event_store_url,
