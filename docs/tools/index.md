@@ -93,6 +93,12 @@ Read the full content of a document or attachment by path. When combined with se
 !!! tip "Recovering full chunks after search"
     When `search` returns a snippet result, pass `result["heading"]` as the `section` parameter to recover the complete chunk: `read(path=result["path"], section=result["heading"])`. If the document has no sub-headings (preamble content), omit `section` to read the whole document.
 
+**Context cost:** every byte returned counts against the LLM's context
+budget.  Reads above `MARKDOWN_VAULT_MCP_MAX_NOTE_READ_BYTES` (default
+256 KB for `.md`) or `MARKDOWN_VAULT_MCP_MAX_ATTACHMENT_SIZE_MB` (default
+1 MB for binaries) raise an error with the right alternative — `section=`
+for partial markdown reads, `create_download_link()` for binary transfer.
+
 **Returns:**
 
 === "Markdown document"
@@ -231,6 +237,11 @@ Create or overwrite a document or attachment.
 | `frontmatter` | object | Optional YAML frontmatter dict for `.md` files. Ignored for attachments |
 | `content_base64` | string | Base64-encoded binary content for attachment files. Required when path is not `.md` |
 
+**Context cost:** the `content` parameter (text) is bounded only by the
+LLM's own output budget.  The `content_base64` parameter (binary) inflates
+by ~33%; for files >100 KB use `create_upload_link()` (when available)
+instead.
+
 **Returns:** `{"path": "Journal/note.md", "created": true}`
 
 !!! warning
@@ -309,6 +320,10 @@ Download a file from a URL and save it to the vault as a note or attachment. Des
 | `frontmatter` | object | `null` | Optional YAML frontmatter dict for `.md` files. Ignored for attachments |
 | `if_match` | string | `null` | Optional etag from a previous `read` call for optimistic concurrency |
 | `timeout_s` | float | `30.0` | Download timeout in seconds |
+
+**Context cost:** zero — the file is downloaded server-side.  Reference
+the saved file by `path` for downstream tools rather than `read()`-ing it
+back into context.
 
 **Returns:** `{"path": "notes/report.md", "created": true, "content_length": 4096, "content_type": "text/markdown"}`
 

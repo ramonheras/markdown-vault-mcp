@@ -95,12 +95,18 @@ Non-markdown file support for PDFs, images, spreadsheets, and more.
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
 | `MARKDOWN_VAULT_MCP_ATTACHMENT_EXTENSIONS` | csv | (built-in list) | Comma-separated allowed extensions without dot (e.g. `pdf,png,jpg`); use `*` to allow all non-`.md` files |
-| `MARKDOWN_VAULT_MCP_MAX_ATTACHMENT_SIZE_MB` | float | `10.0` | Maximum attachment size in MB for reads and writes; `0` disables the limit |
+| `MARKDOWN_VAULT_MCP_MAX_ATTACHMENT_SIZE_MB` | float | `1.0` | Maximum attachment size in MB returned by `read()` / accepted by `write()`; `0` disables the limit |
+| `MARKDOWN_VAULT_MCP_MAX_NOTE_READ_BYTES` | int | `262144` | Maximum bytes returned by full-document `read()` for `.md` files; raises `ValueError` if exceeded. Use `read(path, section=...)` for partial reads. `0` disables the limit. |
 
 **Default allowed extensions:** `pdf`, `docx`, `xlsx`, `pptx`, `odt`, `ods`, `odp`, `png`, `jpg`, `jpeg`, `gif`, `webp`, `svg`, `bmp`, `tiff`, `zip`, `tar`, `gz`, `mp3`, `mp4`, `wav`, `ogg`, `txt`, `csv`, `tsv`, `json`, `yaml`, `toml`, `xml`, `html`, `css`, `js`, `ts`
 
 !!! warning "Hidden directories"
     Attachments inside hidden directories (`.git/`, `.obsidian/`, `.markdown_vault_mcp/`, etc.) are never listed, regardless of extension settings. `MARKDOWN_VAULT_MCP_EXCLUDE` patterns are also applied to attachments.
+
+!!! note "Upgrading"
+    `MAX_ATTACHMENT_SIZE_MB` default lowered from **10 MB** to **1 MB** — most LLM contexts can't survive a 10 MB base64-encoded attachment; the old default was a silent context-blow-up. If non-LLM consumers (scripts, CI) need the old behaviour, set `MARKDOWN_VAULT_MCP_MAX_ATTACHMENT_SIZE_MB=10` explicitly.
+
+    `MAX_NOTE_READ_BYTES` is a **new** env var (default 256 KB). Whole-document `.md` reads above this raise `ValueError`. Partial reads via `read(path, section=heading)` bypass the cap.
 
 ## Bearer Token Authentication
 
