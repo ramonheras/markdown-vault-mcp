@@ -304,6 +304,8 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           prompt: ${{ steps.prepare-prompt-b.outputs.prompt }}
+          # DIAGNOSTIC: remove once issue #451 permission-deny pattern is captured.
+          show_full_output: "true"
           claude_args: |
             --allowed-tools "Read,Write(//tmp/agent-job-b.json),Bash(cat:*),Bash(git -C /tmp/template:*)"
 
