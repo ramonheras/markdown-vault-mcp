@@ -253,6 +253,7 @@ class CollectionConfig:
             "exclude_patterns": self.exclude_patterns,
             "attachment_extensions": self.attachment_extensions,
             "max_attachment_size_mb": self.max_attachment_size_mb,
+            "max_note_read_bytes": self.max_note_read_bytes,
             "git_pull_interval_s": 0,
             "chunks_per_doc": self.chunks_per_doc,
             "snippet_words": self.snippet_words,

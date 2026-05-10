@@ -495,3 +495,114 @@ class TestWriteAttachmentErrorMessage:
 
         with pytest.raises(ValueError, match="create_upload_link"):
             mgr.write_attachment("big.bin", big_content)
+
+
+# ---------------------------------------------------------------------------
+# Note read size-cap tests
+# ---------------------------------------------------------------------------
+
+
+class TestReadNoteSizeGuard:
+    """DocumentManager.read enforces MAX_NOTE_READ_BYTES on whole-document reads."""
+
+    def test_read_under_limit_returns_content(self, tmp_path: Path) -> None:
+        small = tmp_path / "small.md"
+        small.write_text("# Small\n\nbody")
+
+        mgr = DocumentManager(
+            fts=FTSIndex(db_path=":memory:"),
+            source_dir=tmp_path,
+            write_lock=threading.RLock(),
+            chunk_strategy=HeadingChunker(),
+            max_note_read_bytes=1024,
+        )
+        result = mgr.read("small.md")
+        assert result is not None
+        assert "body" in result.content
+
+    def test_read_over_limit_raises(self, tmp_path: Path) -> None:
+        big = tmp_path / "big.md"
+        big.write_text("# Big\n\n" + "x" * 2048)
+
+        mgr = DocumentManager(
+            fts=FTSIndex(db_path=":memory:"),
+            source_dir=tmp_path,
+            write_lock=threading.RLock(),
+            chunk_strategy=HeadingChunker(),
+            max_note_read_bytes=512,
+        )
+        with pytest.raises(ValueError, match="MAX_NOTE_READ_BYTES"):
+            mgr.read("big.md")
+
+    def test_read_zero_disables_limit(self, tmp_path: Path) -> None:
+        big = tmp_path / "big.md"
+        big.write_text("# Big\n\n" + "x" * (10 * 1024 * 1024))  # 10 MB note
+
+        mgr = DocumentManager(
+            fts=FTSIndex(db_path=":memory:"),
+            source_dir=tmp_path,
+            write_lock=threading.RLock(),
+            chunk_strategy=HeadingChunker(),
+            max_note_read_bytes=0,
+        )
+        result = mgr.read("big.md")
+        assert result is not None
+
+    def test_read_section_bypasses_full_doc_limit(self, tmp_path: Path) -> None:
+        """`section=` reads don't load the full document into context, so they
+        bypass the full-document cap.
+
+        The document is structured so the H2 "Section B" chunk is independently
+        indexed (HeadingChunker splits when H1 + H2 together exceed the word
+        threshold) and the total file size exceeds max_note_read_bytes.
+        """
+        # Build a doc where HeadingChunker produces separate H2 chunks.
+        # Section A has ~1 KB of filler so stat().st_size > 512.
+        body = (
+            "# Big\n## Section A\n"
+            + "\n".join(["x" * 20] * 50)  # ~1 KB of content
+            + "\n## Section B\n\nshort B\n"
+        )
+        big = tmp_path / "big.md"
+        big.write_text(body)
+
+        # Sanity: file genuinely exceeds the 512 B cap we are about to enforce.
+        assert big.stat().st_size > 512
+
+        fts = FTSIndex(db_path=":memory:")
+        chunker = HeadingChunker()
+        for note in scan_directory(tmp_path, chunk_strategy=chunker):
+            fts.upsert_note(note)
+
+        mgr = DocumentManager(
+            fts=fts,
+            source_dir=tmp_path,
+            write_lock=threading.RLock(),
+            chunk_strategy=chunker,
+            max_note_read_bytes=512,
+        )
+        # Whole-document read MUST raise — proves the cap is in effect.
+        with pytest.raises(ValueError, match="MAX_NOTE_READ_BYTES"):
+            mgr.read("big.md")
+
+        # Section read MUST succeed — proves section= bypasses the cap.
+        result = mgr.read("big.md", section="Section B")
+        assert result is not None
+        assert "short B" in result.content
+
+    def test_error_mentions_section_and_env_var(self, tmp_path: Path) -> None:
+        big = tmp_path / "big.md"
+        big.write_text("# Big\n\n" + "x" * 2048)
+
+        mgr = DocumentManager(
+            fts=FTSIndex(db_path=":memory:"),
+            source_dir=tmp_path,
+            write_lock=threading.RLock(),
+            chunk_strategy=HeadingChunker(),
+            max_note_read_bytes=512,
+        )
+        with pytest.raises(ValueError) as exc_info:
+            mgr.read("big.md")
+        msg = str(exc_info.value)
+        assert "MAX_NOTE_READ_BYTES" in msg
+        assert "section=" in msg
