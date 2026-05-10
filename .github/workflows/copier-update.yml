@@ -305,7 +305,7 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           prompt: ${{ steps.prepare-prompt-b.outputs.prompt }}
           claude_args: |
-            --allowed-tools "Read,Bash(cat:*),Bash(git -C /tmp/template:*)"
+            --allowed-tools "Read,Write(//tmp/agent-job-b.json),Bash(cat:*),Bash(git -C /tmp/template:*)"
 
       - name: Pre-render Job C prompt
         id: prepare-prompt-c
@@ -339,7 +339,7 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           prompt: ${{ steps.prepare-prompt-c.outputs.prompt }}
           claude_args: |
-            --allowed-tools "Read,Bash(cat:*),Bash(git -C /tmp/template:*)"
+            --allowed-tools "Read,Write(//tmp/agent-job-c.json),Bash(cat:*),Bash(git -C /tmp/template:*)"
 
       - name: Ensure PR labels exist
         if: steps.changes.outputs.changed == 'true'
