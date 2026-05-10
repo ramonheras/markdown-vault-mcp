@@ -380,7 +380,10 @@ def load_config() -> CollectionConfig:
       allowed attachment extensions (without dot, e.g. ``pdf,png,jpg``); use
       ``*`` to allow all non-.md files; default: common document and image types.
     - ``MARKDOWN_VAULT_MCP_MAX_ATTACHMENT_SIZE_MB``: maximum attachment size in
-      megabytes for read and write; ``0`` disables the limit; default ``10.0``.
+      megabytes for read and write; ``0`` disables the limit; default ``1.0``.
+    - ``MARKDOWN_VAULT_MCP_MAX_NOTE_READ_BYTES``: maximum bytes returned by
+      full-document ``read()`` for ``.md`` files; ``read(path, section=...)``
+      bypasses the cap; ``0`` disables; default ``262144`` (256 KB).
     - ``MARKDOWN_VAULT_MCP_TEMPLATES_FOLDER``: relative folder path where
       template markdown files are stored; default ``_templates``.
     - ``MARKDOWN_VAULT_MCP_PROMPTS_FOLDER``: relative folder path where
