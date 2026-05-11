@@ -70,7 +70,7 @@ def _is_private_url(url: str) -> bool:
 # ---------------------------------------------------------------------------
 
 
-async def _resolve_managed_strategy(collection: Collection) -> GitWriteStrategy:
+def _resolve_managed_strategy(collection: Collection) -> GitWriteStrategy:
     """Resolve and validate the managed-mode git strategy from a Collection.
 
     Returns:
@@ -1535,7 +1535,7 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
                 :class:`GitWriteStrategy` (i.e. the deployment is not
                 wired with ``MARKDOWN_VAULT_MCP_GIT_REPO_URL``).
         """
-        strategy = await _resolve_managed_strategy(collection)
+        strategy = _resolve_managed_strategy(collection)
         git_root = strategy._resolve_force_repo()
 
         result: dict[str, Any] = {
