@@ -1242,9 +1242,22 @@ class GitWriteStrategy:
                     git_dir / "rebase-apply"
                 ).is_dir()
             else:
-                # Fall back to assuming no rebase in progress — the worst
-                # case is a missed abort, not a corrupted repo.
-                rebase_in_progress = False
+                # `rev-parse --git-dir` failure means we cannot tell whether
+                # a rebase is in progress.  Conservatively assume one IS in
+                # progress so the abort runs — abort on a clean tree fails
+                # loudly and is logged below; failing to abort a real
+                # in-progress rebase would leave the repo wedged for every
+                # subsequent force_pull.  Log the underlying failure with
+                # token-redacted stderr for the operator.
+                git_dir_stderr = (git_dir_proc.stderr or "").strip()
+                if self._token and self._token in git_dir_stderr:
+                    git_dir_stderr = git_dir_stderr.replace(self._token, "***")
+                logger.error(
+                    "Git force_pull: `git rev-parse --git-dir` failed; "
+                    "conservatively assuming rebase is in progress: %s",
+                    git_dir_stderr,
+                )
+                rebase_in_progress = True
 
             if rebase_in_progress:
                 abort_proc = subprocess.run(
@@ -1270,9 +1283,15 @@ class GitWriteStrategy:
                 # state (MCP commits), so the original files contain MCP
                 # content, not upstream content.  Restore the upstream
                 # version for each conflicting file so _write_conflict_files
-                # reads the right side.
-                for rel_path, _ in saved:
-                    subprocess.run(
+                # reads the right side.  If checkout fails for a given
+                # path (deleted upstream, permission error, etc.), DROP it
+                # from `saved` — otherwise _write_conflict_files would
+                # produce a sibling that contains the same MCP bytes as the
+                # canonical path, defeating the "remote wins, local saved
+                # as sibling" invariant.
+                restored: list[tuple[str, str]] = []
+                for rel_path, mcp_content in saved:
+                    checkout_proc = subprocess.run(
                         [
                             "git",
                             "-C",
@@ -1286,6 +1305,23 @@ class GitWriteStrategy:
                         text=True,
                         env=env,
                     )
+                    if checkout_proc.returncode != 0:
+                        checkout_stderr = (checkout_proc.stderr or "").strip()
+                        if self._token and self._token in checkout_stderr:
+                            checkout_stderr = checkout_stderr.replace(
+                                self._token, "***"
+                            )
+                        logger.error(
+                            "Git force_pull: failed to restore upstream "
+                            "version of %r after rebase abort; dropping it "
+                            "from conflict siblings to avoid duplicate MCP "
+                            "content: %s",
+                            rel_path,
+                            checkout_stderr,
+                        )
+                        continue
+                    restored.append((rel_path, mcp_content))
+                saved = restored
 
             if not saved:
                 logger.warning(
