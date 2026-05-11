@@ -969,6 +969,40 @@ class GitWriteStrategy:
         )
         return result.stdout
 
+    def _run_git_capturing(
+        self,
+        git_root: Path,
+        *args: str,
+        env: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        """Run a git command and return the completed process without raising.
+
+        Sister of :meth:`_git` for paths that need to inspect ``returncode``
+        and ``stderr`` instead of letting :class:`subprocess.CalledProcessError`
+        propagate.  Used in :meth:`_force_pull_rebase_fallback` where we need
+        to make recovery decisions based on whether ``git rebase --abort``
+        succeeded, whether the working tree has an in-progress rebase, etc.
+
+        Args:
+            git_root: Working-tree root used for ``git -C``.
+            *args: Git subcommand and arguments (without the leading ``git``).
+            env: Optional environment, typically ``self._git_env()`` for
+                token-bearing operations.  ``None`` inherits the parent process
+                environment.
+
+        Returns:
+            :class:`subprocess.CompletedProcess` with ``returncode``, ``stdout``,
+            and ``stderr`` populated.  Stderr will need to be passed through
+            :meth:`_redact` before logging or surfacing to callers.
+        """
+        return subprocess.run(
+            ["git", "-C", str(git_root), *args],
+            capture_output=True,
+            text=True,
+            env=env,
+            check=False,  # explicit — caller inspects returncode
+        )
+
     def force_pull(self, *, dry_run: bool = False) -> PullResult:
         """Pull from ``origin`` synchronously and return a structured result.
 
@@ -1201,11 +1235,8 @@ class GitWriteStrategy:
                 # stuck rebase-merge/ directory can tell whether the
                 # defensive abort fired and whether it succeeded.  Mirrors
                 # the in-progress-rebase abort path further below.
-                abort_proc = subprocess.run(
-                    ["git", "-C", str(git_root), "rebase", "--abort"],
-                    capture_output=True,
-                    text=True,
-                    env=env,
+                abort_proc = self._run_git_capturing(
+                    git_root, "rebase", "--abort", env=env
                 )
                 if abort_proc.returncode != 0:
                     abort_stderr = self._redact((abort_proc.stderr or "").strip())
@@ -1235,11 +1266,8 @@ class GitWriteStrategy:
             # rebase is in flight.  Resolve ``GIT_DIR`` via ``rev-parse``
             # so this works inside worktrees and submodules where the dir
             # is not the repo's literal ``.git``.
-            git_dir_proc = subprocess.run(
-                ["git", "-C", str(git_root), "rev-parse", "--git-dir"],
-                capture_output=True,
-                text=True,
-                env=env,
+            git_dir_proc = self._run_git_capturing(
+                git_root, "rev-parse", "--git-dir", env=env
             )
             if git_dir_proc.returncode == 0:
                 git_dir = Path(git_dir_proc.stdout.strip())
@@ -1265,11 +1293,8 @@ class GitWriteStrategy:
                 rebase_in_progress = True
 
             if rebase_in_progress:
-                abort_proc = subprocess.run(
-                    ["git", "-C", str(git_root), "rebase", "--abort"],
-                    capture_output=True,
-                    text=True,
-                    env=env,
+                abort_proc = self._run_git_capturing(
+                    git_root, "rebase", "--abort", env=env
                 )
                 if abort_proc.returncode != 0:
                     abort_stderr = self._redact((abort_proc.stderr or "").strip())
@@ -1297,18 +1322,12 @@ class GitWriteStrategy:
                 # as sibling" invariant.
                 restored: list[tuple[str, str]] = []
                 for rel_path, mcp_content in saved:
-                    checkout_proc = subprocess.run(
-                        [
-                            "git",
-                            "-C",
-                            str(git_root),
-                            "checkout",
-                            "@{upstream}",
-                            "--",
-                            rel_path,
-                        ],
-                        capture_output=True,
-                        text=True,
+                    checkout_proc = self._run_git_capturing(
+                        git_root,
+                        "checkout",
+                        "@{upstream}",
+                        "--",
+                        rel_path,
                         env=env,
                     )
                     if checkout_proc.returncode != 0:
