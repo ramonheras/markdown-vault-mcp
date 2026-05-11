@@ -808,6 +808,61 @@ class GitWriteStrategy:
         )
         return list(saved.items())
 
+    def _resolve_conflicts_safely(
+        self,
+        git_root: Path,
+        env: dict[str, str] | None,
+        from_sha: str,
+    ) -> tuple[list[tuple[str, str]] | None, PullResult | None]:
+        """Defensive wrapper around :meth:`_resolve_rebase_conflicts`.
+
+        Catches the case where conflict resolution itself raises mid-loop,
+        leaving the repository in a half-rebased state.  On exception:
+        logs at ERROR with traceback, runs ``git rebase --abort`` defensively
+        (logging WARNING if the abort itself fails — but not failing the
+        overall recovery), and returns an early-exit ``PullResult`` so the
+        caller can surface ``conflict_resolution_failed`` without a leftover
+        ``rebase-merge`` directory.
+
+        Args:
+            git_root: Working-tree root.
+            env: Optional GIT_ASKPASS environment.
+            from_sha: HEAD SHA captured by the caller before the rebase
+                attempt; reused on the failure path so the returned result
+                has consistent ``from_sha == to_sha`` semantics.
+
+        Returns:
+            ``(saved, None)`` on success — ``saved`` is the list of
+            ``(rel_path, mcp_content)`` tuples from
+            :meth:`_resolve_rebase_conflicts`.
+
+            ``(None, PullResult)`` on failure — caller should return the
+            ``PullResult`` immediately.
+        """
+        try:
+            saved = self._resolve_rebase_conflicts(git_root, env)
+        except Exception:
+            logger.error(
+                "Git force_pull: conflict resolution raised — aborting rebase",
+                exc_info=True,
+            )
+            abort_proc = self._run_git_capturing(git_root, "rebase", "--abort", env=env)
+            if abort_proc.returncode != 0:
+                logger.warning(
+                    "Git force_pull: defensive `git rebase --abort` "
+                    "after conflict-resolution failure also failed: %s",
+                    self._redact((abort_proc.stderr or "").strip()),
+                )
+            return None, PullResult(
+                applied=False,
+                fast_forward=False,
+                commits_pulled=0,
+                from_sha=from_sha,
+                to_sha=from_sha,
+                reason=PULL_REASON_CONFLICT_RESOLUTION_FAILED,
+            )
+        return saved, None
+
     def _write_conflict_files(
         self,
         git_root: Path,
@@ -1218,41 +1273,18 @@ class GitWriteStrategy:
             #
             # ``_resolve_rebase_conflicts`` runs ``git checkout --ours`` and
             # ``git add`` with ``check=True``; if either raises mid-loop the
-            # repository is left in a half-rebased state.  Wrap in a guard
-            # that defensively aborts the rebase before propagating, so a
-            # subsequent ``force_pull`` (or any per-write commit path) does
-            # not trip over the leftover ``rebase-merge`` directory.
-            try:
-                saved = self._resolve_rebase_conflicts(git_root, env)
-            except Exception:
-                logger.error(
-                    "Git force_pull: conflict resolution raised — aborting rebase",
-                    exc_info=True,
-                )
-                # Defensive abort: don't let abort failure mask the
-                # original exception (already logged at ERROR above), but
-                # log abort failures at WARNING so an operator debugging a
-                # stuck rebase-merge/ directory can tell whether the
-                # defensive abort fired and whether it succeeded.  Mirrors
-                # the in-progress-rebase abort path further below.
-                abort_proc = self._run_git_capturing(
-                    git_root, "rebase", "--abort", env=env
-                )
-                if abort_proc.returncode != 0:
-                    abort_stderr = self._redact((abort_proc.stderr or "").strip())
-                    logger.warning(
-                        "Git force_pull: defensive `git rebase --abort` "
-                        "after conflict-resolution failure also failed: %s",
-                        abort_stderr,
-                    )
-                return PullResult(
-                    applied=False,
-                    fast_forward=False,
-                    commits_pulled=0,
-                    from_sha=from_sha,
-                    to_sha=from_sha,
-                    reason=PULL_REASON_CONFLICT_RESOLUTION_FAILED,
-                )
+            # repository is left in a half-rebased state.
+            # ``_resolve_conflicts_safely`` wraps that in a defensive abort
+            # so a subsequent ``force_pull`` (or any per-write commit path)
+            # does not trip over the leftover ``rebase-merge`` directory.
+            saved, early_exit = self._resolve_conflicts_safely(git_root, env, from_sha)
+            if early_exit is not None:
+                return early_exit
+            # ``_resolve_conflicts_safely`` returns ``(saved, None)`` on
+            # success and ``(None, PullResult)`` on failure — exactly one
+            # is non-None.  After the early-exit guard above, ``saved`` is
+            # guaranteed non-None; assert so mypy can narrow.
+            assert saved is not None
 
             # If a rebase is still in progress (loop hit its iteration
             # limit, or exited via ``break`` without completing), abort
