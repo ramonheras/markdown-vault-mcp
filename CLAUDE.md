@@ -172,15 +172,27 @@ across `copier update`, so opt-in customisations (`produces=`,
 download-direction `register_file_exchange(...)` call itself) survive
 subsequent template updates.
 
-> **Project-specific override:** unlike the template default, **neither
-> direction is currently wired in markdown-vault-mcp**. The download
-> direction is deferred to #431 because the spec-compliant
-> `create_download_link(origin_id, ttl_seconds)` tool collides on name
-> with MV's existing `create_download_link(path, ttl_seconds)` (registered
-> via `ArtifactStore` in the `DOMAIN-WIRING` block). The upload direction
-> ships fully commented-out and is intended to be uncommented alongside
-> the #431 migration. See [`docs/guides/file-exchange.md`](docs/guides/file-exchange.md)
-> for the wiring pattern.
+> **Project-specific override:** unlike the template default, the two
+> directions are wired asymmetrically.
+>
+> - **Upload direction is wired** as of #443:
+>   `register_file_exchange_upload(...)` is active in
+>   `server.py`, with `_vault_upload_receiver` /
+>   `_validate_upload_target` from `markdown_vault_mcp.uploads` as the
+>   receiver and pre-link validator. The route auto-mounts only when
+>   transport is HTTP/SSE *and* `MARKDOWN_VAULT_MCP_BASE_URL` is set.
+> - **Download direction is still deferred to #431** because the
+>   spec-compliant `create_download_link(origin_id, ttl_seconds)` tool
+>   collides on name with MV's existing
+>   `create_download_link(path, ttl_seconds)` (registered via
+>   `ArtifactStore` in the `DOMAIN-WIRING` block). Do not add
+>   `register_file_exchange(mcp, ...)` to the sentinel block until #431
+>   resolves the collision.
+>
+> See [`docs/guides/file-exchange.md`](docs/guides/file-exchange.md)
+> for the wiring pattern, and the
+> [`create_upload_link` tool entry](docs/tools/index.md) for the
+> agent-facing contract.
 
 ## Shared Infrastructure
 

@@ -1060,8 +1060,8 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
 
                 **Context cost:** base64 encoding inflates by ~33%; even a 1 MB
                 attachment becomes ~1.3 MB of tokens. For files larger than
-                ~100 KB, prefer ``create_upload_link(path)`` (when available)
-                — bytes flow over HTTP POST, not through context.
+                ~100 KB, prefer ``create_upload_link(target_id)`` on HTTP/SSE
+                deployments — bytes flow over HTTP POST, not through context.
             if_match: Optional etag obtained from a previous 'read' call.
                 When provided, the write only proceeds if the file has not
                 been modified since that read (optimistic concurrency).

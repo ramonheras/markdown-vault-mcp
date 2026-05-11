@@ -33,15 +33,20 @@ All configuration is via environment variables. Most use the `MARKDOWN_VAULT_MCP
 
 ## MCP File Exchange
 
-!!! warning "Not wired in markdown-vault-mcp today"
+!!! info "Upload wired (#443); download deferred to #431"
     These env vars come from `fastmcp-pvl-core` 2.1.0+'s
     `register_file_exchange` / `register_file_exchange_upload` helpers.
-    `markdown-vault-mcp` does **not** wire either direction at present
-    (#431) — its existing `create_download_link` tool collides on name
-    with the spec-compliant version, so the helper is intentionally not
-    called in `server.py`.  Setting these vars has no effect until the
-    migration in #431 lands.  Documented here for completeness so the
-    contract is visible.
+    The **upload direction is wired** in `server.py` as of #443: the
+    `MARKDOWN_VAULT_MCP_UPLOAD_*` variables below take effect today and
+    govern the [`create_upload_link`](tools/index.md#create_upload_link)
+    tool plus the `POST /markdown-vault-mcp/uploads/{token}` route. The **download
+    direction is not wired** — `markdown-vault-mcp` has its own
+    `create_download_link(path, ttl_seconds)` tool whose name collides
+    with the pvl-core spec-compliant version, so
+    `register_file_exchange(...)` remains commented out pending the
+    migration in #431. The `MARKDOWN_VAULT_MCP_FILE_EXCHANGE_*`
+    variables are documented here for completeness; setting them has
+    no effect until #431 lands.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -49,7 +54,7 @@ All configuration is via environment variables. Most use the `MARKDOWN_VAULT_MCP
 | `MARKDOWN_VAULT_MCP_FILE_EXCHANGE_PRODUCE` | `true` | Allow this server to mint `FileRef` objects via `handle.publish(...)`. |
 | `MARKDOWN_VAULT_MCP_FILE_EXCHANGE_CONSUME` | `true` | Master toggle for the consumer side. Only effective when `consumer_sink=` is wired in `server.py`. |
 | `MARKDOWN_VAULT_MCP_FILE_EXCHANGE_TTL` | `3600` | Lifetime in seconds for download links and exchange-volume records. |
-| `MARKDOWN_VAULT_MCP_UPLOAD_ENABLED` | `true` on HTTP/SSE, `false` on stdio | Master switch for the upload direction. Only effective when `register_file_exchange_upload(...)` is uncommented in `server.py`; also requires `MARKDOWN_VAULT_MCP_BASE_URL`. |
+| `MARKDOWN_VAULT_MCP_UPLOAD_ENABLED` | `true` on HTTP/SSE, `false` on stdio | Master switch for the upload direction (wired since #443). Also requires `MARKDOWN_VAULT_MCP_BASE_URL`. Set to `false` to disable the `create_upload_link` tool and `POST /markdown-vault-mcp/uploads/{token}` route. |
 | `MARKDOWN_VAULT_MCP_UPLOAD_MAX_BYTES` | `10485760` (10 MiB) | Maximum POST body size for the upload route. Bodies exceeding this return HTTP 413. |
 | `MARKDOWN_VAULT_MCP_UPLOAD_TTL` | `300` | Default lifetime in seconds for upload links. Caller-requested TTL is clamped to `MARKDOWN_VAULT_MCP_UPLOAD_TTL_MAX`. |
 | `MARKDOWN_VAULT_MCP_UPLOAD_TTL_MAX` | `3600` | Operator ceiling for caller-requested upload-link TTL. |

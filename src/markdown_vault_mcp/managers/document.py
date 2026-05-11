@@ -569,10 +569,10 @@ class DocumentManager:
                         f"({size_bytes / 1024 / 1024:.1f} MB), exceeds "
                         f"MARKDOWN_VAULT_MCP_MAX_ATTACHMENT_SIZE_MB "
                         f"({self._max_attachment_size_mb} MB). "
-                        f"Use create_upload_link({path!r}) (when available) "
-                        f"for out-of-band upload, or raise "
-                        f"MARKDOWN_VAULT_MCP_MAX_ATTACHMENT_SIZE_MB if you need "
-                        f"to write the bytes through context."
+                        f"This cap applies to all attachment writes "
+                        f"including the create_upload_link receiver path. "
+                        f"Raise MARKDOWN_VAULT_MCP_MAX_ATTACHMENT_SIZE_MB "
+                        f"to allow larger attachments."
                     )
             created = not abs_path.is_file()
             abs_path.parent.mkdir(parents=True, exist_ok=True)

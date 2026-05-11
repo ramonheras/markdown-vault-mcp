@@ -25,6 +25,47 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+_collection_singleton: Collection | None = None
+
+
+def set_collection_singleton(collection: Collection | None) -> None:
+    """Set the module-level :class:`Collection` singleton.
+
+    Called by the lifespan factory on startup with the live Collection,
+    and again on shutdown with ``None`` so a subsequent server in the
+    same process starts from a clean slate.
+
+    Args:
+        collection: The live :class:`Collection`, or ``None`` to clear.
+    """
+    global _collection_singleton
+    _collection_singleton = collection
+
+
+def get_collection_singleton() -> Collection:
+    """Return the module-level :class:`Collection` singleton.
+
+    Used by HTTP route handlers (e.g. the pvl-core file-exchange upload
+    receiver) that run outside FastMCP's ``Depends(get_collection)``
+    injection and therefore cannot resolve the Collection from the
+    lifespan context.
+
+    Returns:
+        The live :class:`Collection` set by the lifespan factory.
+
+    Raises:
+        RuntimeError: If the singleton has not been set yet.
+    """
+    if _collection_singleton is None:
+        msg = (
+            "Collection not initialised — set_collection_singleton was never "
+            "called.  In normal operation the lifespan factory sets it; in "
+            "tests, set explicitly via set_collection_singleton(col)."
+        )
+        raise RuntimeError(msg)
+    return _collection_singleton
+
+
 def make_collection_lifespan(config: CollectionConfig) -> Any:
     """Create a lifespan function that closes over a pre-loaded config.
 
@@ -53,6 +94,7 @@ def make_collection_lifespan(config: CollectionConfig) -> Any:
                 type(kwargs["embedding_provider"]).__name__,
             )
         collection = Collection(**kwargs)
+        set_collection_singleton(collection)
 
         # If periodic git pull is enabled, sync before building the initial index so
         # build_index() scans the freshest working tree.
@@ -85,6 +127,10 @@ def make_collection_lifespan(config: CollectionConfig) -> Any:
         try:
             yield {"collection": collection, "config": config}
         finally:
+            # Clear the singleton before closing so any in-flight HTTP handler
+            # gets a clean RuntimeError instead of touching a Collection
+            # mid-close().
+            set_collection_singleton(None)
             collection.close()
             logger.info("Collection shut down")
 
