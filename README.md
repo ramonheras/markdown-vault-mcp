@@ -27,7 +27,7 @@ Point it at a directory of Markdown files (an Obsidian vault, a docs folder, a Z
 - **Attachment support** — read, write, delete, and list non-markdown files (PDFs, images, etc.)
 - **Git integration** — optional auto-commit and push on every write via `GIT_ASKPASS`
 - **OIDC authentication** — optional token-based auth for HTTP deployments (Authelia, Keycloak, etc.)
-- **MCP tools** — 28 LLM-visible tools including search, read, write, edit, delete, rename, git history, and admin operations; plus 6 app-only tools for MCP Apps clients
+- **MCP tools** — 29 LLM-visible tools including search, read, write, edit, delete, rename, git history, file-exchange uploads, and admin operations; plus 6 app-only tools for MCP Apps clients
 - **MCP resources** — 9 resources exposing vault configuration, statistics, tags, folders, document outlines, similar notes, recent notes, and an interactive SPA
 - **MCP prompts** — 6 prompt templates including template-driven note creation
 <!-- DOMAIN-END -->
@@ -170,17 +170,19 @@ The server registers a built-in `get_server_info` tool (via `fastmcp_pvl_core.re
 ### File exchange
 
 A `DOMAIN-FILE-EXCHANGE-START` / `DOMAIN-FILE-EXCHANGE-END` sentinel
-block in `server.py` reserves space for the
+block in `server.py` wires the
 [MCP File Exchange](docs/guides/file-exchange.md) helpers from
-`fastmcp-pvl-core`. **Neither direction is currently wired in this
-server** — the download-direction `register_file_exchange(...)` call is
-deferred to #431 (name collision with MV's existing
-`create_download_link` tool registered via `ArtifactStore`); the
-upload-direction `register_file_exchange_upload(...)` ships fully
-commented-out and is intended to be uncommented alongside the #431
-migration. See the guide for producing / consuming / uploading
-patterns, or [`CLAUDE.md`](CLAUDE.md#file-exchange-register_file_exchange--opt-in-upload)
-for the wiring pattern.
+`fastmcp-pvl-core`. The **upload direction is wired** (#443) — agents
+mint a one-time HTTPS POST URL via `create_upload_link(target_id,
+ttl_seconds)` and push bytes outside the MCP context, with the route
+mounted only on HTTP/SSE transports when `MARKDOWN_VAULT_MCP_BASE_URL`
+is set. The **download direction remains deferred to #431** because
+the spec-compliant `create_download_link(origin_id, ttl_seconds)` tool
+collides on name with MV's existing `create_download_link(path,
+ttl_seconds)` registered via `ArtifactStore`. See the guide for the
+upload-flow walkthrough and the producer / consumer patterns waiting on
+#431, or [`CLAUDE.md`](CLAUDE.md#file-exchange-register_file_exchange--opt-in-upload)
+for the wiring overview.
 
 ## Configuration
 
@@ -389,10 +391,11 @@ markdown-vault-mcp reindex [--source-dir PATH] [--index-path PATH]
 | `get_diff` | Return a unified diff of a note between a reference commit/timestamp and HEAD (git-backed vaults only) |
 | `fetch` | Download a file from a URL and save it to the vault as a note or attachment (MCP-to-MCP transfer) |
 | `create_download_link` | Generate a one-time download URL for a vault file — enables MCP-to-MCP file transfer (HTTP/SSE transport only; requires `BASE_URL`) |
+| `create_upload_link` | Mint a one-time HTTPS POST URL for pushing bytes into the vault. Bytes flow over HTTP, not through MCP context — use this for any file >100 KB. HTTP/SSE transport only; requires `MARKDOWN_VAULT_MCP_BASE_URL`. |
 | `browse_vault` | Open the vault explorer SPA in a supporting MCP Apps client |
 | `show_context` | Open the Context Card for a specific note in a supporting MCP Apps client |
 
-Write tools (`write`, `edit`, `delete`, `rename`, `fetch`) are only available when `MARKDOWN_VAULT_MCP_READ_ONLY=false`.
+Write tools (`write`, `edit`, `delete`, `rename`, `fetch`, `create_upload_link`) are only available when `MARKDOWN_VAULT_MCP_READ_ONLY=false`.
 
 `browse_vault` and `show_context` are LLM-visible in all clients; when called in an MCP Apps-capable client they open the interactive SPA. Six additional internal tools (`vault_context`, `vault_list`, `vault_read`, `vault_search`, `vault_graph_neighborhood`, `vault_graph_hubs`) use `visibility="app"` and are used by the SPA only — they are never visible to the LLM.
 
