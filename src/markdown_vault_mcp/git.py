@@ -39,6 +39,11 @@ PULL_REASON_REBASED = "rebased"
 PULL_REASON_CONFLICTS_RESOLVED_WITH_SIBLINGS = "conflicts_resolved_with_siblings"
 PULL_REASON_CONFLICT_RESOLUTION_FAILED = "conflict_resolution_failed"
 
+PUSH_REASON_DRY_RUN_UNSUPPORTED = "dry_run_unsupported"
+PUSH_REASON_NO_REMOTE = "no_remote"
+PUSH_REASON_NON_FAST_FORWARD = "non_fast_forward"
+PUSH_REASON_PUSH_FAILED = "push_failed"
+
 
 def _is_ssh_remote(url: str) -> bool:
     return url.startswith("git@") or url.startswith("ssh://")
@@ -173,15 +178,37 @@ class PushResult:
 
     Attributes:
         applied: ``True`` when the push succeeded (or was a no-op because
-            the remote already had every local commit).  ``False`` when the
-            push was rejected or failed.
+            the remote already had every local commit).  ``False`` for
+            ``dry_run`` calls and for push attempts that were rejected or
+            failed.
         commits_pushed: Count of commits sent to the remote.  ``0`` when
             there was nothing to push.
-        remote_sha_before: Remote ref SHA before the push.
+        remote_sha_before: Remote ref SHA before the push.  Equals
+            ``remote_sha_after`` on no-op and on failure.
         remote_sha_after: Remote ref SHA after the push.  Equals the local
             HEAD on success and ``remote_sha_before`` on failure.
-        reason: Set when ``applied=False`` — e.g. ``"non_fast_forward"``
-            or ``"network_error"``.  ``None`` on success.
+        reason: Diagnostic code describing the outcome.  ``None`` for
+            successful pushes (including the no-op already-up-to-date
+            case).  Otherwise one of:
+
+            * ``"dry_run_unsupported"`` — the caller passed
+              ``dry_run=True``; git has no safe local probe for "would
+              this push be accepted by the remote", so the call is a
+              no-op that sets this code.  HEAD and the remote are not
+              touched.
+            * ``"no_remote"`` — the upstream tracking branch could not
+              be resolved (no ``@{upstream}`` and no ``origin/HEAD``);
+              the push was not attempted.
+            * ``"non_fast_forward"`` — the remote rejected the push
+              because the local branch is not a strict descendant of
+              the remote tip.  ``hint`` points the caller at
+              ``git_sync(direction='pull')`` to reconcile first.
+            * ``"push_failed"`` — ``git push origin`` exited non-zero
+              for any other reason (network error, auth failure, hook
+              rejection).  ``hint`` carries the truncated stderr.
+
+            See module-level ``PUSH_REASON_*`` constants for the
+            string values.
         hint: Operator-facing remediation suggestion when ``applied=False``.
             Surfaced verbatim in the MCP tool response so the caller can
             see exactly what to do next.
@@ -1253,6 +1280,187 @@ class GitWriteStrategy:
             to_sha=new_head,
             reason=PULL_REASON_REBASED,
         )
+
+    def force_push(self, *, dry_run: bool = False) -> PushResult:
+        """Push local commits to ``origin`` synchronously.
+
+        Never force-pushes — the underlying ``git push origin`` is a plain
+        fast-forward push.  When the remote has commits the local clone
+        has not seen, the push is rejected and the returned
+        :class:`PushResult` carries ``reason="non_fast_forward"`` plus a
+        hint pointing at ``git_sync(direction='pull')``.  The caller is
+        expected to reconcile via the pull path and then retry.
+
+        Acquires :attr:`_lock` for the duration so the periodic pull loop
+        and the per-write commit + deferred-push pipeline cannot race
+        against the synchronous push.  This blocks writes for the network
+        round-trip; that is acceptable for the interactive ``git_sync``
+        tool and mirrors :meth:`force_pull`.
+
+        ``dry_run`` is a no-op.  Git has no safe local probe for "would
+        this push be accepted by the remote": the only authoritative
+        check is to actually attempt the push.  Rather than silently
+        substitute a misleading approximation, we surface this with
+        ``reason="dry_run_unsupported"`` so callers can document the
+        limitation.
+
+        Args:
+            dry_run: When ``True``, returns immediately without contacting
+                the remote.  See above for the rationale.
+
+        Returns:
+            :class:`PushResult` describing the operation.  See the
+            ``reason`` field for the full enumeration of outcomes.
+
+        Raises:
+            RuntimeError: When the strategy was constructed without
+                ``repo_path``.
+        """
+        git_root = self._resolve_force_repo()
+
+        with self._lock:
+            local_head = self._head_sha(git_root)
+
+            # Resolve the remote-tracking SHA before the push.  Mirrors
+            # :meth:`force_pull` — prefer ``@{upstream}`` (set when the
+            # branch was created via ``git push -u``), fall back to
+            # ``origin/HEAD`` for non-tracking checkouts.  ``origin/HEAD``
+            # alone is unreliable on freshly-pushed clones, hence the
+            # two-step lookup.
+            try:
+                remote_sha_before = self._git(
+                    git_root, "rev-parse", "@{upstream}"
+                ).strip()
+            except subprocess.CalledProcessError:
+                try:
+                    remote_sha_before = self._git(
+                        git_root, "rev-parse", "origin/HEAD"
+                    ).strip()
+                except subprocess.CalledProcessError:
+                    return PushResult(
+                        applied=False,
+                        commits_pushed=0,
+                        remote_sha_before="",
+                        remote_sha_after="",
+                        reason=PUSH_REASON_NO_REMOTE,
+                        hint=(
+                            "No upstream tracking branch is configured for the "
+                            "current branch.  Run `git push -u origin <branch>` "
+                            "from the working tree once to establish tracking."
+                        ),
+                    )
+
+            if dry_run:
+                # Document the limitation rather than fake a result.
+                return PushResult(
+                    applied=False,
+                    commits_pushed=0,
+                    remote_sha_before=remote_sha_before,
+                    remote_sha_after=remote_sha_before,
+                    reason=PUSH_REASON_DRY_RUN_UNSUPPORTED,
+                    hint=(
+                        "force_push has no dry_run mode: git provides no safe "
+                        "local probe for whether the remote will accept a push. "
+                        "Re-invoke with dry_run=False to actually push."
+                    ),
+                )
+
+            # No-op: local already matches the remote-tracking SHA.  We
+            # could let `git push` short-circuit on its own, but returning
+            # early avoids a subprocess + reads more clearly in logs.
+            if remote_sha_before == local_head:
+                return PushResult(
+                    applied=True,
+                    commits_pushed=0,
+                    remote_sha_before=remote_sha_before,
+                    remote_sha_after=remote_sha_before,
+                )
+
+            # Count commits between remote and local.  When the local
+            # branch is strictly ahead this is the count `git push` will
+            # send; when histories diverge `git push` would reject the
+            # push as non-fast-forward and the count is best-effort.
+            commits_ahead_str = self._git(
+                git_root,
+                "rev-list",
+                "--count",
+                f"{remote_sha_before}..{local_head}",
+            ).strip()
+            try:
+                commits_pushed = int(commits_ahead_str)
+            except ValueError:
+                logger.warning(
+                    "Git force_push: could not parse commit count %r "
+                    "from `git rev-list --count %s..%s`",
+                    commits_ahead_str,
+                    remote_sha_before,
+                    local_head,
+                )
+                commits_pushed = 0
+
+            # Use the strategy's git env so token-based HTTPS auth works
+            # through the same GIT_ASKPASS mechanism the deferred-push
+            # path uses.  Cleaned up in the finally block below.
+            env = self._git_env()
+            try:
+                try:
+                    self._git(git_root, "push", "origin", env=env)
+                except subprocess.CalledProcessError as exc:
+                    stderr = (exc.stderr or "").strip()
+                    # Redact token if it leaked into stderr.  Mirrors the
+                    # sanitisation in :meth:`_do_push_safe`.
+                    if self._token and self._token in stderr:
+                        stderr = stderr.replace(self._token, "***")
+
+                    # Detect the specific non-fast-forward case so the
+                    # caller can route to git_sync(direction='pull').
+                    # Git's wording is stable: "non-fast-forward" appears
+                    # both in the rejection line and the hint paragraph.
+                    if "non-fast-forward" in stderr or "fetch first" in stderr:
+                        logger.warning(
+                            "Git force_push: rejected as non-fast-forward "
+                            "(local %s vs remote %s)",
+                            local_head,
+                            remote_sha_before,
+                        )
+                        return PushResult(
+                            applied=False,
+                            commits_pushed=0,
+                            remote_sha_before=remote_sha_before,
+                            remote_sha_after=remote_sha_before,
+                            reason=PUSH_REASON_NON_FAST_FORWARD,
+                            hint=(
+                                "Remote has commits the local clone has not "
+                                "seen.  Run git_sync(direction='pull') to "
+                                "reconcile (fast-forward when possible, "
+                                "Syncthing-style siblings on real conflict), "
+                                "then retry git_sync(direction='push')."
+                            ),
+                        )
+
+                    logger.error(
+                        "Git force_push: push failed: %s",
+                        stderr,
+                    )
+                    truncated = stderr[:200]
+                    return PushResult(
+                        applied=False,
+                        commits_pushed=0,
+                        remote_sha_before=remote_sha_before,
+                        remote_sha_after=remote_sha_before,
+                        reason=PUSH_REASON_PUSH_FAILED,
+                        hint=truncated or "git push exited non-zero",
+                    )
+            finally:
+                self._cleanup_git_env(env)
+
+            # Push succeeded — remote now matches local HEAD.
+            return PushResult(
+                applied=True,
+                commits_pushed=commits_pushed,
+                remote_sha_before=remote_sha_before,
+                remote_sha_after=local_head,
+            )
 
     def sync_once(self, repo_path: Path) -> bool:
         """Fetch and update once, returning True if HEAD advanced.
