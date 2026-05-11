@@ -32,6 +32,59 @@ Behavior:
 - Writes are committed and pushed after the configured idle delay.
 - Periodic pull uses fast-forward-only updates.
 
+## Manual sync — `git_sync` tool
+
+The periodic loops are time-based: pull every
+`MARKDOWN_VAULT_MCP_GIT_PULL_INTERVAL_S` seconds (default 600), push
+`MARKDOWN_VAULT_MCP_GIT_PUSH_DELAY_S` seconds after the last write
+(default 30). For workflows where the LLM needs to confirm "your changes
+are now on the remote" before telling the user to check another device —
+or wants to pull in remote edits *right now* before continuing the
+conversation — call `git_sync` directly:
+
+```
+git_sync(direction="both")
+```
+
+Use `direction="pull"` or `direction="push"` to skip a leg. In
+`direction="both"` mode the push leg only runs when the pull leg
+succeeded; otherwise `push` stays `null` and the LLM should inspect
+`pull.reason` (and `pull.conflict_files`) before retrying.
+
+`dry_run=true` previews what a pull *would* do — useful for "is there
+anything new on origin?" without risking an in-conversation conflict.
+The push leg has no safe local "would this be accepted" probe, so a
+dry-run push always returns `applied=false` with
+`reason="dry_run_unsupported"`.
+
+!!! info "Conflict outcome — Syncthing-style sibling resolution"
+    When the pull would otherwise need an interactive merge, the server
+    follows the [#232](https://github.com/pvliesdonk/markdown-vault-mcp/issues/232)
+    Syncthing-style flow:
+
+    - The pull **succeeds** (`pull.applied=true`,
+      `pull.reason="conflicts_resolved_with_siblings"`).
+    - HEAD advances to the remote tip — the canonical path now reflects
+      the remote (remote wins).
+    - The local versions that conflicted are preserved as
+      `<basename>.conflict-mcp-<timestamp>.md` siblings on the same
+      path; their vault-relative paths are listed in
+      `pull.conflict_files`.
+    - `pull.commits_pulled` is `0` on this path because the rebase
+      replays your local commits *on top of* the remote tip — the
+      counting model only reports linear-history catch-ups.
+
+    The LLM (or a downstream agent) is expected to read the listed
+    sibling(s), reconcile the local content against the remote, and
+    `delete` the sibling once merged.
+
+The full enumeration of `pull.reason` and `push.reason` values lives in
+the [`git_sync` tool reference](../tools/index.md#git_sync).
+
+`git_sync` is hidden when the deployment isn't in managed git mode (no
+`MARKDOWN_VAULT_MCP_GIT_REPO_URL` set) or when
+`MARKDOWN_VAULT_MCP_READ_ONLY=true`.
+
 ## Unmanaged / Commit-Only Mode
 
 Use unmanaged mode when another process controls pull/push, but you still want MCP writes committed locally.

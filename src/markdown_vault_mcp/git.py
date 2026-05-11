@@ -15,6 +15,7 @@ import stat
 import subprocess
 import tempfile
 import threading
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
@@ -27,6 +28,21 @@ from markdown_vault_mcp.exceptions import ConfigurationError
 from markdown_vault_mcp.types import CommitDiff, HistoryEntry
 
 logger = logging.getLogger(__name__)
+
+# Reason codes returned in :class:`PullResult.reason` and
+# :class:`PushResult.reason`.  Defined as module-level constants so callers
+# (and tests) can refer to them by name rather than re-typing string literals.
+PULL_REASON_FETCH_FAILED = "fetch_failed"
+PULL_REASON_NO_REMOTE = "no_remote"
+PULL_REASON_NON_FAST_FORWARD_WITH_CONFLICTS = "non_fast_forward_with_conflicts"
+PULL_REASON_REBASED = "rebased"
+PULL_REASON_CONFLICTS_RESOLVED_WITH_SIBLINGS = "conflicts_resolved_with_siblings"
+PULL_REASON_CONFLICT_RESOLUTION_FAILED = "conflict_resolution_failed"
+
+PUSH_REASON_DRY_RUN_UNSUPPORTED = "dry_run_unsupported"
+PUSH_REASON_NO_REMOTE = "no_remote"
+PUSH_REASON_NON_FAST_FORWARD = "non_fast_forward"
+PUSH_REASON_PUSH_FAILED = "push_failed"
 
 
 def _is_ssh_remote(url: str) -> bool:
@@ -86,6 +102,161 @@ def _find_git_root(path: Path) -> Path | None:
         return Path(result.stdout.strip())
     except (subprocess.CalledProcessError, FileNotFoundError):
         return None
+
+
+@dataclass(frozen=True)
+class PullResult:
+    """Result of a :meth:`GitWriteStrategy.force_pull` invocation.
+
+    Attributes:
+        applied: ``True`` when the pull was actually executed and HEAD was
+            moved (or was already up-to-date and required no work).
+            Also ``True`` when divergent history was resolved via the
+            Syncthing-style sibling write — HEAD advanced to the remote
+            and the local MCP versions were preserved as
+            ``.conflict-mcp-*`` siblings (see ``conflict_files``).
+            ``False`` for ``dry_run`` calls and for failures that left
+            HEAD unchanged.
+        fast_forward: ``True`` when the pull was (or would have been) a
+            clean fast-forward.  ``False`` when divergent history
+            required rebase + sibling writes, or when the operation
+            failed.  Inspect ``reason`` and ``conflict_files`` to
+            distinguish "applied via conflict resolution" from outright
+            failure.
+        commits_pulled: Count of commits brought in.  Reliable on the
+            fast-forward path (``reason is None`` and ``fast_forward=True``).
+            On ``"rebased"`` and ``"conflicts_resolved_with_siblings"`` this
+            is ``0`` even when HEAD advanced — the rebase replays local
+            commits *on top of* the upstream rather than fast-forwarding,
+            so the linear-history "commits pulled" count is not meaningful.
+            Inspect ``from_sha != to_sha`` to detect that HEAD actually
+            moved on those paths.  In ``dry_run`` mode this is the count
+            that *would* have been pulled.
+        from_sha: HEAD SHA before the pull.
+        to_sha: HEAD SHA after the pull.  In ``dry_run`` mode this is the
+            SHA HEAD would have moved to.  When the pull failed and HEAD
+            did not move this equals ``from_sha``.
+        reason: Diagnostic code describing the outcome.  ``None`` for
+            clean fast-forward pulls and dry-runs.  Otherwise one of:
+
+            * ``"fetch_failed"`` — ``git fetch origin`` exited non-zero
+              (network error, auth failure, etc.); HEAD did not move.
+            * ``"no_remote"`` — neither ``@{upstream}`` nor
+              ``origin/HEAD`` could be resolved on the local clone.
+            * ``"non_fast_forward_with_conflicts"`` — local and remote
+              histories diverged and the conflict-resolution path
+              failed to produce a usable result; HEAD did not move.
+            * ``"rebased"`` — local and remote histories diverged but
+              ``git rebase @{upstream}`` replayed local commits cleanly
+              on top of the upstream with no manual intervention.
+              ``applied`` is ``True``; ``conflict_files`` is empty.
+            * ``"conflicts_resolved_with_siblings"`` — local and remote
+              histories diverged AND rebase hit real conflicts, which
+              were resolved by accepting upstream and saving the local
+              MCP versions as ``.conflict-mcp-*`` siblings (see #232).
+              HEAD advanced; ``applied`` is ``True`` and
+              ``conflict_files`` is populated.
+            * ``"conflict_resolution_failed"`` — rebase produced no
+              recoverable saved files and the working tree was
+              restored; HEAD did not move.
+
+            See module-level ``PULL_REASON_*`` constants for the
+            string values.
+        conflict_files: Vault-relative paths of Syncthing-style
+            ``.conflict-mcp-*`` siblings written when the pull resolved
+            divergent history (see #232 and the
+            ``"conflicts_resolved_with_siblings"`` reason above).
+            Empty for clean fast-forwards, dry-runs, and failure paths
+            that did not write any siblings.
+    """
+
+    applied: bool
+    fast_forward: bool
+    commits_pulled: int
+    from_sha: str
+    to_sha: str
+    reason: str | None = None
+    conflict_files: tuple[str, ...] = field(default_factory=tuple)
+
+    @classmethod
+    def head_unchanged_failure(cls, from_sha: str, reason: str) -> PullResult:
+        """Construct a ``PullResult`` for a failure path where HEAD did not move.
+
+        The 5 failure paths in :meth:`GitWriteStrategy.force_pull` and its
+        helpers (``no_remote``, ``non_fast_forward``,
+        ``conflict_resolution_failed``, ``non_fast_forward_with_conflicts``,
+        ``fetch_failed``) all share the same shape: ``applied=False``,
+        ``fast_forward=False``, ``commits_pulled=0``, and
+        ``to_sha == from_sha`` (HEAD unchanged).  This factory reduces the
+        repetition.
+
+        Args:
+            from_sha: HEAD SHA before the failed operation.  Used for both
+                ``from_sha`` and ``to_sha`` since HEAD did not move.
+            reason: One of the ``PULL_REASON_*`` constants.
+
+        Returns:
+            A ``PullResult`` with the failure-shape fields set and the
+            provided ``reason``.
+        """
+        return cls(
+            applied=False,
+            fast_forward=False,
+            commits_pulled=0,
+            from_sha=from_sha,
+            to_sha=from_sha,
+            reason=reason,
+        )
+
+
+@dataclass(frozen=True)
+class PushResult:
+    """Result of a :meth:`GitWriteStrategy.force_push` invocation.
+
+    Attributes:
+        applied: ``True`` when the push succeeded (or was a no-op because
+            the remote already had every local commit).  ``False`` for
+            ``dry_run`` calls and for push attempts that were rejected or
+            failed.
+        commits_pushed: Count of commits sent to the remote.  ``0`` when
+            there was nothing to push.
+        remote_sha_before: Remote ref SHA before the push.  Equals
+            ``remote_sha_after`` on no-op and on failure.
+        remote_sha_after: Remote ref SHA after the push.  Equals the local
+            HEAD on success and ``remote_sha_before`` on failure.
+        reason: Diagnostic code describing the outcome.  ``None`` for
+            successful pushes (including the no-op already-up-to-date
+            case).  Otherwise one of:
+
+            * ``"dry_run_unsupported"`` — the caller passed
+              ``dry_run=True``; git has no safe local probe for "would
+              this push be accepted by the remote", so the call is a
+              no-op that sets this code.  HEAD and the remote are not
+              touched.
+            * ``"no_remote"`` — the upstream tracking branch could not
+              be resolved (no ``@{upstream}`` and no ``origin/HEAD``);
+              the push was not attempted.
+            * ``"non_fast_forward"`` — the remote rejected the push
+              because the local branch is not a strict descendant of
+              the remote tip.  ``hint`` points the caller at
+              ``git_sync(direction='pull')`` to reconcile first.
+            * ``"push_failed"`` — ``git push origin`` exited non-zero
+              for any other reason (network error, auth failure, hook
+              rejection).  ``hint`` carries the truncated stderr.
+
+            See module-level ``PUSH_REASON_*`` constants for the
+            string values.
+        hint: Operator-facing remediation suggestion when ``applied=False``.
+            Surfaced verbatim in the MCP tool response so the caller can
+            see exactly what to do next.
+    """
+
+    applied: bool
+    commits_pushed: int
+    remote_sha_before: str
+    remote_sha_after: str
+    reason: str | None = None
+    hint: str | None = None
 
 
 class GitWriteStrategy:
@@ -168,6 +339,11 @@ class GitWriteStrategy:
         self._commit_name = commit_name or self.DEFAULT_COMMIT_NAME
         self._commit_email = commit_email or self.DEFAULT_COMMIT_EMAIL
         self._git_lfs = git_lfs
+        # Retain the configured repo_path so methods invoked after construction
+        # (e.g. force_pull / force_push) can reach the working tree without
+        # the caller re-passing it.  Distinct from ``_pull_repo_path`` which
+        # is only set when the periodic pull loop is started via ``start()``.
+        self._repo_path: Path | None = repo_path
         self._git_root: Path | None = None
         self._git_root_checked = False
         self._write_init_done = False
@@ -210,6 +386,21 @@ class GitWriteStrategy:
             return
         with contextlib.suppress(OSError):
             Path(script_path_str).unlink()
+
+    def _redact(self, text: str) -> str:
+        """Replace the configured PAT with ``***`` so it never reaches logs/responses.
+
+        Args:
+            text: Raw stderr / message text that may contain ``self._token``.
+
+        Returns:
+            The same text with every occurrence of ``self._token`` replaced by
+            ``"***"``.  Returns ``text`` unchanged when no token is configured
+            or the text doesn't contain it (cheap no-op for the common case).
+        """
+        if self._token and self._token in text:
+            return text.replace(self._token, "***")
+        return text
 
     def _ensure_git_root(self, repo_path: Path) -> Path | None:
         if self._git_root_checked:
@@ -391,9 +582,7 @@ class GitWriteStrategy:
             if self._enable_push:
                 self._schedule_push()
         except subprocess.CalledProcessError as exc:
-            sanitized_stderr = exc.stderr or ""
-            if self._token and self._token in sanitized_stderr:
-                sanitized_stderr = sanitized_stderr.replace(self._token, "***")
+            sanitized_stderr = self._redact(exc.stderr or "")
             logger.error(
                 "Git operation failed for %s (%s): command %s returned %d\n%s",
                 path,
@@ -426,9 +615,7 @@ class GitWriteStrategy:
         try:
             self._do_push()
         except subprocess.CalledProcessError as exc:
-            sanitized_stderr = exc.stderr or ""
-            if self._token and self._token in sanitized_stderr:
-                sanitized_stderr = sanitized_stderr.replace(self._token, "***")
+            sanitized_stderr = self._redact(exc.stderr or "")
             logger.error(
                 "Git push failed: command %s returned %d\n%s",
                 exc.cmd,
@@ -517,9 +704,7 @@ class GitWriteStrategy:
             try:
                 _push(self._git_root, self._token, self._username)
             except subprocess.CalledProcessError as exc:
-                sanitized_stderr = exc.stderr or ""
-                if self._token and self._token in sanitized_stderr:
-                    sanitized_stderr = sanitized_stderr.replace(self._token, "***")
+                sanitized_stderr = self._redact(exc.stderr or "")
                 logger.error(
                     "Git startup push failed: command %s returned %d\n%s",
                     exc.cmd,
@@ -653,6 +838,231 @@ class GitWriteStrategy:
         )
         return list(saved.items())
 
+    def _resolve_conflicts_safely(
+        self,
+        git_root: Path,
+        env: dict[str, str] | None,
+        from_sha: str,
+    ) -> tuple[list[tuple[str, str]] | None, PullResult | None]:
+        """Defensive wrapper around :meth:`_resolve_rebase_conflicts`.
+
+        Catches the case where conflict resolution itself raises mid-loop,
+        leaving the repository in a half-rebased state.  On exception:
+        logs at ERROR with traceback, runs ``git rebase --abort`` defensively
+        (logging WARNING if the abort itself fails — but not failing the
+        overall recovery), and returns an early-exit ``PullResult`` so the
+        caller can surface ``conflict_resolution_failed`` without a leftover
+        ``rebase-merge`` directory.
+
+        Args:
+            git_root: Working-tree root.
+            env: Optional GIT_ASKPASS environment.
+            from_sha: HEAD SHA captured by the caller before the rebase
+                attempt; reused on the failure path so the returned result
+                has consistent ``from_sha == to_sha`` semantics.
+
+        Returns:
+            ``(saved, None)`` on success — ``saved`` is the list of
+            ``(rel_path, mcp_content)`` tuples from
+            :meth:`_resolve_rebase_conflicts`.
+
+            ``(None, PullResult)`` on failure — caller should return the
+            ``PullResult`` immediately.
+        """
+        try:
+            saved = self._resolve_rebase_conflicts(git_root, env)
+        except Exception:
+            logger.error(
+                "Git force_pull: conflict resolution raised — aborting rebase",
+                exc_info=True,
+            )
+            abort_proc = self._run_git_capturing(git_root, "rebase", "--abort", env=env)
+            if abort_proc.returncode != 0:
+                logger.warning(
+                    "Git force_pull: defensive `git rebase --abort` "
+                    "after conflict-resolution failure also failed: %s",
+                    self._redact((abort_proc.stderr or "").strip()),
+                )
+            return None, PullResult.head_unchanged_failure(
+                from_sha, PULL_REASON_CONFLICT_RESOLUTION_FAILED
+            )
+        return saved, None
+
+    def _check_rebase_in_progress(
+        self,
+        git_root: Path,
+        env: dict[str, str] | None,
+    ) -> bool:
+        """Return True if a rebase is in progress in this working tree.
+
+        Reliable signal: the existence of ``.git/rebase-merge`` or
+        ``.git/rebase-apply`` directories.  ``REBASE_HEAD`` ref is NOT
+        reliable — git keeps it around after a successful ``rebase
+        --continue`` for use as a backup reference, so its mere existence
+        does not mean a rebase is in flight.  Resolves ``GIT_DIR`` via
+        ``rev-parse`` so this works inside worktrees and submodules where
+        the directory is not the repo's literal ``.git``.
+
+        On ``rev-parse --git-dir`` failure (which means we genuinely cannot
+        tell), this conservatively returns ``True`` so the caller's abort
+        runs — abort on a clean tree fails loudly (and is logged), but
+        failing to abort a real in-progress rebase would leave the repo
+        wedged for every subsequent ``force_pull``.  The underlying
+        rev-parse failure is logged at ERROR with token-redacted stderr.
+
+        Args:
+            git_root: Working-tree root.
+            env: Optional GIT_ASKPASS environment.
+
+        Returns:
+            ``True`` if a rebase appears to be in progress (or if we cannot
+            tell); ``False`` only when ``rev-parse --git-dir`` succeeded
+            AND no ``rebase-merge`` / ``rebase-apply`` directory exists.
+        """
+        git_dir_proc = self._run_git_capturing(
+            git_root, "rev-parse", "--git-dir", env=env
+        )
+        if git_dir_proc.returncode != 0:
+            logger.error(
+                "Git force_pull: `git rev-parse --git-dir` failed; "
+                "conservatively assuming rebase is in progress: %s",
+                self._redact((git_dir_proc.stderr or "").strip()),
+            )
+            return True
+
+        git_dir = Path(git_dir_proc.stdout.strip())
+        if not git_dir.is_absolute():
+            git_dir = git_root / git_dir
+        return (git_dir / "rebase-merge").is_dir() or (
+            git_dir / "rebase-apply"
+        ).is_dir()
+
+    def _abort_in_progress_rebase(
+        self,
+        git_root: Path,
+        env: dict[str, str] | None,
+    ) -> bool:
+        """Run ``git rebase --abort`` synchronously.
+
+        Args:
+            git_root: Working-tree root.
+            env: Optional GIT_ASKPASS environment.
+
+        Returns:
+            ``True`` if abort succeeded; ``False`` if abort itself failed
+            (in which case the caller should bail out — the working tree
+            may be inconsistent).  Failure is logged at ERROR with
+            token-redacted stderr.
+        """
+        abort_proc = self._run_git_capturing(git_root, "rebase", "--abort", env=env)
+        if abort_proc.returncode != 0:
+            logger.error(
+                "Git force_pull: failed to abort rebase: %s",
+                self._redact((abort_proc.stderr or "").strip()),
+            )
+            return False
+        return True
+
+    def _restore_upstream_paths(
+        self,
+        git_root: Path,
+        env: dict[str, str] | None,
+        saved: list[tuple[str, str]],
+    ) -> list[tuple[str, str]]:
+        """Restore upstream content for each conflict path after rebase abort.
+
+        After ``git rebase --abort`` the working tree reverts to the
+        pre-rebase MCP state — every file in ``saved`` again contains the
+        MCP version, not the upstream version.  For each path we run
+        ``git checkout @{upstream} -- <path>`` to bring back the upstream
+        bytes so :meth:`_write_conflict_files` reads the right side
+        (canonical = upstream, sibling = MCP).
+
+        On per-path checkout failure (file deleted upstream, permission
+        error, etc.), the path is DROPPED from the returned list — writing
+        a sibling that contains the same MCP bytes as the canonical path
+        would defeat the "remote wins, local preserved" invariant.  Each
+        drop is logged at ERROR with the path name and token-redacted
+        stderr so an operator can investigate.
+
+        Args:
+            git_root: Working-tree root.
+            env: Optional GIT_ASKPASS environment.
+            saved: List of ``(rel_path, mcp_content)`` tuples returned by
+                :meth:`_resolve_conflicts_safely`.
+
+        Returns:
+            Subset of ``saved`` whose upstream restore succeeded.  May be
+            empty if every checkout failed.
+        """
+        restored: list[tuple[str, str]] = []
+        for rel_path, mcp_content in saved:
+            checkout_proc = self._run_git_capturing(
+                git_root,
+                "checkout",
+                "@{upstream}",
+                "--",
+                rel_path,
+                env=env,
+            )
+            if checkout_proc.returncode != 0:
+                logger.error(
+                    "Git force_pull: failed to restore upstream "
+                    "version of %r after rebase abort; dropping it "
+                    "from conflict siblings to avoid duplicate MCP "
+                    "content: %s",
+                    rel_path,
+                    self._redact((checkout_proc.stderr or "").strip()),
+                )
+                continue
+            restored.append((rel_path, mcp_content))
+        return restored
+
+    def _build_pull_result_advanced(
+        self,
+        git_root: Path,
+        env: dict[str, str] | None,
+        *,
+        from_sha: str,
+        reason: str,
+        conflict_files: tuple[str, ...] = (),
+    ) -> PullResult:
+        """Build a successful PullResult after HEAD has advanced.
+
+        Captures the post-pull HEAD SHA and runs ``git lfs pull`` so any
+        LFS pointers brought in by the merge/rebase are resolved before
+        callers continue.  Used by both the plain-rebase success path and
+        the conflicts-resolved-with-siblings success path in
+        :meth:`force_pull` / :meth:`_force_pull_rebase_fallback`.
+
+        Args:
+            git_root: Working-tree root.
+            env: Optional GIT_ASKPASS environment.
+            from_sha: HEAD SHA captured before the operation.
+            reason: One of the ``PULL_REASON_*`` constants for the success
+                shape (typically ``REBASED`` or
+                ``CONFLICTS_RESOLVED_WITH_SIBLINGS``).
+            conflict_files: Tuple of Syncthing-style sibling paths written
+                during conflict resolution.  Empty for the plain-rebase
+                path.
+
+        Returns:
+            A ``PullResult`` with ``applied=True``, ``fast_forward=False``,
+            ``commits_pulled=0``, ``to_sha`` set to the post-operation
+            HEAD, and the provided ``reason`` / ``conflict_files``.
+        """
+        new_head = self._head_sha(git_root)
+        self._lfs_pull(env=env)
+        return PullResult(
+            applied=True,
+            fast_forward=False,
+            commits_pulled=0,
+            from_sha=from_sha,
+            to_sha=new_head,
+            reason=reason,
+            conflict_files=conflict_files,
+        )
+
     def _write_conflict_files(
         self,
         git_root: Path,
@@ -764,6 +1174,537 @@ class GitWriteStrategy:
             )
 
         return written
+
+    # ------------------------------------------------------------------
+    # Synchronous force-trigger helpers (used by the ``git_sync`` MCP tool)
+    # ------------------------------------------------------------------
+
+    def _resolve_force_repo(self) -> Path:
+        """Return the working tree path used by ``force_*`` methods.
+
+        Raises:
+            RuntimeError: When no ``repo_path`` was configured at
+                construction time.  The ``force_*`` methods require an
+                explicit working tree because they cannot infer one from
+                a per-write callback path.
+        """
+        if self._repo_path is None:
+            raise RuntimeError(
+                "GitWriteStrategy.force_* requires repo_path to be set at "
+                "construction time."
+            )
+        return self._repo_path
+
+    def _head_sha(self, git_root: Path) -> str:
+        """Return the current HEAD SHA of *git_root*."""
+        return self._git(git_root, "rev-parse", "HEAD").strip()
+
+    def _git(
+        self,
+        git_root: Path,
+        *args: str,
+        env: dict[str, str] | None = None,
+    ) -> str:
+        """Run ``git -C <git_root> <args>`` and return stdout.
+
+        Thin wrapper used by the ``force_*`` helpers — keeps subprocess
+        boilerplate (capture, text mode, check=True) in one place.
+
+        Raises:
+            subprocess.CalledProcessError: If git exits non-zero.  Callers
+                handle this for branches that can legitimately fail
+                (e.g. ``merge --ff-only``).
+        """
+        result = subprocess.run(
+            ["git", "-C", str(git_root), *args],
+            capture_output=True,
+            text=True,
+            check=True,
+            env=env,
+        )
+        return result.stdout
+
+    def _run_git_capturing(
+        self,
+        git_root: Path,
+        *args: str,
+        env: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        """Run a git command and return the completed process without raising.
+
+        Sister of :meth:`_git` for paths that need to inspect ``returncode``
+        and ``stderr`` instead of letting :class:`subprocess.CalledProcessError`
+        propagate.  Used in :meth:`_force_pull_rebase_fallback` where we need
+        to make recovery decisions based on whether ``git rebase --abort``
+        succeeded, whether the working tree has an in-progress rebase, etc.
+
+        Args:
+            git_root: Working-tree root used for ``git -C``.
+            *args: Git subcommand and arguments (without the leading ``git``).
+            env: Optional environment, typically ``self._git_env()`` for
+                token-bearing operations.  ``None`` inherits the parent process
+                environment.
+
+        Returns:
+            :class:`subprocess.CompletedProcess` with ``returncode``, ``stdout``,
+            and ``stderr`` populated.  Stderr will need to be passed through
+            :meth:`_redact` before logging or surfacing to callers.
+        """
+        return subprocess.run(
+            ["git", "-C", str(git_root), *args],
+            capture_output=True,
+            text=True,
+            env=env,
+            check=False,  # explicit — caller inspects returncode
+        )
+
+    def force_pull(self, *, dry_run: bool = False) -> PullResult:
+        """Pull from ``origin`` synchronously and return a structured result.
+
+        The remote-tracking branch is identified by reading the upstream of
+        the current branch (``@{upstream}``) so this method works even when
+        ``origin/HEAD`` has not been set on the local clone.
+
+        Acquires :attr:`_lock` for the duration so the periodic pull loop
+        and the per-write commit path cannot race against the fetch /
+        merge / rebase pipeline.  This blocks writes for the network
+        round-trip; that is acceptable for the interactive ``git_sync``
+        tool and mirrors what :meth:`sync_once` already does.
+
+        On ``ff-only`` failure (divergent history) the implementation
+        falls through to the same rebase + Syncthing-style sibling write
+        path used by :meth:`sync_once` (see :meth:`_resolve_rebase_conflicts`
+        and :meth:`_write_conflict_files`).  When the conflict-resolution
+        path produces sibling files HEAD has advanced to the remote and
+        :attr:`PullResult.applied` is ``True`` with
+        :attr:`PullResult.reason` set to
+        ``"conflicts_resolved_with_siblings"``.
+
+        After a successful HEAD advance — fast-forward or sibling
+        resolution — :meth:`_lfs_pull` runs so any LFS pointers in the
+        new commits are materialised before the caller sees the working
+        tree.
+
+        Args:
+            dry_run: When ``True``, runs ``git fetch`` and computes the
+                would-be pull without modifying HEAD.  Returns
+                ``applied=False`` with ``commits_pulled`` set to the count
+                that *would* have been pulled.
+
+        Returns:
+            :class:`PullResult` describing the operation.  See the
+            ``reason`` field for the full enumeration of outcomes.
+
+        Raises:
+            RuntimeError: When the strategy was constructed without
+                ``repo_path``.
+        """
+        git_root = self._resolve_force_repo()
+        env = self._git_env()
+        try:
+            with self._lock:
+                from_sha = self._head_sha(git_root)
+
+                # Always fetch first — both dry-run and real-pull need the
+                # remote-tracking ref refreshed before comparing SHAs.
+                try:
+                    self._git(git_root, "fetch", "origin", env=env)
+                except subprocess.CalledProcessError as exc:
+                    # Sanitise the token before logging — fetch is the
+                    # network-touching subprocess in this method, and git
+                    # error messages can echo the URL with credentials
+                    # back at the user.  Mirrors the redaction pattern
+                    # already used in ``_do_push_safe`` and ``force_push``.
+                    stderr = self._redact((exc.stderr or "").strip())
+                    logger.warning(
+                        "Git force_pull: fetch failed: %s",
+                        stderr,
+                    )
+                    return PullResult.head_unchanged_failure(
+                        from_sha, PULL_REASON_FETCH_FAILED
+                    )
+
+                # Resolve the upstream-tracking branch.  Falls back to
+                # ``origin/HEAD`` so callers with a non-tracking checkout
+                # still get a reasonable answer; both yield the remote-side
+                # SHA.
+                try:
+                    remote_sha = self._git(
+                        git_root, "rev-parse", "@{upstream}", env=env
+                    ).strip()
+                except subprocess.CalledProcessError:
+                    try:
+                        remote_sha = self._git(
+                            git_root, "rev-parse", "origin/HEAD", env=env
+                        ).strip()
+                    except subprocess.CalledProcessError:
+                        return PullResult.head_unchanged_failure(
+                            from_sha, PULL_REASON_NO_REMOTE
+                        )
+
+                if remote_sha == from_sha:
+                    # Already up to date — successful no-op.
+                    return PullResult(
+                        applied=True,
+                        fast_forward=True,
+                        commits_pulled=0,
+                        from_sha=from_sha,
+                        to_sha=from_sha,
+                    )
+
+                # Count commits between local and remote.  When the local
+                # branch is behind the remote this is the number of commits
+                # ``merge --ff-only`` would apply.
+                commits_ahead = self._git(
+                    git_root,
+                    "rev-list",
+                    "--count",
+                    f"{from_sha}..{remote_sha}",
+                    env=env,
+                ).strip()
+                try:
+                    commits_pulled = int(commits_ahead)
+                except ValueError:
+                    # ``rev-list --count`` is documented to print a single
+                    # integer; if parsing fails, the underlying git call is
+                    # broken in a way we should surface rather than silently
+                    # report 0 commits.  Fall back to 0 but log loudly.
+                    logger.warning(
+                        "Git force_pull: could not parse commit count %r "
+                        "from `git rev-list --count %s..%s`",
+                        commits_ahead,
+                        from_sha,
+                        remote_sha,
+                    )
+                    commits_pulled = 0
+
+                if dry_run:
+                    # Heuristic: assume fast-forward.  Actual ff-ness is
+                    # only known after attempting the merge; the conflict
+                    # path below corrects this for non-dry-run calls.
+                    return PullResult(
+                        applied=False,
+                        fast_forward=True,
+                        commits_pulled=commits_pulled,
+                        from_sha=from_sha,
+                        to_sha=remote_sha,
+                    )
+
+                # Attempt fast-forward merge first.  On divergence fall
+                # through to rebase + Syncthing-style sibling resolution,
+                # mirroring :meth:`sync_once`.
+                try:
+                    self._git(git_root, "merge", "--ff-only", remote_sha, env=env)
+                except subprocess.CalledProcessError as ff_exc:
+                    logger.debug(
+                        "Git force_pull: ff-only merge failed, attempting rebase: %s",
+                        (ff_exc.stderr or "").strip(),
+                    )
+                    return self._force_pull_rebase_fallback(
+                        git_root=git_root,
+                        env=env,
+                        from_sha=from_sha,
+                    )
+
+                # Fast-forward succeeded.  ``remote_sha`` is the new HEAD —
+                # no need to re-read it via ``_head_sha``.
+                self._lfs_pull(env=env)
+                return PullResult(
+                    applied=True,
+                    fast_forward=True,
+                    commits_pulled=commits_pulled,
+                    from_sha=from_sha,
+                    to_sha=remote_sha,
+                )
+        finally:
+            self._cleanup_git_env(env)
+
+    def _force_pull_rebase_fallback(
+        self,
+        *,
+        git_root: Path,
+        env: dict[str, str] | None,
+        from_sha: str,
+    ) -> PullResult:
+        """Attempt rebase + Syncthing-style sibling resolution.
+
+        Called by :meth:`force_pull` when ``merge --ff-only`` failed
+        because local and remote histories diverged.  Mirrors the
+        rebase / conflict-resolution branch in :meth:`sync_once` but
+        returns a structured :class:`PullResult` rather than a bool.
+
+        Must be called with :attr:`_lock` already held — it issues
+        further git commands against the same working tree.
+
+        Args:
+            git_root: Working-tree root used for git ``-C``.
+            env: Optional GIT_ASKPASS environment for token auth.
+            from_sha: HEAD SHA captured before the fetch.
+
+        Returns:
+            :class:`PullResult` whose ``reason`` is one of
+            ``"rebased"`` (plain rebase succeeded, HEAD advanced,
+            ``applied=True``),
+            ``"conflicts_resolved_with_siblings"`` (HEAD advanced,
+            siblings written, ``applied=True``),
+            ``"conflict_resolution_failed"`` (HEAD unchanged,
+            ``applied=False``), or
+            ``"non_fast_forward_with_conflicts"`` (rebase started but
+            could not be cleanly resolved or aborted, ``applied=False``).
+        """
+        # First try a plain rebase — this handles the common case where
+        # local commits touch *different* files than the upstream commits
+        # and replay cleanly with no manual intervention.
+        try:
+            self._git(git_root, "rebase", "@{upstream}", env=env)
+        except subprocess.CalledProcessError:
+            # Real conflicts during rebase — resolve by accepting upstream
+            # and saving the local MCP versions as Syncthing-style siblings.
+            #
+            # ``_resolve_rebase_conflicts`` runs ``git checkout --ours`` and
+            # ``git add`` with ``check=True``; if either raises mid-loop the
+            # repository is left in a half-rebased state.
+            # ``_resolve_conflicts_safely`` wraps that in a defensive abort
+            # so a subsequent ``force_pull`` (or any per-write commit path)
+            # does not trip over the leftover ``rebase-merge`` directory.
+            saved, early_exit = self._resolve_conflicts_safely(git_root, env, from_sha)
+            if early_exit is not None:
+                return early_exit
+            # ``_resolve_conflicts_safely`` returns ``(saved, None)`` on
+            # success and ``(None, PullResult)`` on failure — exactly one
+            # is non-None.  After the early-exit guard above, ``saved`` is
+            # guaranteed non-None; assert so mypy can narrow.
+            assert saved is not None
+
+            # If a rebase is still in progress (loop hit its iteration
+            # limit, or exited via ``break`` without completing), abort
+            # cleanly so the working tree is consistent before we write
+            # conflict files.
+            rebase_in_progress = self._check_rebase_in_progress(git_root, env)
+
+            if rebase_in_progress:
+                if not self._abort_in_progress_rebase(git_root, env):
+                    return PullResult.head_unchanged_failure(
+                        from_sha, PULL_REASON_NON_FAST_FORWARD_WITH_CONFLICTS
+                    )
+                saved = self._restore_upstream_paths(git_root, env, saved)
+
+            if not saved:
+                logger.warning(
+                    "Git force_pull: conflict resolution failed, leaving HEAD unchanged"
+                )
+                return PullResult.head_unchanged_failure(
+                    from_sha, PULL_REASON_CONFLICT_RESOLUTION_FAILED
+                )
+
+            written = self._write_conflict_files(git_root, saved, env)
+            for cf in written:
+                logger.warning(
+                    "Git force_pull: conflict resolved, saved MCP version as %s",
+                    cf,
+                )
+            logger.info(
+                "Git force_pull: rebase completed with %d conflict file(s)",
+                len(written),
+            )
+            # HEAD has advanced past the upstream because conflict
+            # resolution itself produced a new commit on top.  The helper
+            # captures the actual new HEAD rather than ``remote_sha``.
+            return self._build_pull_result_advanced(
+                git_root,
+                env,
+                from_sha=from_sha,
+                reason=PULL_REASON_CONFLICTS_RESOLVED_WITH_SIBLINGS,
+                conflict_files=tuple(written),
+            )
+
+        # Plain rebase succeeded — local commits replayed cleanly on top
+        # of the upstream.  HEAD has advanced.
+        return self._build_pull_result_advanced(
+            git_root,
+            env,
+            from_sha=from_sha,
+            reason=PULL_REASON_REBASED,
+        )
+
+    def force_push(self, *, dry_run: bool = False) -> PushResult:
+        """Push local commits to ``origin`` synchronously.
+
+        Never force-pushes — the underlying ``git push origin`` is a plain
+        fast-forward push.  When the remote has commits the local clone
+        has not seen, the push is rejected and the returned
+        :class:`PushResult` carries ``reason="non_fast_forward"`` plus a
+        hint pointing at ``git_sync(direction='pull')``.  The caller is
+        expected to reconcile via the pull path and then retry.
+
+        Acquires :attr:`_lock` for the duration so the periodic pull loop
+        and the per-write commit + deferred-push pipeline cannot race
+        against the synchronous push.  This blocks writes for the network
+        round-trip; that is acceptable for the interactive ``git_sync``
+        tool and mirrors :meth:`force_pull`.
+
+        ``dry_run`` is a no-op.  Git has no safe local probe for "would
+        this push be accepted by the remote": the only authoritative
+        check is to actually attempt the push.  Rather than silently
+        substitute a misleading approximation, we surface this with
+        ``reason="dry_run_unsupported"`` so callers can document the
+        limitation.
+
+        Args:
+            dry_run: When ``True``, returns immediately without contacting
+                the remote.  See above for the rationale.
+
+        Returns:
+            :class:`PushResult` describing the operation.  See the
+            ``reason`` field for the full enumeration of outcomes.
+
+        Raises:
+            RuntimeError: When the strategy was constructed without
+                ``repo_path``.
+        """
+        git_root = self._resolve_force_repo()
+
+        with self._lock:
+            local_head = self._head_sha(git_root)
+
+            # Resolve the remote-tracking SHA before the push.  Mirrors
+            # :meth:`force_pull` — prefer ``@{upstream}`` (set when the
+            # branch was created via ``git push -u``), fall back to
+            # ``origin/HEAD`` for non-tracking checkouts.  ``origin/HEAD``
+            # alone is unreliable on freshly-pushed clones, hence the
+            # two-step lookup.
+            try:
+                remote_sha_before = self._git(
+                    git_root, "rev-parse", "@{upstream}"
+                ).strip()
+            except subprocess.CalledProcessError:
+                try:
+                    remote_sha_before = self._git(
+                        git_root, "rev-parse", "origin/HEAD"
+                    ).strip()
+                except subprocess.CalledProcessError:
+                    return PushResult(
+                        applied=False,
+                        commits_pushed=0,
+                        remote_sha_before="",
+                        remote_sha_after="",
+                        reason=PUSH_REASON_NO_REMOTE,
+                        hint=(
+                            "No upstream tracking branch is configured for the "
+                            "current branch.  Run `git push -u origin <branch>` "
+                            "from the working tree once to establish tracking."
+                        ),
+                    )
+
+            if dry_run:
+                # Document the limitation rather than fake a result.
+                return PushResult(
+                    applied=False,
+                    commits_pushed=0,
+                    remote_sha_before=remote_sha_before,
+                    remote_sha_after=remote_sha_before,
+                    reason=PUSH_REASON_DRY_RUN_UNSUPPORTED,
+                    hint=(
+                        "force_push has no dry_run mode: git provides no safe "
+                        "local probe for whether the remote will accept a push. "
+                        "Re-invoke with dry_run=False to actually push."
+                    ),
+                )
+
+            # No-op: local already matches the remote-tracking SHA.  We
+            # could let `git push` short-circuit on its own, but returning
+            # early avoids a subprocess + reads more clearly in logs.
+            if remote_sha_before == local_head:
+                return PushResult(
+                    applied=True,
+                    commits_pushed=0,
+                    remote_sha_before=remote_sha_before,
+                    remote_sha_after=remote_sha_before,
+                )
+
+            # Count commits between remote and local.  When the local
+            # branch is strictly ahead this is the count `git push` will
+            # send; when histories diverge `git push` would reject the
+            # push as non-fast-forward and the count is best-effort.
+            commits_ahead_str = self._git(
+                git_root,
+                "rev-list",
+                "--count",
+                f"{remote_sha_before}..{local_head}",
+            ).strip()
+            try:
+                commits_pushed = int(commits_ahead_str)
+            except ValueError:
+                logger.warning(
+                    "Git force_push: could not parse commit count %r "
+                    "from `git rev-list --count %s..%s`",
+                    commits_ahead_str,
+                    remote_sha_before,
+                    local_head,
+                )
+                commits_pushed = 0
+
+            # Use the strategy's git env so token-based HTTPS auth works
+            # through the same GIT_ASKPASS mechanism the deferred-push
+            # path uses.  Cleaned up in the finally block below.
+            env = self._git_env()
+            try:
+                try:
+                    self._git(git_root, "push", "origin", env=env)
+                except subprocess.CalledProcessError as exc:
+                    # Redact token if it leaked into stderr.  Mirrors the
+                    # sanitisation in :meth:`_do_push_safe`.
+                    stderr = self._redact((exc.stderr or "").strip())
+
+                    # Detect the specific non-fast-forward case so the
+                    # caller can route to git_sync(direction='pull').
+                    # Git's wording is stable: "non-fast-forward" appears
+                    # both in the rejection line and the hint paragraph.
+                    if "non-fast-forward" in stderr or "fetch first" in stderr:
+                        logger.warning(
+                            "Git force_push: rejected as non-fast-forward "
+                            "(local %s vs remote %s)",
+                            local_head,
+                            remote_sha_before,
+                        )
+                        return PushResult(
+                            applied=False,
+                            commits_pushed=0,
+                            remote_sha_before=remote_sha_before,
+                            remote_sha_after=remote_sha_before,
+                            reason=PUSH_REASON_NON_FAST_FORWARD,
+                            hint=(
+                                "Remote has commits the local clone has not "
+                                "seen.  Run git_sync(direction='pull') to "
+                                "reconcile (fast-forward when possible, "
+                                "Syncthing-style siblings on real conflict), "
+                                "then retry git_sync(direction='push')."
+                            ),
+                        )
+
+                    logger.error(
+                        "Git force_push: push failed: %s",
+                        stderr,
+                    )
+                    truncated = stderr[:200]
+                    return PushResult(
+                        applied=False,
+                        commits_pushed=0,
+                        remote_sha_before=remote_sha_before,
+                        remote_sha_after=remote_sha_before,
+                        reason=PUSH_REASON_PUSH_FAILED,
+                        hint=truncated or "git push exited non-zero",
+                    )
+            finally:
+                self._cleanup_git_env(env)
+
+            # Push succeeded — remote now matches local HEAD.
+            return PushResult(
+                applied=True,
+                commits_pushed=commits_pushed,
+                remote_sha_before=remote_sha_before,
+                remote_sha_after=local_head,
+            )
 
     def sync_once(self, repo_path: Path) -> bool:
         """Fetch and update once, returning True if HEAD advanced.

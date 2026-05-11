@@ -35,6 +35,7 @@ markdown-vault-mcp exposes MCP tools across several categories. Write tools are 
 | [`fetch`](#fetch) | Write | Download from URL and save to vault |
 | [`create_download_link`](#create_download_link) | Write | Generate a one-time download URL for a vault file |
 | [`create_upload_link`](#create_upload_link) | Write | Mint a one-time HTTPS POST URL for pushing bytes into the vault |
+| [`git_sync`](#git_sync) | Write (git) | Force an immediate git pull / push / both, bypassing the periodic loops |
 | [`browse_vault`](#browse_vault) | Apps | Open the vault explorer SPA |
 | [`show_context`](#show_context) | Apps | Open the Context Card for a note |
 
@@ -425,6 +426,160 @@ comes from pvl-core, not MV.
     `MARKDOWN_VAULT_MCP_BASE_URL` to be set so the URL the tool returns
     is reachable from the caller. The route is auto-mounted by
     `register_file_exchange_upload(...)` when both conditions are met.
+
+---
+
+### `git_sync`
+
+Force an immediate `git pull` / `git push` / both, bypassing the periodic
+pull interval and write-idle push delay. Returns a structured payload
+with the local HEAD SHA, branch, and per-leg results so an LLM agent can
+confirm "your changes are now on the remote" or recover from a divergent
+history before continuing the conversation.
+
+**Parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `direction` | `"pull"` \| `"push"` \| `"both"` | `"both"` | Which leg(s) to run. `"both"` runs pull first, then push; if pull fails (`pull.applied=false`) the push leg is skipped and `push` stays `null` so a callable can inspect `pull.reason` before retrying. |
+| `dry_run` | bool | `false` | When `true`, the pull leg runs `git fetch` and reports what *would* happen (`would_apply: bool`, projected `to_sha`) without moving HEAD. The push leg has no safe local probe for "would the remote accept this", so a dry-run push is a no-op that returns `applied=false` with `reason="dry_run_unsupported"`. |
+
+**Returns:** Dict with the following fields:
+
+- `direction` (str) — the requested direction, echoed back.
+- `head_sha` (str) — local HEAD SHA after the operation. Differs from
+  the pre-call HEAD when the pull leg advanced the branch.
+- `branch` (str) — current branch name (or `"HEAD"` on detached HEAD).
+- `pull` (dict | null) — payload from the pull leg, or `null` when
+  `direction="push"`. Fields: `applied`, `fast_forward`,
+  `commits_pulled`, `from_sha`, `to_sha`; optional `reason`,
+  `conflict_files`; `would_apply` (only in `dry_run` mode).
+  `commits_pulled` is reliable on the fast-forward path. On
+  `reason="rebased"` and `reason="conflicts_resolved_with_siblings"` it
+  is `0` even when HEAD advanced — the rebase replays local commits *on
+  top of* the upstream rather than fast-forwarding, so inspect
+  `from_sha != to_sha` to detect the actual change.
+- `push` (dict | null) — payload from the push leg, or `null` when
+  `direction="pull"` or when the pull leg failed in
+  `direction="both"`. Fields: `applied`, `commits_pushed`,
+  `remote_sha_before`, `remote_sha_after`; optional `reason`, `hint`.
+- `dry_run` (bool) — present only when `dry_run=true` was passed.
+
+**Examples:**
+
+Successful both-direction sync (clean fast-forward + clean push):
+
+```json
+{
+  "direction": "both",
+  "head_sha": "abc1234",
+  "branch": "main",
+  "pull": {
+    "applied": true,
+    "fast_forward": true,
+    "commits_pulled": 3,
+    "from_sha": "9999999",
+    "to_sha": "abc1234"
+  },
+  "push": {
+    "applied": true,
+    "commits_pushed": 5,
+    "remote_sha_before": "8888888",
+    "remote_sha_after": "abc1234"
+  }
+}
+```
+
+Pull with conflict (Syncthing-style sibling resolution per
+[#232](https://github.com/pvliesdonk/markdown-vault-mcp/issues/232)):
+
+```json
+{
+  "direction": "pull",
+  "head_sha": "abc1234",
+  "branch": "main",
+  "pull": {
+    "applied": true,
+    "fast_forward": false,
+    "commits_pulled": 0,
+    "from_sha": "9999999",
+    "to_sha": "abc1234",
+    "reason": "conflicts_resolved_with_siblings",
+    "conflict_files": ["Notes/2026-05-09.conflict-mcp-20260511-114203.md"]
+  },
+  "push": null
+}
+```
+
+The pull *succeeded* (`applied=true`): HEAD now points at the remote tip
+and the local edits that conflicted with the remote were preserved as
+`.conflict-mcp-<timestamp>.md` siblings on the same path. The remote
+version wins on the canonical path; the LLM should read the listed
+sibling(s) and propose how to merge the local content back in.
+`commits_pulled` is `0` on this path because the rebase replays local
+commits *on top of* the remote — the remote commits are reconciled, not
+"pulled forward" in the linear-history sense.
+
+Push rejected as non-fast-forward:
+
+```json
+{
+  "direction": "push",
+  "head_sha": "abc1234",
+  "branch": "main",
+  "push": {
+    "applied": false,
+    "commits_pushed": 0,
+    "remote_sha_before": "9999999",
+    "remote_sha_after": "9999999",
+    "reason": "non_fast_forward",
+    "hint": "Remote has commits the local clone has not seen.  Run git_sync(direction='pull') to reconcile (fast-forward when possible, Syncthing-style siblings on real conflict), then retry git_sync(direction='push')."
+  }
+}
+```
+
+**`pull.reason` values** (set on every non-fast-forward outcome and on
+failures; `null` for clean fast-forwards and dry-runs):
+
+| Reason | Meaning | `applied` |
+|--------|---------|-----------|
+| `"fetch_failed"` | `git fetch origin` exited non-zero (network / auth / proxy). HEAD did not move. | `false` |
+| `"no_remote"` | Neither `@{upstream}` nor `origin/HEAD` could be resolved on the local clone. | `false` |
+| `"rebased"` | Local and remote diverged but `git rebase @{upstream}` replayed local commits cleanly. `conflict_files` empty. | `true` |
+| `"conflicts_resolved_with_siblings"` | Rebase hit real conflicts; resolved by accepting upstream and writing local versions as `.conflict-mcp-*` siblings (#232). `conflict_files` populated. | `true` |
+| `"conflict_resolution_failed"` | The conflict-resolution loop could not produce a recoverable working tree; rebase was aborted. HEAD did not move. | `false` |
+| `"non_fast_forward_with_conflicts"` | Rare catastrophic fallback when even the conflict-resolution path could not stabilise the working tree. HEAD did not move. | `false` |
+
+**`push.reason` values** (`null` on success including the
+already-up-to-date no-op):
+
+| Reason | Meaning | `applied` |
+|--------|---------|-----------|
+| `"dry_run_unsupported"` | Caller passed `dry_run=true`. Git has no safe local probe for "would the remote accept this", so the push leg is a deliberate no-op. | `false` |
+| `"no_remote"` | Upstream tracking branch could not be resolved (no `@{upstream}` and no `origin/HEAD`). Push not attempted. | `false` |
+| `"non_fast_forward"` | Remote rejected the push because the local branch is not a strict descendant of the remote tip. `hint` points at `git_sync(direction='pull')` to reconcile first. | `false` |
+| `"push_failed"` | `git push origin` exited non-zero for any other reason (network, auth, server-side hook). `hint` carries the truncated stderr. | `false` |
+
+**Context cost:** small — structured dict only, no file bytes.
+
+**Tag:** `{write, git-managed}`. Hidden when
+`MARKDOWN_VAULT_MCP_READ_ONLY=true` or when the deployment is not in
+managed git mode (`MARKDOWN_VAULT_MCP_GIT_REPO_URL` not set).
+
+**Errors:**
+
+- `ValueError` — raised at call time when the underlying strategy is
+  not a managed `GitWriteStrategy` (i.e. `MARKDOWN_VAULT_MCP_GIT_REPO_URL`
+  is unset). The visibility tag normally hides the tool in that case;
+  this error guards the path where a client invokes the tool by name
+  despite it not being advertised.
+
+!!! note "Requirements"
+    Only available in managed git mode. Set
+    `MARKDOWN_VAULT_MCP_GIT_REPO_URL` and a working
+    `MARKDOWN_VAULT_MCP_GIT_TOKEN` (with the
+    `MARKDOWN_VAULT_MCP_GIT_USERNAME` appropriate for your provider —
+    see the [Git Integration guide](../guides/git-integration.md#provider-username-reference)).
 
 ---
 

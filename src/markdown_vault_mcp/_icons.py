@@ -59,6 +59,7 @@ _TOOL_ICONS: dict[str, list[Icon]] = {
         "create_download_link",
         "get_history",
         "get_diff",
+        "git_sync",
         "vault_graph_neighborhood",
         "vault_graph_hubs",
     ]
