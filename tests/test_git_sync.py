@@ -189,6 +189,63 @@ class TestGitSync:
         assert payload["pull"]["commits_pulled"] == 1
         assert not (git_repo_pair.local_path / "dryseed.md").exists()
 
+    async def test_pull_conflict_returns_conflict_files(
+        self, git_repo_pair: GitRepoPair, _git_managed_env: Path
+    ) -> None:
+        """Real two-clone conflict surfaces Syncthing-style sibling paths.
+
+        Edits ``README.md`` differently on the local clone and on a sibling
+        clone (which pushes first), then drives ``git_sync`` and asserts
+        the tool reports the #232 conflict-resolution outcome:
+
+        * ``applied=True``  — HEAD did move (rebase resolved on top of remote)
+        * ``fast_forward=False`` — divergent history required rebase
+        * ``reason="conflicts_resolved_with_siblings"`` — local MCP version
+          was preserved as a ``.conflict-mcp-<timestamp>.md`` sibling
+          rather than discarded.
+        * ``conflict_files`` — non-empty, contains the README-derived sibling
+          path written by ``_write_conflict_files``.
+        """
+        # --- Remote side: seed one commit via a sibling clone. ---
+        _seed_remote_commit(
+            git_repo_pair,
+            clone_name="clone_conflict_remote",
+            file_name="README.md",
+            body="# remote-edited\n",
+        )
+
+        # --- Local side: edit the same file differently and commit. ---
+        (git_repo_pair.local_path / "README.md").write_text("# local-edited\n")
+        _run_git(git_repo_pair.local_path, "add", "README.md")
+        _run_git(git_repo_pair.local_path, "commit", "-m", "local edit")
+
+        server = make_server()
+        async with Client(server) as client:
+            result = await client.call_tool("git_sync", {"direction": "pull"})
+
+        payload = _parse_tool_data(result)
+
+        assert payload["pull"] is not None, payload
+        # Per #232 Syncthing-style resolution: rebase succeeds on top of the
+        # remote, and the local version is saved as a sibling — so the pull
+        # IS applied, just not as a fast-forward.
+        assert payload["pull"]["applied"] is True, payload["pull"]
+        assert payload["pull"]["fast_forward"] is False, payload["pull"]
+        assert payload["pull"]["reason"] == "conflicts_resolved_with_siblings", payload[
+            "pull"
+        ]
+
+        conflict_files = payload["pull"].get("conflict_files", [])
+        # Sibling format is ``<stem>.conflict-mcp-<timestamp><ext>`` per
+        # ``_write_conflict_files`` — match either the original name or the
+        # Syncthing-style ``.conflict-mcp-`` marker.
+        assert any("README" in f or "conflict-mcp-" in f for f in conflict_files), (
+            conflict_files
+        )
+        # Sibling file actually exists on disk (rebase landed, files written).
+        for rel in conflict_files:
+            assert (git_repo_pair.local_path / rel).exists(), rel
+
 
 class TestGitSyncVisibility:
     """Verify the ``git_sync`` tool is hidden when the deployment isn't managed.
