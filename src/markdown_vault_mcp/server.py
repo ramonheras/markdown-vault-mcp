@@ -304,4 +304,14 @@ def make_server(transport: str = "stdio") -> FastMCP:
     if is_read_only:
         mcp.disable(tags={"write"})
 
+    # Hide git-managed tools (e.g. git_sync) when not in managed git mode.
+    # The two disable passes compose: a tool tagged {"write", "git-managed"}
+    # is hidden if either condition fires (set-union on disabled tags).
+    # ``_managed`` is private but the MCP layer is a trusted consumer of
+    # GitWriteStrategy internals — the same pattern used by the git_sync
+    # tool itself in _server_tools.py.
+    git_strategy = config.to_collection_kwargs().get("git_strategy")
+    if git_strategy is None or not getattr(git_strategy, "_managed", False):
+        mcp.disable(tags={"git-managed"})
+
     return mcp

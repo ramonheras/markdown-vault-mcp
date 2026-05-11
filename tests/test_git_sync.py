@@ -188,3 +188,65 @@ class TestGitSync:
         assert payload["pull"]["would_apply"] is True
         assert payload["pull"]["commits_pulled"] == 1
         assert not (git_repo_pair.local_path / "dryseed.md").exists()
+
+
+class TestGitSyncVisibility:
+    """Verify the ``git_sync`` tool is hidden when the deployment isn't managed.
+
+    Composition contract: the tool is tagged ``{"write", "git-managed"}``.
+    ``make_server`` runs two independent ``mcp.disable`` passes — one for
+    ``"write"`` (hides on read-only) and one for ``"git-managed"`` (hides
+    when the strategy is unmanaged).  The tool surfaces only when *both*
+    conditions are absent (managed git mode + read-write).
+    """
+
+    async def test_visible_in_managed_mode(self, _git_managed_env: Path) -> None:
+        """git_sync IS listed in managed git + read-write mode."""
+        server = make_server()
+        async with Client(server) as client:
+            tools = await client.list_tools()
+        names = [t.name for t in tools]
+        assert "git_sync" in names
+
+    async def test_hidden_when_no_git_repo_url(
+        self, vault_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """git_sync is NOT listed when no GIT_REPO_URL is wired (unmanaged mode)."""
+        for var in _CLEAR_VARS:
+            monkeypatch.delenv(var, raising=False)
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", str(vault_path))
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_READ_ONLY", "false")
+        # No GIT_REPO_URL → to_collection_kwargs() falls into the unmanaged
+        # commit-only branch, which builds a strategy with managed=False.
+
+        server = make_server()
+        async with Client(server) as client:
+            tools = await client.list_tools()
+        names = [t.name for t in tools]
+        assert "git_sync" not in names
+
+    async def test_hidden_in_read_only_mode(
+        self, git_repo_pair: GitRepoPair, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """git_sync is NOT listed in managed mode when READ_ONLY=true.
+
+        The ``"write"`` tag alone already hides the tool; this confirms
+        the two disable passes compose without one masking the other.
+        """
+        for var in _CLEAR_VARS:
+            monkeypatch.delenv(var, raising=False)
+        monkeypatch.setenv(
+            "MARKDOWN_VAULT_MCP_SOURCE_DIR", str(git_repo_pair.local_path)
+        )
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_READ_ONLY", "true")
+        monkeypatch.setenv(
+            "MARKDOWN_VAULT_MCP_GIT_REPO_URL", str(git_repo_pair.remote_path)
+        )
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_GIT_PULL_INTERVAL_S", "0")
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_GIT_PUSH_DELAY_S", "0")
+
+        server = make_server()
+        async with Client(server) as client:
+            tools = await client.list_tools()
+        names = [t.name for t in tools]
+        assert "git_sync" not in names
