@@ -20,6 +20,7 @@ from fastmcp.exceptions import ToolError
 
 from markdown_vault_mcp.collection import Collection
 from markdown_vault_mcp.exceptions import EditConflictError
+from markdown_vault_mcp.git import GitWriteStrategy
 
 from ._icons import _TOOL_ICONS
 from ._server_deps import get_collection
@@ -1287,6 +1288,165 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
             update_links=update_links,
         )
         return asdict(result)
+
+    @mcp.tool(
+        tags={"write", "git-managed"},
+        icons=_TOOL_ICONS["git_sync"],
+        annotations={
+            "readOnlyHint": False,
+            "destructiveHint": False,
+            "idempotentHint": False,
+        },
+    )
+    async def git_sync(
+        direction: Literal["pull", "push", "both"] = "both",
+        dry_run: bool = False,
+        collection: Collection = Depends(get_collection),
+    ) -> dict[str, Any]:
+        """Synchronously reconcile the local clone with ``origin``.
+
+        Composes :meth:`GitWriteStrategy.force_pull` and
+        :meth:`GitWriteStrategy.force_push` behind a single tool call so
+        an operator can request "pull then push" with one round-trip.
+        Only available on managed git deployments
+        (``MARKDOWN_VAULT_MCP_GIT_REPO_URL`` set).
+
+        ``direction='pull'`` runs only the pull leg; ``'push'`` only the
+        push leg; ``'both'`` runs pull first, then push.  When pull fails
+        in ``'both'`` mode the push leg is skipped — the failure surfaces
+        in the ``pull`` payload and the caller is expected to inspect
+        ``pull.reason`` (and ``pull.conflict_files`` for conflict
+        resolution) before retrying.
+
+        ``dry_run=True`` projects the would-be pull without moving HEAD.
+        Push has no safe dry-run (git provides no local probe for
+        "would the remote accept this"), so the push leg returns
+        ``applied=False`` with ``reason='dry_run_unsupported'``.
+
+        Args:
+            direction: ``"pull"``, ``"push"``, or ``"both"`` (default).
+            dry_run: When ``True``, projects pull without moving HEAD.
+                See :meth:`GitWriteStrategy.force_push` for why this is
+                a no-op on the push leg.
+
+        Returns:
+            Dict with the following fields:
+
+            - direction (str): The requested direction, echoed back.
+            - head_sha (str): Local HEAD SHA after the operation.  May
+              differ from the pre-call HEAD when the pull leg advanced
+              the branch.
+            - branch (str): Current branch name (from
+              ``git rev-parse --abbrev-ref HEAD``).
+            - pull (dict | None): Payload from the pull leg, or ``None``
+              when ``direction='push'``.  Contains ``applied``,
+              ``fast_forward``, ``commits_pulled``, ``from_sha``,
+              ``to_sha``, optional ``reason`` and ``conflict_files``.
+              In ``dry_run`` mode also includes
+              ``would_apply: bool``.
+            - push (dict | None): Payload from the push leg, or ``None``
+              when ``direction='pull'`` or when the pull leg failed in
+              ``direction='both'``.  Contains ``applied``,
+              ``commits_pushed``, ``remote_sha_before``,
+              ``remote_sha_after``, optional ``reason`` and ``hint``.
+            - dry_run (bool): Only present when ``dry_run=True`` was
+              passed.
+
+        Raises:
+            ValueError: When the underlying strategy is not a managed
+                :class:`GitWriteStrategy` (i.e. the deployment is not
+                wired with ``MARKDOWN_VAULT_MCP_GIT_REPO_URL``).
+        """
+        # Reach the strategy through the Collection.  The MCP layer is a
+        # trusted consumer of Collection internals — there is no public
+        # accessor and adding one for this single tool would be scope
+        # creep.
+        strategy = collection._git_strategy
+        if not isinstance(strategy, GitWriteStrategy) or not strategy._managed:
+            raise ValueError(
+                "git_sync requires a managed git deployment.  Set "
+                "MARKDOWN_VAULT_MCP_GIT_REPO_URL to enable it."
+            )
+
+        # Resolve the working tree once — both legs need it for SHA / branch
+        # readback.  The strategy owns the validation (raises RuntimeError if
+        # the constructor was not given a repo_path), but in managed mode the
+        # path is set unconditionally so this should never raise here.
+        git_root = strategy._resolve_force_repo()
+
+        def _branch_name() -> str:
+            """Return the current branch name, or ``"HEAD"`` on detached HEAD."""
+            try:
+                return strategy._git(
+                    git_root, "rev-parse", "--abbrev-ref", "HEAD"
+                ).strip()
+            except Exception:
+                # Detached HEAD or transient git failure — fall back to a
+                # well-known sentinel rather than blowing up the whole tool.
+                return "HEAD"
+
+        result: dict[str, Any] = {
+            "direction": direction,
+            "head_sha": await asyncio.to_thread(strategy._head_sha, git_root),
+            "branch": await asyncio.to_thread(_branch_name),
+            "pull": None,
+            "push": None,
+        }
+        if dry_run:
+            result["dry_run"] = True
+
+        if direction in ("pull", "both"):
+            pull_result = await asyncio.to_thread(strategy.force_pull, dry_run=dry_run)
+            pull_dict: dict[str, Any] = {
+                "applied": pull_result.applied,
+                "fast_forward": pull_result.fast_forward,
+                "commits_pulled": pull_result.commits_pulled,
+                "from_sha": pull_result.from_sha,
+                "to_sha": pull_result.to_sha,
+            }
+            if pull_result.reason is not None:
+                pull_dict["reason"] = pull_result.reason
+            if pull_result.conflict_files:
+                pull_dict["conflict_files"] = list(pull_result.conflict_files)
+            if dry_run:
+                # Dry-run reports the projected outcome, not actual.
+                pull_dict["would_apply"] = pull_result.commits_pulled > 0
+            result["pull"] = pull_dict
+
+            # Short-circuit the push leg when the pull failed in 'both' mode
+            # so we don't push on top of an unreconciled local clone.
+            if direction == "both" and not pull_result.applied:
+                # Refresh head_sha — the pull may have moved it even on
+                # partial failure paths (defensive; today's force_pull leaves
+                # HEAD in place on failure).
+                result["head_sha"] = await asyncio.to_thread(
+                    strategy._head_sha,
+                    git_root,
+                )
+                return result
+
+        if direction in ("push", "both"):
+            push_result = await asyncio.to_thread(strategy.force_push, dry_run=dry_run)
+            push_dict: dict[str, Any] = {
+                "applied": push_result.applied,
+                "commits_pushed": push_result.commits_pushed,
+                "remote_sha_before": push_result.remote_sha_before,
+                "remote_sha_after": push_result.remote_sha_after,
+            }
+            if push_result.reason is not None:
+                push_dict["reason"] = push_result.reason
+            if push_result.hint is not None:
+                push_dict["hint"] = push_result.hint
+            result["push"] = push_dict
+
+        # HEAD may have moved (pull leg advanced it).  Refresh once at the
+        # end so the caller sees the post-sync state regardless of which
+        # legs ran.
+        result["head_sha"] = await asyncio.to_thread(
+            strategy._head_sha,
+            git_root,
+        )
+        return result
 
     @mcp.tool(
         tags={"write"},
