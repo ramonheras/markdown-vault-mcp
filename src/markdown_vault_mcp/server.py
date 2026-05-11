@@ -252,13 +252,67 @@ def make_server(transport: str = "stdio") -> FastMCP:
         ArtifactStore.register_route(mcp, artifact_store)
     # DOMAIN-WIRING-END
 
-    # NOTE: pvl-core 2.0's ``register_file_exchange`` registers a
-    # spec-compliant ``create_download_link(origin_id, ttl_seconds)``
-    # tool that collides with MV's existing ``create_download_link(path,
-    # ttl_seconds)`` tool above.  Wiring both silently shadows one or the
-    # other depending on registration order.  Migration tracked in #431;
-    # do NOT add ``register_file_exchange(mcp, ...)`` here without first
-    # resolving the name collision.
+    # DOMAIN-FILE-EXCHANGE-START — file-exchange wiring sentinel.  Kept
+    # across copier update so opt-in customisations (consumer_sink=,
+    # produces=, upload receiver) survive subsequent template updates.
+    #
+    # NEITHER direction is currently wired in markdown-vault-mcp:
+    # - Download: deferred per #431 (name collision; see NOTE below).
+    # - Upload: not yet wired (the commented-out scaffold below is ready
+    #   for the migration in #431 to flesh out alongside the download fix).
+    #
+    # NOTE: pvl-core 2.1's ``register_file_exchange`` registers a
+    # spec-compliant ``create_download_link(origin_id, ttl_seconds)`` tool
+    # that collides with MV's existing ``create_download_link(path,
+    # ttl_seconds)`` tool above (registered via ArtifactStore in the
+    # DOMAIN-WIRING block).  Wiring both silently shadows one or the other
+    # depending on registration order.  Migration tracked in #431; do NOT
+    # add ``register_file_exchange(mcp, ...)`` here without first resolving
+    # the name collision.
+
+    # Optional upload direction — uncomment + flesh out the helpers below
+    # to accept agent-pushed files via POST /<namespace>/uploads/{token}.
+    # The route mounts only when transport is HTTP/SSE AND
+    # MARKDOWN_VAULT_MCP_BASE_URL is set; sync receivers run in a thread.
+    # See docs/guides/file-exchange.md for the full pattern. When
+    # uncommenting, move the two ``from`` imports below to the
+    # module-level import block at the top of this file.
+    #
+    # from typing import Any
+    #
+    # from fastmcp_pvl_core import (
+    #     UploadRecord,
+    #     register_file_exchange_upload,
+    # )
+    #
+    # def _validate_upload_target(target_id: str, extra: dict[str, Any] | None) -> None:
+    #     """Pre-link validator: reject obviously bad target_ids in-band.
+    #
+    #     Runs inside create_upload_link before the token is minted, so an
+    #     LLM gets a clean tool error rather than after a wasted upload
+    #     round-trip.
+    #     """
+    #     # Example: reject anything outside the domain's allowlist.
+    #     # raise ValueError(f"target_id not allowed: {target_id}")
+    #     pass
+    #
+    # def _upload_receiver(record: UploadRecord, body: bytes) -> dict[str, Any]:
+    #     """Commit the uploaded bytes. Raise ValueError → 400,
+    #     FileExistsError → 409, anything else → 500 (with traceback
+    #     logged). Return value MUST be a dict — non-dict returns are
+    #     treated as receiver bugs (500 + WARNING log)."""
+    #     # TODO: replace with your storage logic.
+    #     return {"path": record.target_id, "size_bytes": len(body)}
+    #
+    # register_file_exchange_upload(
+    #     mcp,
+    #     namespace="markdown-vault-mcp",
+    #     env_prefix=_ENV_PREFIX,
+    #     transport="auto",
+    #     receiver=_upload_receiver,
+    #     pre_link_validator=_validate_upload_target,
+    # )
+    # DOMAIN-FILE-EXCHANGE-END
 
     # --- Visibility: hide write-tagged components in read-only mode ---
 
