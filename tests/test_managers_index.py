@@ -426,3 +426,49 @@ class TestIsPathExcluded:
         mgr, _, _ = _make_index_mgr(index_vault, tmp_path, exclude_patterns=["notes/*"])
         assert mgr._is_path_excluded("notes/gamma.md") is True
         assert mgr._is_path_excluded("alpha.md") is False
+
+
+# ---------------------------------------------------------------------------
+# start_line propagation into vector metadata (#469)
+# ---------------------------------------------------------------------------
+
+
+def test_start_line_propagated_to_vector_metadata(tmp_path):
+    """Each vector row carries start_line for stable section ordering (#469)."""
+    from markdown_vault_mcp.collection import Collection
+    from tests.conftest import MockEmbeddingProvider
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    (vault / "note.md").write_text(
+        "# A\n\n"
+        + ("first section body.\n" * 12)
+        + "\n## B\n\n"
+        + ("second.\n" * 12)
+        + "\n## C\n\nthird.\n"
+    )
+
+    col = Collection(
+        source_dir=vault,
+        embedding_provider=MockEmbeddingProvider(),
+        embeddings_path=tmp_path / "vectors",
+    )
+    col.build_index()
+    col.build_embeddings()
+
+    # Inspect the underlying VectorIndex metadata directly.
+    assert col._vectors is not None
+    metas = col._vectors._metadata
+    assert metas, "vector index should have rows for the test note"
+    assert all("start_line" in m for m in metas), (
+        f"every metadata row must carry start_line; got keys {set(metas[0])}"
+    )
+    # Lines are monotonically non-decreasing within the document.
+    starts = [m["start_line"] for m in metas if m["path"] == "note.md"]
+    assert starts == sorted(starts), (
+        f"start_line should be non-decreasing, got {starts}"
+    )
+    assert len(starts) >= 2, (
+        f"fixture should produce multiple chunks; got starts={starts}.  "
+        "If HeadingChunker.short_doc_lines changed, pad the fixture."
+    )
