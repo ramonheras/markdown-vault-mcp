@@ -1267,9 +1267,12 @@ class GitWriteStrategy:
                     env=env,
                 )
                 if abort_proc.returncode != 0:
+                    abort_stderr = (abort_proc.stderr or "").strip()
+                    if self._token and self._token in abort_stderr:
+                        abort_stderr = abort_stderr.replace(self._token, "***")
                     logger.error(
                         "Git force_pull: failed to abort rebase: %s",
-                        (abort_proc.stderr or "").strip(),
+                        abort_stderr,
                     )
                     return PullResult(
                         applied=False,
