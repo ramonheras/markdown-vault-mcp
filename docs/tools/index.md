@@ -398,7 +398,10 @@ creation time; (b) for `.md` filenames, the resolved path stays under
 configured attachment allowlist
 (`MARKDOWN_VAULT_MCP_ATTACHMENT_EXTENSIONS`). All three checks raise
 `ValueError` from the tool call so the agent learns about the
-mis-target before wasting a POST.
+mis-target before wasting a POST.  Note: rule (a) is enforced upstream
+by pvl-core's `ExchangeURI.validate_segment` *before* MV's pre-link
+validator runs, so the error message for slash/`..`/whitespace cases
+comes from pvl-core, not MV.
 
 **Errors:**
 

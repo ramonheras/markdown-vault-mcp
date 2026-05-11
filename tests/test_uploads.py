@@ -261,6 +261,38 @@ class TestUploadEndToEnd:
             assert read_data["path"] == "uploaded.md"
             assert read_data["content"] == payload.decode("utf-8")
 
+    async def test_invalid_utf8_md_upload_returns_400(
+        self, _upload_vault: Path
+    ) -> None:
+        """Non-UTF-8 bytes on a ``.md`` upload surface as HTTP 400 to the agent.
+
+        ``_vault_upload_receiver`` calls ``body.decode("utf-8")`` on
+        ``.md`` paths.  Invalid UTF-8 raises ``UnicodeDecodeError``,
+        which is a subclass of ``ValueError``; pvl-core's
+        ``_upload_handler`` maps ``ValueError`` to HTTP 400 with the
+        exception message as body.  This test guards the docs claim at
+        ``docs/tools/index.md`` that decode failures surface as 400 (not
+        500): if pvl-core ever changes the mapping, this test fails and
+        the docs need updating.
+        """
+        server = make_server(transport="http")
+        async with Client(server) as client:
+            mint_result = await client.call_tool(
+                "create_upload_link", {"target_id": "bad.md"}
+            )
+            data = json.loads(mint_result.content[0].text)
+            upload_path = urlsplit(data["upload_url"]).path
+            invalid_utf8 = b"\xff\xfe\xfd not valid utf-8 \xc3\x28"
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=server.http_app()),
+                base_url="http://test.invalid",
+            ) as http:
+                response = await http.post(upload_path, content=invalid_utf8)
+            assert response.status_code == 400, (
+                f"expected 400 for invalid UTF-8 .md upload, "
+                f"got {response.status_code}: {response.text}"
+            )
+
     async def test_create_upload_link_registered_via_make_server_arg(
         self, _upload_vault: Path
     ) -> None:
