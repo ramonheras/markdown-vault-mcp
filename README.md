@@ -27,7 +27,7 @@ Point it at a directory of Markdown files (an Obsidian vault, a docs folder, a Z
 - **Attachment support** — read, write, delete, and list non-markdown files (PDFs, images, etc.)
 - **Git integration** — optional auto-commit and push on every write via `GIT_ASKPASS`
 - **OIDC authentication** — optional token-based auth for HTTP deployments (Authelia, Keycloak, etc.)
-- **MCP tools** — 29 LLM-visible tools including search, read, write, edit, delete, rename, git history, file-exchange uploads, and admin operations; plus 6 app-only tools for MCP Apps clients
+- **MCP tools** — 30 LLM-visible tools including search, read, write, edit, delete, rename, git history, manual git sync, file-exchange uploads, and admin operations; plus 6 app-only tools for MCP Apps clients
 - **MCP resources** — 9 resources exposing vault configuration, statistics, tags, folders, document outlines, similar notes, recent notes, and an interactive SPA
 - **MCP prompts** — 6 prompt templates including template-driven note creation
 <!-- DOMAIN-END -->
@@ -389,13 +389,14 @@ markdown-vault-mcp reindex [--source-dir PATH] [--index-path PATH]
 | `get_connection_path` | Find the shortest path between two notes via BFS on the undirected link graph (max 10 hops) |
 | `get_history` | List commits that touched a note or the whole vault (git-backed vaults only) |
 | `get_diff` | Return a unified diff of a note between a reference commit/timestamp and HEAD (git-backed vaults only) |
+| `git_sync` | Force an immediate git pull / push / both, bypassing the periodic loops. Returns structured state (SHAs, commit counts, Syncthing-style conflict file paths if any). Hidden when `MARKDOWN_VAULT_MCP_GIT_REPO_URL` isn't set or `READ_ONLY=true`. |
 | `fetch` | Download a file from a URL and save it to the vault as a note or attachment (MCP-to-MCP transfer) |
 | `create_download_link` | Generate a one-time download URL for a vault file — enables MCP-to-MCP file transfer (HTTP/SSE transport only; requires `BASE_URL`) |
 | `create_upload_link` | Mint a one-time HTTPS POST URL for pushing bytes into the vault. Bytes flow over HTTP, not through MCP context — use this for any file >100 KB. HTTP/SSE transport only; requires `MARKDOWN_VAULT_MCP_BASE_URL`. |
 | `browse_vault` | Open the vault explorer SPA in a supporting MCP Apps client |
 | `show_context` | Open the Context Card for a specific note in a supporting MCP Apps client |
 
-Write tools (`write`, `edit`, `delete`, `rename`, `fetch`, `create_upload_link`) are only available when `MARKDOWN_VAULT_MCP_READ_ONLY=false`.
+Write tools (`write`, `edit`, `delete`, `rename`, `fetch`, `create_upload_link`, `git_sync`) are only available when `MARKDOWN_VAULT_MCP_READ_ONLY=false`. `git_sync` additionally requires managed git mode (`MARKDOWN_VAULT_MCP_GIT_REPO_URL` set).
 
 `browse_vault` and `show_context` are LLM-visible in all clients; when called in an MCP Apps-capable client they open the interactive SPA. Six additional internal tools (`vault_context`, `vault_list`, `vault_read`, `vault_search`, `vault_graph_neighborhood`, `vault_graph_hubs`) use `visibility="app"` and are used by the SPA only — they are never visible to the LLM.
 
