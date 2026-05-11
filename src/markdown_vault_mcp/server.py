@@ -280,11 +280,20 @@ def make_server(transport: str = "stdio") -> FastMCP:
     # add ``register_file_exchange(mcp, ...)`` here without first resolving
     # the name collision.
 
+    # We pass ``transport`` explicitly (NOT ``"auto"``) because ``"auto"``
+    # reads env vars (``MARKDOWN_VAULT_MCP_TRANSPORT`` /
+    # ``FASTMCP_TRANSPORT``) that the CLI does not set — leaving ``"auto"``
+    # would silently disable file-exchange-upload in production whenever
+    # the operator runs ``markdown-vault-mcp serve --transport http``
+    # without also exporting one of those env vars.  The CLI knows the
+    # transport from its own ``--transport`` flag and passes it to
+    # ``make_server``, so we have the authoritative value here.
+    fx_transport: str = "http" if transport in ("http", "sse") else "stdio"
     register_file_exchange_upload(
         mcp,
         namespace="markdown-vault-mcp",
         env_prefix=_ENV_PREFIX,
-        transport="auto",
+        transport=fx_transport,  # type: ignore[arg-type]
         receiver=_vault_upload_receiver,
         pre_link_validator=_validate_upload_target,
     )

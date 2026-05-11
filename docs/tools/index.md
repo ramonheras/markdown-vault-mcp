@@ -352,10 +352,20 @@ Generate a one-time download URL for a vault file. The link expires after a sing
 
 Mint a one-time HTTPS POST URL for pushing bytes into the vault. The
 agent receives the URL and an expiry hint; the actual file content
-flows over plain HTTP, not through MCP context. Use this for any file
-larger than ~100 KB — base64-encoding through `write(content_base64=...)`
-is bounded by `MARKDOWN_VAULT_MCP_MAX_ATTACHMENT_SIZE_MB` (default 1
-MiB) and inflates payloads ~33% on the wire.
+flows over plain HTTP, not through MCP context, avoiding the ~33% base64
+inflation that `write(content_base64=...)` incurs.
+
+!!! warning "Effective size cap depends on extension"
+    `.md` uploads are bounded only by the network-tier cap
+    (`MARKDOWN_VAULT_MCP_UPLOAD_MAX_BYTES`, default 10 MiB).  Non-`.md`
+    uploads (attachments) ALSO have to clear the in-Collection
+    `MARKDOWN_VAULT_MCP_MAX_ATTACHMENT_SIZE_MB` cap (default **1 MiB**)
+    when the receiver writes the bytes — the same cap as
+    `write(content_base64=...)`.  Raise
+    `MARKDOWN_VAULT_MCP_MAX_ATTACHMENT_SIZE_MB` to allow larger
+    attachments.  This is tracked as a follow-up in #443's review notes
+    (the cap should arguably be bypassed on the upload path; for now,
+    operator config is the lever).
 
 **Parameters:**
 

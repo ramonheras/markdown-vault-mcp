@@ -415,8 +415,13 @@ Claude Desktop configuration) cannot mount the upload route.
 
 !!! tip "When to prefer this over `write(content_base64=...)`"
     Files larger than ~100 KB blow past the LLM's context budget once
-    base64-encoded. The hard ceiling for `write(content_base64=...)`
-    is `MARKDOWN_VAULT_MCP_MAX_ATTACHMENT_SIZE_MB` (default 1 MiB);
-    `create_upload_link` raises that to
-    `MARKDOWN_VAULT_MCP_UPLOAD_MAX_BYTES` (default 10 MiB) and keeps
-    the bytes off the MCP transport entirely.
+    base64-encoded.  `create_upload_link` keeps the bytes off the MCP
+    transport entirely.  The effective size cap differs by extension:
+
+    - **`.md` uploads** are bounded only by
+      `MARKDOWN_VAULT_MCP_UPLOAD_MAX_BYTES` (default 10 MiB).
+    - **Non-`.md` (attachment) uploads** ALSO have to clear the
+      in-Collection `MARKDOWN_VAULT_MCP_MAX_ATTACHMENT_SIZE_MB` cap
+      (default **1 MiB** — same as `write(content_base64=...)`).  Raise
+      that env var to allow larger attachments.  See the
+      `create_upload_link` reference for the full discussion.

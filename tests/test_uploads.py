@@ -45,6 +45,11 @@ _CLEAR_VARS = (
     "MARKDOWN_VAULT_MCP_OIDC_JWT_SIGNING_KEY",
     "MARKDOWN_VAULT_MCP_OIDC_AUDIENCE",
     "MARKDOWN_VAULT_MCP_OIDC_REQUIRED_SCOPES",
+    # Pollution from these would let the wiring "work" even if make_server
+    # regressed back to transport="auto".  Cleared so transport-arg tests
+    # exercise the explicit pass-through.
+    "MARKDOWN_VAULT_MCP_TRANSPORT",
+    "FASTMCP_TRANSPORT",
 )
 
 
@@ -192,11 +197,11 @@ class TestUploadEndToEnd:
         # the route — without it the helper logs a warning and returns a
         # disabled handle.
         monkeypatch.setenv("MARKDOWN_VAULT_MCP_BASE_URL", "http://test.invalid")
-        # Transport is read from FASTMCP_TRANSPORT (or
-        # MARKDOWN_VAULT_MCP_TRANSPORT) by pvl-core's _resolve_transport,
-        # not from make_server's argument; the route only mounts when the
-        # resolved transport is HTTP.
-        monkeypatch.setenv("FASTMCP_TRANSPORT", "http")
+        # ``make_server`` derives ``fx_transport`` from its own ``transport``
+        # arg and passes it to ``register_file_exchange_upload`` — no
+        # TRANSPORT env var needed.  ``_CLEAR_VARS`` already strips
+        # ``MARKDOWN_VAULT_MCP_TRANSPORT`` and ``FASTMCP_TRANSPORT`` to
+        # make sure the test exercises the arg-driven path.
         for var in _CLEAR_VARS:
             monkeypatch.delenv(var, raising=False)
         return vault
@@ -255,3 +260,30 @@ class TestUploadEndToEnd:
             read_data = json.loads(read_result.content[0].text)
             assert read_data["path"] == "uploaded.md"
             assert read_data["content"] == payload.decode("utf-8")
+
+    async def test_create_upload_link_registered_via_make_server_arg(
+        self, _upload_vault: Path
+    ) -> None:
+        """``create_upload_link`` is registered when ``make_server`` gets ``transport="http"``.
+
+        Regression test for the ``transport="auto"`` footgun: pvl-core's
+        ``register_file_exchange_upload(transport="auto")`` reads
+        ``MARKDOWN_VAULT_MCP_TRANSPORT`` / ``FASTMCP_TRANSPORT`` env vars
+        — neither of which the CLI sets when the operator runs
+        ``markdown-vault-mcp serve --transport http``.  Leaving ``"auto"``
+        would silently disable upload in production.  ``make_server`` must
+        derive ``fx_transport`` from its own ``transport`` arg and pass it
+        through explicitly.
+
+        ``_upload_vault`` clears both env vars (see ``_CLEAR_VARS``) so
+        this test fails if ``make_server`` ever regresses to passing
+        ``"auto"``.
+        """
+        server = make_server(transport="http")
+        async with Client(server) as client:
+            tools = await client.list_tools()
+            tool_names = {tool.name for tool in tools}
+            assert "create_upload_link" in tool_names, (
+                f"create_upload_link not registered (transport wiring regression?). "
+                f"Registered tools: {sorted(tool_names)}"
+            )

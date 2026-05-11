@@ -6,7 +6,7 @@ remote clients):
 
 - `register_file_exchange(...)` — download direction. Mints a
   spec-compliant `create_download_link(origin_id, ttl_seconds)` tool
-  and a one-time `GET /markdown-vault-mcp/uploads/{token}` route.
+  and a one-time `GET /artifacts/{token}` route.
 - `register_file_exchange_upload(...)` — upload direction. Mints a
   spec-compliant `create_upload_link(target_id, ttl_seconds)` tool and
   a one-time `POST /markdown-vault-mcp/uploads/{token}` route.
