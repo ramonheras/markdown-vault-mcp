@@ -99,6 +99,50 @@ class SearchResult:
 
 
 @dataclass
+class SectionHit:
+    """One section's contribution to a :class:`GroupedResult`.
+
+    Attributes:
+        heading: Section heading text, or ``None`` for the document intro.
+        content: Matched snippet — query-relevant window by default, or full
+            chunk if ``snippet_words=0`` was passed.
+        score: Chunk-level relevance score after length-downweight.  Not
+            comparable across search modes.
+    """
+
+    heading: str | None
+    content: str
+    score: float
+
+
+@dataclass
+class GroupedResult:
+    """A file-grouped search result.
+
+    Replaces the flat per-chunk :class:`SearchResult` across ``search``,
+    ``get_similar``, and ``get_context.similar``.  See issue #469.
+
+    Attributes:
+        path: Relative path of the document.
+        title: Document title.
+        folder: Parent folder path.
+        score: File-level score = ``max(section.score for section in sections)``.
+        search_type: ``"keyword"``, ``"semantic"``, or ``"hybrid"``.
+        frontmatter: Parsed YAML frontmatter.
+        sections: Up to the per-file cap best-matching sections, sorted by
+            ``(score DESC, start_line ASC)`` so ties surface in document order.
+    """
+
+    path: str
+    title: str
+    folder: str
+    score: float
+    search_type: Literal["keyword", "semantic", "hybrid"]
+    frontmatter: dict[str, Any]
+    sections: list[SectionHit]
+
+
+@dataclass
 class FTSResult:
     """A raw search result from the FTS5 index layer.
 
