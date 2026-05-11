@@ -1436,7 +1436,26 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
                     with collection.pause_writes():
                         collection.reindex()
 
-                await asyncio.to_thread(_pause_and_reindex)
+                try:
+                    await asyncio.to_thread(_pause_and_reindex)
+                except Exception:
+                    # Pull side-effect already happened (HEAD moved, files
+                    # on disk).  Failing the whole tool would hide the
+                    # successful pull from the caller.  Surface the
+                    # bookkeeping failure on the pull payload instead so
+                    # the agent knows the index is stale and can decide
+                    # whether to retry via the ``reindex`` tool.
+                    logger.exception(
+                        "git_sync: reindex after pull failed — FTS index "
+                        "is stale until the next reindex / write tick"
+                    )
+                    pull_dict["reindex_failed"] = True
+                    pull_dict["reindex_hint"] = (
+                        "Pull succeeded but the FTS index could not be "
+                        "refreshed.  search / list_documents / get_context "
+                        "will serve stale data until the next call to the "
+                        "reindex tool or the next write."
+                    )
 
             # Short-circuit the push leg when the pull failed in 'both' mode
             # so we don't push on top of an unreconciled local clone.

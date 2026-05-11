@@ -1186,14 +1186,27 @@ class GitWriteStrategy:
                     "Git force_pull: conflict resolution raised — aborting rebase",
                     exc_info=True,
                 )
-                # Defensive abort: swallow its own errors so the original
-                # exception's diagnostic value is preserved in the logs.
-                subprocess.run(
+                # Defensive abort: don't let abort failure mask the
+                # original exception (already logged at ERROR above), but
+                # log abort failures at WARNING so an operator debugging a
+                # stuck rebase-merge/ directory can tell whether the
+                # defensive abort fired and whether it succeeded.  Mirrors
+                # the in-progress-rebase abort path further below.
+                abort_proc = subprocess.run(
                     ["git", "-C", str(git_root), "rebase", "--abort"],
                     capture_output=True,
                     text=True,
                     env=env,
                 )
+                if abort_proc.returncode != 0:
+                    abort_stderr = (abort_proc.stderr or "").strip()
+                    if self._token and self._token in abort_stderr:
+                        abort_stderr = abort_stderr.replace(self._token, "***")
+                    logger.warning(
+                        "Git force_pull: defensive `git rebase --abort` "
+                        "after conflict-resolution failure also failed: %s",
+                        abort_stderr,
+                    )
                 return PullResult(
                     applied=False,
                     fast_forward=False,
