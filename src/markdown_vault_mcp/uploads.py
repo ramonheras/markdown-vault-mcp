@@ -46,3 +46,40 @@ def _vault_upload_receiver(record: UploadRecord, body: bytes) -> dict[str, Any]:
     else:
         collection.write_attachment(record.target_id, body)
     return {"path": record.target_id, "size_bytes": len(body)}
+
+
+def _validate_upload_target(target_id: str, extra: dict[str, Any] | None) -> None:
+    """Reject upload targets that would escape the vault or violate the allowlist.
+
+    Wired as pvl-core's ``register_file_exchange_upload(pre_link_validator=...)``
+    callback so failures surface as ``ValueError`` at ``create_upload_link``
+    call time, in-band to the agent, rather than after a wasted HTTP POST.
+
+    pvl-core's :class:`~fastmcp_pvl_core.ExchangeURI` already enforces that
+    ``target_id`` is a single safe filename (no slashes, no ``..``, no
+    control bytes, no leading/trailing whitespace) before this callback
+    runs.  This function is therefore defense-in-depth for path traversal
+    plus the primary enforcement point for the attachment-extension
+    allowlist.
+
+    Delegates to :meth:`Collection._validate_path` for ``.md`` targets and
+    :meth:`Collection._validate_attachment_path` for everything else, which
+    also re-checks that the resolved path stays under ``source_dir``.
+
+    Args:
+        target_id: The vault-relative filename the agent passed to
+            ``create_upload_link``.
+        extra: Caller-supplied opaque dict from
+            ``create_upload_link(extra=...)``.  Unused — accepted to match
+            pvl-core's ``PreLinkValidator`` callable signature.
+
+    Raises:
+        ValueError: If ``target_id`` would escape the vault or its
+            extension is not in the configured attachment allowlist.
+    """
+    del extra
+    collection = get_collection_singleton()
+    if target_id.endswith(".md"):
+        collection._validate_path(target_id)
+    else:
+        collection._validate_attachment_path(target_id)
