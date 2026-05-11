@@ -178,6 +178,36 @@ class PullResult:
     reason: str | None = None
     conflict_files: tuple[str, ...] = field(default_factory=tuple)
 
+    @classmethod
+    def head_unchanged_failure(cls, from_sha: str, reason: str) -> PullResult:
+        """Construct a ``PullResult`` for a failure path where HEAD did not move.
+
+        The 5 failure paths in :meth:`GitWriteStrategy.force_pull` and its
+        helpers (``no_remote``, ``non_fast_forward``,
+        ``conflict_resolution_failed``, ``non_fast_forward_with_conflicts``,
+        ``fetch_failed``) all share the same shape: ``applied=False``,
+        ``fast_forward=False``, ``commits_pulled=0``, and
+        ``to_sha == from_sha`` (HEAD unchanged).  This factory reduces the
+        repetition.
+
+        Args:
+            from_sha: HEAD SHA before the failed operation.  Used for both
+                ``from_sha`` and ``to_sha`` since HEAD did not move.
+            reason: One of the ``PULL_REASON_*`` constants.
+
+        Returns:
+            A ``PullResult`` with the failure-shape fields set and the
+            provided ``reason``.
+        """
+        return cls(
+            applied=False,
+            fast_forward=False,
+            commits_pulled=0,
+            from_sha=from_sha,
+            to_sha=from_sha,
+            reason=reason,
+        )
+
 
 @dataclass(frozen=True)
 class PushResult:
@@ -853,13 +883,8 @@ class GitWriteStrategy:
                     "after conflict-resolution failure also failed: %s",
                     self._redact((abort_proc.stderr or "").strip()),
                 )
-            return None, PullResult(
-                applied=False,
-                fast_forward=False,
-                commits_pulled=0,
-                from_sha=from_sha,
-                to_sha=from_sha,
-                reason=PULL_REASON_CONFLICT_RESOLUTION_FAILED,
+            return None, PullResult.head_unchanged_failure(
+                from_sha, PULL_REASON_CONFLICT_RESOLUTION_FAILED
             )
         return saved, None
 
@@ -992,6 +1017,51 @@ class GitWriteStrategy:
                 continue
             restored.append((rel_path, mcp_content))
         return restored
+
+    def _build_pull_result_advanced(
+        self,
+        git_root: Path,
+        env: dict[str, str] | None,
+        *,
+        from_sha: str,
+        reason: str,
+        conflict_files: tuple[str, ...] = (),
+    ) -> PullResult:
+        """Build a successful PullResult after HEAD has advanced.
+
+        Captures the post-pull HEAD SHA and runs ``git lfs pull`` so any
+        LFS pointers brought in by the merge/rebase are resolved before
+        callers continue.  Used by both the plain-rebase success path and
+        the conflicts-resolved-with-siblings success path in
+        :meth:`force_pull` / :meth:`_force_pull_rebase_fallback`.
+
+        Args:
+            git_root: Working-tree root.
+            env: Optional GIT_ASKPASS environment.
+            from_sha: HEAD SHA captured before the operation.
+            reason: One of the ``PULL_REASON_*`` constants for the success
+                shape (typically ``REBASED`` or
+                ``CONFLICTS_RESOLVED_WITH_SIBLINGS``).
+            conflict_files: Tuple of Syncthing-style sibling paths written
+                during conflict resolution.  Empty for the plain-rebase
+                path.
+
+        Returns:
+            A ``PullResult`` with ``applied=True``, ``fast_forward=False``,
+            ``commits_pulled=0``, ``to_sha`` set to the post-operation
+            HEAD, and the provided ``reason`` / ``conflict_files``.
+        """
+        new_head = self._head_sha(git_root)
+        self._lfs_pull(env=env)
+        return PullResult(
+            applied=True,
+            fast_forward=False,
+            commits_pulled=0,
+            from_sha=from_sha,
+            to_sha=new_head,
+            reason=reason,
+            conflict_files=conflict_files,
+        )
 
     def _write_conflict_files(
         self,
@@ -1250,13 +1320,8 @@ class GitWriteStrategy:
                         "Git force_pull: fetch failed: %s",
                         stderr,
                     )
-                    return PullResult(
-                        applied=False,
-                        fast_forward=False,
-                        commits_pulled=0,
-                        from_sha=from_sha,
-                        to_sha=from_sha,
-                        reason=PULL_REASON_FETCH_FAILED,
+                    return PullResult.head_unchanged_failure(
+                        from_sha, PULL_REASON_FETCH_FAILED
                     )
 
                 # Resolve the upstream-tracking branch.  Falls back to
@@ -1273,13 +1338,8 @@ class GitWriteStrategy:
                             git_root, "rev-parse", "origin/HEAD", env=env
                         ).strip()
                     except subprocess.CalledProcessError:
-                        return PullResult(
-                            applied=False,
-                            fast_forward=False,
-                            commits_pulled=0,
-                            from_sha=from_sha,
-                            to_sha=from_sha,
-                            reason=PULL_REASON_NO_REMOTE,
+                        return PullResult.head_unchanged_failure(
+                            from_sha, PULL_REASON_NO_REMOTE
                         )
 
                 if remote_sha == from_sha:
@@ -1424,13 +1484,8 @@ class GitWriteStrategy:
 
             if rebase_in_progress:
                 if not self._abort_in_progress_rebase(git_root, env):
-                    return PullResult(
-                        applied=False,
-                        fast_forward=False,
-                        commits_pulled=0,
-                        from_sha=from_sha,
-                        to_sha=from_sha,
-                        reason=PULL_REASON_NON_FAST_FORWARD_WITH_CONFLICTS,
+                    return PullResult.head_unchanged_failure(
+                        from_sha, PULL_REASON_NON_FAST_FORWARD_WITH_CONFLICTS
                     )
                 saved = self._restore_upstream_paths(git_root, env, saved)
 
@@ -1438,13 +1493,8 @@ class GitWriteStrategy:
                 logger.warning(
                     "Git force_pull: conflict resolution failed, leaving HEAD unchanged"
                 )
-                return PullResult(
-                    applied=False,
-                    fast_forward=False,
-                    commits_pulled=0,
-                    from_sha=from_sha,
-                    to_sha=from_sha,
-                    reason=PULL_REASON_CONFLICT_RESOLUTION_FAILED,
+                return PullResult.head_unchanged_failure(
+                    from_sha, PULL_REASON_CONFLICT_RESOLUTION_FAILED
                 )
 
             written = self._write_conflict_files(git_root, saved, env)
@@ -1457,31 +1507,23 @@ class GitWriteStrategy:
                 "Git force_pull: rebase completed with %d conflict file(s)",
                 len(written),
             )
-            new_head = self._head_sha(git_root)
-            self._lfs_pull(env=env)
             # HEAD has advanced past the upstream because conflict
-            # resolution itself produced a new commit on top.  Use the
-            # actual new HEAD rather than ``remote_sha``.
-            return PullResult(
-                applied=True,
-                fast_forward=False,
-                commits_pulled=0,
+            # resolution itself produced a new commit on top.  The helper
+            # captures the actual new HEAD rather than ``remote_sha``.
+            return self._build_pull_result_advanced(
+                git_root,
+                env,
                 from_sha=from_sha,
-                to_sha=new_head,
                 reason=PULL_REASON_CONFLICTS_RESOLVED_WITH_SIBLINGS,
                 conflict_files=tuple(written),
             )
 
         # Plain rebase succeeded — local commits replayed cleanly on top
         # of the upstream.  HEAD has advanced.
-        new_head = self._head_sha(git_root)
-        self._lfs_pull(env=env)
-        return PullResult(
-            applied=True,
-            fast_forward=False,
-            commits_pulled=0,
+        return self._build_pull_result_advanced(
+            git_root,
+            env,
             from_sha=from_sha,
-            to_sha=new_head,
             reason=PULL_REASON_REBASED,
         )
 
