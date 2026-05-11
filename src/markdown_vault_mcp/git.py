@@ -357,6 +357,21 @@ class GitWriteStrategy:
         with contextlib.suppress(OSError):
             Path(script_path_str).unlink()
 
+    def _redact(self, text: str) -> str:
+        """Replace the configured PAT with ``***`` so it never reaches logs/responses.
+
+        Args:
+            text: Raw stderr / message text that may contain ``self._token``.
+
+        Returns:
+            The same text with every occurrence of ``self._token`` replaced by
+            ``"***"``.  Returns ``text`` unchanged when no token is configured
+            or the text doesn't contain it (cheap no-op for the common case).
+        """
+        if self._token and self._token in text:
+            return text.replace(self._token, "***")
+        return text
+
     def _ensure_git_root(self, repo_path: Path) -> Path | None:
         if self._git_root_checked:
             return self._git_root
@@ -537,9 +552,7 @@ class GitWriteStrategy:
             if self._enable_push:
                 self._schedule_push()
         except subprocess.CalledProcessError as exc:
-            sanitized_stderr = exc.stderr or ""
-            if self._token and self._token in sanitized_stderr:
-                sanitized_stderr = sanitized_stderr.replace(self._token, "***")
+            sanitized_stderr = self._redact(exc.stderr or "")
             logger.error(
                 "Git operation failed for %s (%s): command %s returned %d\n%s",
                 path,
@@ -572,9 +585,7 @@ class GitWriteStrategy:
         try:
             self._do_push()
         except subprocess.CalledProcessError as exc:
-            sanitized_stderr = exc.stderr or ""
-            if self._token and self._token in sanitized_stderr:
-                sanitized_stderr = sanitized_stderr.replace(self._token, "***")
+            sanitized_stderr = self._redact(exc.stderr or "")
             logger.error(
                 "Git push failed: command %s returned %d\n%s",
                 exc.cmd,
@@ -663,9 +674,7 @@ class GitWriteStrategy:
             try:
                 _push(self._git_root, self._token, self._username)
             except subprocess.CalledProcessError as exc:
-                sanitized_stderr = exc.stderr or ""
-                if self._token and self._token in sanitized_stderr:
-                    sanitized_stderr = sanitized_stderr.replace(self._token, "***")
+                sanitized_stderr = self._redact(exc.stderr or "")
                 logger.error(
                     "Git startup push failed: command %s returned %d\n%s",
                     exc.cmd,
@@ -1017,9 +1026,7 @@ class GitWriteStrategy:
                     # error messages can echo the URL with credentials
                     # back at the user.  Mirrors the redaction pattern
                     # already used in ``_do_push_safe`` and ``force_push``.
-                    stderr = (exc.stderr or "").strip()
-                    if self._token and self._token in stderr:
-                        stderr = stderr.replace(self._token, "***")
+                    stderr = self._redact((exc.stderr or "").strip())
                     logger.warning(
                         "Git force_pull: fetch failed: %s",
                         stderr,
@@ -1201,9 +1208,7 @@ class GitWriteStrategy:
                     env=env,
                 )
                 if abort_proc.returncode != 0:
-                    abort_stderr = (abort_proc.stderr or "").strip()
-                    if self._token and self._token in abort_stderr:
-                        abort_stderr = abort_stderr.replace(self._token, "***")
+                    abort_stderr = self._redact((abort_proc.stderr or "").strip())
                     logger.warning(
                         "Git force_pull: defensive `git rebase --abort` "
                         "after conflict-resolution failure also failed: %s",
@@ -1251,9 +1256,7 @@ class GitWriteStrategy:
                 # in-progress rebase would leave the repo wedged for every
                 # subsequent force_pull.  Log the underlying failure with
                 # token-redacted stderr for the operator.
-                git_dir_stderr = (git_dir_proc.stderr or "").strip()
-                if self._token and self._token in git_dir_stderr:
-                    git_dir_stderr = git_dir_stderr.replace(self._token, "***")
+                git_dir_stderr = self._redact((git_dir_proc.stderr or "").strip())
                 logger.error(
                     "Git force_pull: `git rev-parse --git-dir` failed; "
                     "conservatively assuming rebase is in progress: %s",
@@ -1269,9 +1272,7 @@ class GitWriteStrategy:
                     env=env,
                 )
                 if abort_proc.returncode != 0:
-                    abort_stderr = (abort_proc.stderr or "").strip()
-                    if self._token and self._token in abort_stderr:
-                        abort_stderr = abort_stderr.replace(self._token, "***")
+                    abort_stderr = self._redact((abort_proc.stderr or "").strip())
                     logger.error(
                         "Git force_pull: failed to abort rebase: %s",
                         abort_stderr,
@@ -1311,11 +1312,9 @@ class GitWriteStrategy:
                         env=env,
                     )
                     if checkout_proc.returncode != 0:
-                        checkout_stderr = (checkout_proc.stderr or "").strip()
-                        if self._token and self._token in checkout_stderr:
-                            checkout_stderr = checkout_stderr.replace(
-                                self._token, "***"
-                            )
+                        checkout_stderr = self._redact(
+                            (checkout_proc.stderr or "").strip()
+                        )
                         logger.error(
                             "Git force_pull: failed to restore upstream "
                             "version of %r after rebase abort; dropping it "
@@ -1504,11 +1503,9 @@ class GitWriteStrategy:
                 try:
                     self._git(git_root, "push", "origin", env=env)
                 except subprocess.CalledProcessError as exc:
-                    stderr = (exc.stderr or "").strip()
                     # Redact token if it leaked into stderr.  Mirrors the
                     # sanitisation in :meth:`_do_push_safe`.
-                    if self._token and self._token in stderr:
-                        stderr = stderr.replace(self._token, "***")
+                    stderr = self._redact((exc.stderr or "").strip())
 
                     # Detect the specific non-fast-forward case so the
                     # caller can route to git_sync(direction='pull').
