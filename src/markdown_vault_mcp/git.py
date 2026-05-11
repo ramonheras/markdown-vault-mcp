@@ -863,6 +863,55 @@ class GitWriteStrategy:
             )
         return saved, None
 
+    def _check_rebase_in_progress(
+        self,
+        git_root: Path,
+        env: dict[str, str] | None,
+    ) -> bool:
+        """Return True if a rebase is in progress in this working tree.
+
+        Reliable signal: the existence of ``.git/rebase-merge`` or
+        ``.git/rebase-apply`` directories.  ``REBASE_HEAD`` ref is NOT
+        reliable — git keeps it around after a successful ``rebase
+        --continue`` for use as a backup reference, so its mere existence
+        does not mean a rebase is in flight.  Resolves ``GIT_DIR`` via
+        ``rev-parse`` so this works inside worktrees and submodules where
+        the directory is not the repo's literal ``.git``.
+
+        On ``rev-parse --git-dir`` failure (which means we genuinely cannot
+        tell), this conservatively returns ``True`` so the caller's abort
+        runs — abort on a clean tree fails loudly (and is logged), but
+        failing to abort a real in-progress rebase would leave the repo
+        wedged for every subsequent ``force_pull``.  The underlying
+        rev-parse failure is logged at ERROR with token-redacted stderr.
+
+        Args:
+            git_root: Working-tree root.
+            env: Optional GIT_ASKPASS environment.
+
+        Returns:
+            ``True`` if a rebase appears to be in progress (or if we cannot
+            tell); ``False`` only when ``rev-parse --git-dir`` succeeded
+            AND no ``rebase-merge`` / ``rebase-apply`` directory exists.
+        """
+        git_dir_proc = self._run_git_capturing(
+            git_root, "rev-parse", "--git-dir", env=env
+        )
+        if git_dir_proc.returncode != 0:
+            logger.error(
+                "Git force_pull: `git rev-parse --git-dir` failed; "
+                "conservatively assuming rebase is in progress: %s",
+                self._redact((git_dir_proc.stderr or "").strip()),
+            )
+            return True
+
+        git_dir = Path(git_dir_proc.stdout.strip())
+        if not git_dir.is_absolute():
+            git_dir = git_root / git_dir
+        return (git_dir / "rebase-merge").is_dir() or (
+            git_dir / "rebase-apply"
+        ).is_dir()
+
     def _write_conflict_files(
         self,
         git_root: Path,
@@ -1290,39 +1339,7 @@ class GitWriteStrategy:
             # limit, or exited via ``break`` without completing), abort
             # cleanly so the working tree is consistent before we write
             # conflict files.
-            #
-            # Reliable signal: ``.git/rebase-merge`` and ``.git/rebase-apply``
-            # directories.  ``REBASE_HEAD`` ref is NOT reliable — git keeps
-            # it around after a successful ``rebase --continue`` for use as
-            # a backup reference, so its mere existence does not mean a
-            # rebase is in flight.  Resolve ``GIT_DIR`` via ``rev-parse``
-            # so this works inside worktrees and submodules where the dir
-            # is not the repo's literal ``.git``.
-            git_dir_proc = self._run_git_capturing(
-                git_root, "rev-parse", "--git-dir", env=env
-            )
-            if git_dir_proc.returncode == 0:
-                git_dir = Path(git_dir_proc.stdout.strip())
-                if not git_dir.is_absolute():
-                    git_dir = git_root / git_dir
-                rebase_in_progress = (git_dir / "rebase-merge").is_dir() or (
-                    git_dir / "rebase-apply"
-                ).is_dir()
-            else:
-                # `rev-parse --git-dir` failure means we cannot tell whether
-                # a rebase is in progress.  Conservatively assume one IS in
-                # progress so the abort runs — abort on a clean tree fails
-                # loudly and is logged below; failing to abort a real
-                # in-progress rebase would leave the repo wedged for every
-                # subsequent force_pull.  Log the underlying failure with
-                # token-redacted stderr for the operator.
-                git_dir_stderr = self._redact((git_dir_proc.stderr or "").strip())
-                logger.error(
-                    "Git force_pull: `git rev-parse --git-dir` failed; "
-                    "conservatively assuming rebase is in progress: %s",
-                    git_dir_stderr,
-                )
-                rebase_in_progress = True
+            rebase_in_progress = self._check_rebase_in_progress(git_root, env)
 
             if rebase_in_progress:
                 abort_proc = self._run_git_capturing(
