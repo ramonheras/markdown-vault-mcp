@@ -189,6 +189,51 @@ class TestGitSync:
         assert payload["pull"]["commits_pulled"] == 1
         assert not (git_repo_pair.local_path / "dryseed.md").exists()
 
+    async def test_dry_run_both_reports_push_dry_run_unsupported(
+        self, git_repo_pair: GitRepoPair, _git_managed_env: Path
+    ) -> None:
+        """direction='both' + dry_run=True reports push.reason='dry_run_unsupported'.
+
+        Regression for the local-circus finding: in dry-run mode the pull
+        leg returns ``applied=False`` (HEAD didn't move) which used to fire
+        the "skip push when pull failed" short-circuit and return
+        ``push: null``.  That made a healthy dry-run preview indistinguishable
+        from a real-pull-failed-push-skipped result.  The fix excludes
+        dry-run from the short-circuit so the push leg's
+        ``dry_run_unsupported`` reason is preserved in the response.
+        """
+        # Seed one remote commit so the dry-run pull projection produces
+        # ``applied=False`` for a non-trivial reason (HEAD would move on a
+        # real pull, but doesn't move in dry-run mode).  Without a seeded
+        # commit ``force_pull`` short-circuits with "already up to date"
+        # and ``applied=True``, which doesn't exercise the regression path.
+        _seed_remote_commit(
+            git_repo_pair,
+            clone_name="clone_dry_both",
+            file_name="dry_both_seed.md",
+            body="dry-both\n",
+        )
+
+        server = make_server()
+        async with Client(server) as client:
+            result = await client.call_tool(
+                "git_sync", {"direction": "both", "dry_run": True}
+            )
+
+        payload = _parse_tool_data(result)
+
+        assert payload["dry_run"] is True
+        assert payload["pull"] is not None
+        # Pull leg ran; ``applied`` is False because dry-run never moves HEAD
+        # (even though ``would_apply=True``).
+        assert payload["pull"]["applied"] is False
+        assert payload["pull"]["would_apply"] is True
+        # Push leg MUST surface even though the pull leg "failed" by the
+        # applied=False signal — dry-run is special-cased.
+        assert payload["push"] is not None, payload
+        assert payload["push"]["applied"] is False
+        assert payload["push"]["reason"] == "dry_run_unsupported", payload["push"]
+
     async def test_pull_conflict_returns_conflict_files(
         self, git_repo_pair: GitRepoPair, _git_managed_env: Path
     ) -> None:

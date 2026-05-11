@@ -123,8 +123,15 @@ class PullResult:
             failed.  Inspect ``reason`` and ``conflict_files`` to
             distinguish "applied via conflict resolution" from outright
             failure.
-        commits_pulled: Count of commits brought in.  In ``dry_run`` mode
-            this is the count that *would* have been pulled.
+        commits_pulled: Count of commits brought in.  Reliable on the
+            fast-forward path (``reason is None`` and ``fast_forward=True``).
+            On ``"rebased"`` and ``"conflicts_resolved_with_siblings"`` this
+            is ``0`` even when HEAD advanced — the rebase replays local
+            commits *on top of* the upstream rather than fast-forwarding,
+            so the linear-history "commits pulled" count is not meaningful.
+            Inspect ``from_sha != to_sha`` to detect that HEAD actually
+            moved on those paths.  In ``dry_run`` mode this is the count
+            that *would* have been pulled.
         from_sha: HEAD SHA before the pull.
         to_sha: HEAD SHA after the pull.  In ``dry_run`` mode this is the
             SHA HEAD would have moved to.  When the pull failed and HEAD
@@ -1005,9 +1012,17 @@ class GitWriteStrategy:
                 try:
                     self._git(git_root, "fetch", "origin", env=env)
                 except subprocess.CalledProcessError as exc:
+                    # Sanitise the token before logging — fetch is the
+                    # network-touching subprocess in this method, and git
+                    # error messages can echo the URL with credentials
+                    # back at the user.  Mirrors the redaction pattern
+                    # already used in ``_do_push_safe`` and ``force_push``.
+                    stderr = (exc.stderr or "").strip()
+                    if self._token and self._token in stderr:
+                        stderr = stderr.replace(self._token, "***")
                     logger.warning(
                         "Git force_pull: fetch failed: %s",
-                        (exc.stderr or "").strip(),
+                        stderr,
                     )
                     return PullResult(
                         applied=False,
@@ -1157,7 +1172,36 @@ class GitWriteStrategy:
         except subprocess.CalledProcessError:
             # Real conflicts during rebase — resolve by accepting upstream
             # and saving the local MCP versions as Syncthing-style siblings.
-            saved = self._resolve_rebase_conflicts(git_root, env)
+            #
+            # ``_resolve_rebase_conflicts`` runs ``git checkout --ours`` and
+            # ``git add`` with ``check=True``; if either raises mid-loop the
+            # repository is left in a half-rebased state.  Wrap in a guard
+            # that defensively aborts the rebase before propagating, so a
+            # subsequent ``force_pull`` (or any per-write commit path) does
+            # not trip over the leftover ``rebase-merge`` directory.
+            try:
+                saved = self._resolve_rebase_conflicts(git_root, env)
+            except Exception:
+                logger.error(
+                    "Git force_pull: conflict resolution raised — aborting rebase",
+                    exc_info=True,
+                )
+                # Defensive abort: swallow its own errors so the original
+                # exception's diagnostic value is preserved in the logs.
+                subprocess.run(
+                    ["git", "-C", str(git_root), "rebase", "--abort"],
+                    capture_output=True,
+                    text=True,
+                    env=env,
+                )
+                return PullResult(
+                    applied=False,
+                    fast_forward=False,
+                    commits_pulled=0,
+                    from_sha=from_sha,
+                    to_sha=from_sha,
+                    reason=PULL_REASON_CONFLICT_RESOLUTION_FAILED,
+                )
 
             # If a rebase is still in progress (loop hit its iteration
             # limit, or exited via ``break`` without completing), abort

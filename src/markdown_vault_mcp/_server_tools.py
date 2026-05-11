@@ -10,6 +10,7 @@ import asyncio
 import base64
 import ipaddress
 import logging
+import subprocess
 from dataclasses import asdict
 from typing import Any, Literal
 from urllib.parse import urlparse, urlunparse
@@ -1380,9 +1381,15 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
                 return strategy._git(
                     git_root, "rev-parse", "--abbrev-ref", "HEAD"
                 ).strip()
-            except Exception:
-                # Detached HEAD or transient git failure — fall back to a
-                # well-known sentinel rather than blowing up the whole tool.
+            except (subprocess.CalledProcessError, FileNotFoundError):
+                # Detached HEAD, missing git binary, or transient git failure —
+                # fall back to a well-known sentinel rather than blowing up the
+                # whole tool.  Narrow the catch per CLAUDE.md's logging
+                # standard so a real bug (e.g. AttributeError) still propagates.
+                logger.warning(
+                    "git_sync: failed to read branch name, using 'HEAD' fallback",
+                    exc_info=True,
+                )
                 return "HEAD"
 
         result: dict[str, Any] = {
@@ -1413,9 +1420,32 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
                 pull_dict["would_apply"] = pull_result.commits_pulled > 0
             result["pull"] = pull_dict
 
+            # Refresh the FTS index when the pull leg actually advanced HEAD.
+            # ``force_pull`` only mutates the working tree; without this call
+            # search/list/get_context would serve stale data until the next
+            # write.  Mirrors the periodic pull loop's ``on_pull`` callback
+            # in ``GitWriteStrategy._pull_loop`` — same pause-then-reindex
+            # pattern, same ``Collection.pause_writes`` context manager.
+            if (
+                not dry_run
+                and pull_result.applied
+                and pull_result.from_sha != pull_result.to_sha
+            ):
+
+                def _pause_and_reindex() -> None:
+                    with collection.pause_writes():
+                        collection.reindex()
+
+                await asyncio.to_thread(_pause_and_reindex)
+
             # Short-circuit the push leg when the pull failed in 'both' mode
             # so we don't push on top of an unreconciled local clone.
-            if direction == "both" and not pull_result.applied:
+            # Excludes ``dry_run``: in dry-run mode ``applied`` is always
+            # ``False`` even on a healthy projection, so falling through is
+            # correct — the push leg's ``dry_run_unsupported`` reason then
+            # surfaces in the response, distinguishing a preview from a
+            # real-pull-failed-push-skipped result.
+            if direction == "both" and not pull_result.applied and not dry_run:
                 # Refresh head_sha — the pull may have moved it even on
                 # partial failure paths (defensive; today's force_pull leaves
                 # HEAD in place on failure).

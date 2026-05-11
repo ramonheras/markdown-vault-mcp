@@ -454,6 +454,11 @@ history before continuing the conversation.
   `direction="push"`. Fields: `applied`, `fast_forward`,
   `commits_pulled`, `from_sha`, `to_sha`; optional `reason`,
   `conflict_files`; `would_apply` (only in `dry_run` mode).
+  `commits_pulled` is reliable on the fast-forward path. On
+  `reason="rebased"` and `reason="conflicts_resolved_with_siblings"` it
+  is `0` even when HEAD advanced — the rebase replays local commits *on
+  top of* the upstream rather than fast-forwarding, so inspect
+  `from_sha != to_sha` to detect the actual change.
 - `push` (dict | null) — payload from the push leg, or `null` when
   `direction="pull"` or when the pull leg failed in
   `direction="both"`. Fields: `applied`, `commits_pushed`,
@@ -528,7 +533,7 @@ Push rejected as non-fast-forward:
     "remote_sha_before": "9999999",
     "remote_sha_after": "9999999",
     "reason": "non_fast_forward",
-    "hint": "Run git_sync(direction='pull') first to integrate remote commits, then retry git_sync(direction='push')."
+    "hint": "Remote has commits the local clone has not seen.  Run git_sync(direction='pull') to reconcile (fast-forward when possible, Syncthing-style siblings on real conflict), then retry git_sync(direction='push')."
   }
 }
 ```
