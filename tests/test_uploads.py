@@ -10,16 +10,42 @@ the agent gets ``ValueError`` in-band instead of after a wasted HTTP POST.
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING
+from urllib.parse import urlsplit
 
+import httpx
 import pytest
+from fastmcp import Client
 from fastmcp_pvl_core import UploadRecord
 
 from markdown_vault_mcp import _server_deps, uploads
 from markdown_vault_mcp.collection import Collection
+from markdown_vault_mcp.server import make_server
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+
+_CLEAR_VARS = (
+    "MARKDOWN_VAULT_MCP_INDEX_PATH",
+    "MARKDOWN_VAULT_MCP_EMBEDDINGS_PATH",
+    "MARKDOWN_VAULT_MCP_STATE_PATH",
+    "MARKDOWN_VAULT_MCP_INDEXED_FIELDS",
+    "MARKDOWN_VAULT_MCP_REQUIRED_FIELDS",
+    "MARKDOWN_VAULT_MCP_EXCLUDE",
+    "MARKDOWN_VAULT_MCP_GIT_TOKEN",
+    "MARKDOWN_VAULT_MCP_TEMPLATES_FOLDER",
+    "MARKDOWN_VAULT_MCP_SERVER_NAME",
+    "MARKDOWN_VAULT_MCP_INSTRUCTIONS",
+    "MARKDOWN_VAULT_MCP_BEARER_TOKEN",
+    "MARKDOWN_VAULT_MCP_OIDC_CONFIG_URL",
+    "MARKDOWN_VAULT_MCP_OIDC_CLIENT_ID",
+    "MARKDOWN_VAULT_MCP_OIDC_CLIENT_SECRET",
+    "MARKDOWN_VAULT_MCP_OIDC_JWT_SIGNING_KEY",
+    "MARKDOWN_VAULT_MCP_OIDC_AUDIENCE",
+    "MARKDOWN_VAULT_MCP_OIDC_REQUIRED_SCOPES",
+)
 
 
 def _make_record(target_id: str) -> UploadRecord:
@@ -141,3 +167,91 @@ class TestValidateUploadTarget:
         finally:
             col.close()
             _server_deps._collection_singleton = saved
+
+
+class TestUploadEndToEnd:
+    """``create_upload_link`` → POST → file in vault → readable via ``read``.
+
+    Catches wiring bugs that the receiver/validator unit tests above
+    cannot — for example, the route not being mounted, the receiver not
+    being supplied to :func:`register_file_exchange_upload`, or the
+    pre-link validator running at the wrong stage.
+
+    Mirrors :class:`tests.test_artifacts.TestCreateServerArtifactRoute`'s
+    end-to-end pattern for the inverse (download) direction.
+    """
+
+    @pytest.fixture
+    def _upload_vault(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+        """Writable vault and upload-enabling env vars for end-to-end tests."""
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", str(vault))
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_READ_ONLY", "false")
+        # BASE_URL is required by register_file_exchange_upload to mount
+        # the route — without it the helper logs a warning and returns a
+        # disabled handle.
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_BASE_URL", "http://test.invalid")
+        # Transport is read from FASTMCP_TRANSPORT (or
+        # MARKDOWN_VAULT_MCP_TRANSPORT) by pvl-core's _resolve_transport,
+        # not from make_server's argument; the route only mounts when the
+        # resolved transport is HTTP.
+        monkeypatch.setenv("FASTMCP_TRANSPORT", "http")
+        for var in _CLEAR_VARS:
+            monkeypatch.delenv(var, raising=False)
+        return vault
+
+    async def test_md_upload_round_trip(self, _upload_vault: Path) -> None:
+        """Mint URL → POST bytes → file lands in vault → readable via ``read``.
+
+        Uses the FastMCP in-process :class:`Client` to drive the lifespan
+        (which sets the :class:`Collection` singleton the receiver needs)
+        and to call ``create_upload_link`` / ``read``; uses an
+        :class:`httpx.AsyncClient` over :class:`httpx.ASGITransport` to
+        POST against the same FastMCP server's HTTP app.  Both paths
+        share the module-level :class:`UploadStore` singleton captured
+        by the route closure at registration time.
+        """
+        server = make_server(transport="http")
+        async with Client(server) as client:
+            # 1. Mint a one-time upload URL via the MCP tool.  pvl-core's
+            #    ExchangeURI.validate_segment requires target_id to be a
+            #    bare safe filename (no slashes, no ``..``); receivers
+            #    that interpret it as a path build the full path
+            #    themselves from the bare name.
+            mint_result = await client.call_tool(
+                "create_upload_link", {"target_id": "uploaded.md"}
+            )
+            data = json.loads(mint_result.content[0].text)
+            assert data["target_id"] == "uploaded.md"
+            assert data["expires_in_seconds"] > 0
+            assert data["upload_url"].startswith(
+                "http://test.invalid/markdown-vault-mcp/uploads/"
+            )
+
+            # 2. POST raw bytes to the minted URL.  The upload_url is built
+            #    against the configured BASE_URL; strip it down to the path
+            #    component so the in-process ASGI transport handles it.
+            upload_path = urlsplit(data["upload_url"]).path
+            payload = b"# Uploaded\n\nVia HTTP POST.\n"
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=server.http_app()),
+                base_url="http://test.invalid",
+            ) as http:
+                response = await http.post(upload_path, content=payload)
+
+            # 3. Verify the receiver returned the expected JSON shape.
+            assert response.status_code == 200
+            body = response.json()
+            assert body == {"path": "uploaded.md", "size_bytes": len(payload)}
+
+            # 4. Verify the file actually landed in the vault on disk.
+            assert (_upload_vault / "uploaded.md").read_bytes() == payload
+
+            # 5. Verify it is now readable via the ``read`` MCP tool —
+            #    proves the FTS index was updated synchronously by
+            #    Collection.write (not just the filesystem write).
+            read_result = await client.call_tool("read", {"path": "uploaded.md"})
+            read_data = json.loads(read_result.content[0].text)
+            assert read_data["path"] == "uploaded.md"
+            assert read_data["content"] == payload.decode("utf-8")
