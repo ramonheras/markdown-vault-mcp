@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -268,7 +269,7 @@ class TestToCollectionKwargs:
         assert kwargs["required_frontmatter"] == ["title"]
         assert kwargs["exclude_patterns"] == [".obsidian/**"]
         assert kwargs["attachment_extensions"] is None
-        assert kwargs["max_attachment_size_mb"] == 10.0
+        assert kwargs["max_attachment_size_mb"] == 1.0
         assert kwargs["git_pull_interval_s"] == 0
         assert "git_strategy" in kwargs
         assert "on_write" in kwargs
@@ -450,11 +451,11 @@ class TestAttachmentConfig:
     def test_default_max_attachment_size_mb(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """load_config() defaults max_attachment_size_mb to 10.0."""
+        """load_config() defaults max_attachment_size_mb to 1.0 (tightened in #442)."""
         monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", "/tmp/vault")
         monkeypatch.delenv("MARKDOWN_VAULT_MCP_MAX_ATTACHMENT_SIZE_MB", raising=False)
         config = load_config()
-        assert config.max_attachment_size_mb == 10.0
+        assert config.max_attachment_size_mb == 1.0
 
     def test_max_attachment_size_mb_parsed(
         self, monkeypatch: pytest.MonkeyPatch
@@ -477,20 +478,20 @@ class TestAttachmentConfig:
     def test_max_attachment_size_mb_invalid_uses_default(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """load_config() falls back to 10.0 for invalid MAX_ATTACHMENT_SIZE_MB."""
+        """load_config() falls back to 1.0 for invalid MAX_ATTACHMENT_SIZE_MB."""
         monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", "/tmp/vault")
         monkeypatch.setenv("MARKDOWN_VAULT_MCP_MAX_ATTACHMENT_SIZE_MB", "not-a-number")
         config = load_config()
-        assert config.max_attachment_size_mb == 10.0
+        assert config.max_attachment_size_mb == 1.0
 
     def test_max_attachment_size_mb_negative_uses_default(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """load_config() resets negative MAX_ATTACHMENT_SIZE_MB to 10.0."""
+        """load_config() resets negative MAX_ATTACHMENT_SIZE_MB to 1.0."""
         monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", "/tmp/vault")
         monkeypatch.setenv("MARKDOWN_VAULT_MCP_MAX_ATTACHMENT_SIZE_MB", "-5")
         config = load_config()
-        assert config.max_attachment_size_mb == 10.0
+        assert config.max_attachment_size_mb == 1.0
 
     def test_attachment_config_passed_through_to_collection_kwargs(
         self, monkeypatch: pytest.MonkeyPatch
@@ -1180,3 +1181,70 @@ def test_search_ranking_config_rejects_malformed_float(
 
     with pytest.raises(ValueError, match="MARKDOWN_VAULT_MCP_LENGTH_DOWNWEIGHT_ALPHA"):
         load_config()
+
+
+class TestMaxNoteReadBytesEnv:
+    """MARKDOWN_VAULT_MCP_MAX_NOTE_READ_BYTES env loader."""
+
+    def test_default_is_262144(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", str(tmp_path))
+        monkeypatch.delenv("MARKDOWN_VAULT_MCP_MAX_NOTE_READ_BYTES", raising=False)
+        config = load_config()
+        assert config.max_note_read_bytes == 262144
+
+    def test_override_via_env(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", str(tmp_path))
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_MAX_NOTE_READ_BYTES", "1048576")
+        config = load_config()
+        assert config.max_note_read_bytes == 1048576
+
+    def test_zero_disables_limit(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", str(tmp_path))
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_MAX_NOTE_READ_BYTES", "0")
+        config = load_config()
+        assert config.max_note_read_bytes == 0
+
+    def test_invalid_value_falls_back_to_default(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", str(tmp_path))
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_MAX_NOTE_READ_BYTES", "not-a-number")
+        with caplog.at_level(logging.WARNING):
+            config = load_config()
+        assert config.max_note_read_bytes == 262144
+        assert "MAX_NOTE_READ_BYTES" in caplog.text
+
+    def test_negative_value_falls_back_to_default(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", str(tmp_path))
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_MAX_NOTE_READ_BYTES", "-1")
+        with caplog.at_level(logging.WARNING):
+            config = load_config()
+        assert config.max_note_read_bytes == 262144
+        assert "MAX_NOTE_READ_BYTES" in caplog.text
+        assert "negative" in caplog.text.lower()
+
+
+class TestMaxAttachmentSizeMbDefault:
+    """Default for MARKDOWN_VAULT_MCP_MAX_ATTACHMENT_SIZE_MB tightened in #442."""
+
+    def test_default_is_one_mb(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", str(tmp_path))
+        monkeypatch.delenv("MARKDOWN_VAULT_MCP_MAX_ATTACHMENT_SIZE_MB", raising=False)
+        config = load_config()
+        assert config.max_attachment_size_mb == 1.0

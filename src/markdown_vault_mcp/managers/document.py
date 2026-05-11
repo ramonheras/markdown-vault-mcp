@@ -84,6 +84,8 @@ class DocumentManager:
         exclude_patterns: Glob patterns for paths to exclude.
         attachment_extensions: Allowlist of attachment file extensions.
         max_attachment_size_mb: Maximum attachment size in megabytes.
+        max_note_read_bytes: Maximum bytes returned by full-document reads.
+            ``0`` disables the limit (default ``262144``, i.e. 256 KB).
         on_write_callback: Fires after a successful write to enqueue a
             git commit.  Signature: ``(abs_path, content, operation)``.
         on_vector_update: Marks a parsed note for deferred embedding
@@ -102,7 +104,8 @@ class DocumentManager:
         read_only: bool = True,
         exclude_patterns: list[str] | None = None,
         attachment_extensions: list[str] | None = None,
-        max_attachment_size_mb: float = 10.0,
+        max_attachment_size_mb: float = 1.0,
+        max_note_read_bytes: int = 262144,
         on_write_callback: Callable[[Path, str, str], None] | None = None,
         on_vector_update: Callable[[ParsedNote], None] | None = None,
         on_vector_dirty: Callable[[str], None] | None = None,
@@ -115,6 +118,7 @@ class DocumentManager:
         self._exclude_patterns = exclude_patterns
         self._attachment_extensions = attachment_extensions
         self._max_attachment_size_mb = max_attachment_size_mb
+        self._max_note_read_bytes = max_note_read_bytes
         self._on_write_callback = on_write_callback or (lambda *_a: None)
         self._on_vector_update = on_vector_update or (lambda *_a: None)
         self._on_vector_dirty = on_vector_dirty or (lambda *_a: None)
@@ -257,6 +261,32 @@ class DocumentManager:
         if not abs_path.is_file():
             return None
 
+        # Enforce MAX_NOTE_READ_BYTES (.md whole-document reads only — section=
+        # reads short-circuit with an early return above; non-.md paths fall
+        # through to parse_note() and return None on UnicodeDecodeError, same
+        # as historical behaviour, so the cap stays scoped to its env-var name).
+        is_md = path.lower().endswith(".md")
+        if is_md and self._max_note_read_bytes > 0:
+            try:
+                size_bytes = abs_path.stat().st_size
+            except OSError:
+                # File deleted/inaccessible between is_file() and stat() —
+                # match the surrounding parse_note OSError handling at the
+                # bottom of this method (return None, don't raise).
+                return None
+            if size_bytes > self._max_note_read_bytes:
+                raise ValueError(
+                    f"Document {path!r} is {size_bytes} bytes "
+                    f"({size_bytes / 1024:.1f} KB), exceeds "
+                    f"MARKDOWN_VAULT_MCP_MAX_NOTE_READ_BYTES "
+                    f"({self._max_note_read_bytes} bytes / "
+                    f"{self._max_note_read_bytes / 1024:.0f} KB). "
+                    f"Use read({path!r}, section=...) for partial reads "
+                    f"(see search() output's heading field), or increase "
+                    f"MARKDOWN_VAULT_MCP_MAX_NOTE_READ_BYTES if you need the "
+                    f"full document in context."
+                )
+
         try:
             note = parse_note(abs_path, self._source_dir, self._chunk_strategy)
         except (UnicodeDecodeError, OSError) as exc:
@@ -349,11 +379,13 @@ class DocumentManager:
             limit_bytes = int(self._max_attachment_size_mb * 1024 * 1024)
             if size_bytes > limit_bytes:
                 raise ValueError(
-                    f"Attachment {path!r} is {size_bytes} bytes, which "
-                    f"exceeds the limit of {self._max_attachment_size_mb} MB "
-                    f"({limit_bytes} bytes). "
-                    "Raise MARKDOWN_VAULT_MCP_MAX_ATTACHMENT_SIZE_MB or set "
-                    "it to 0 to disable the limit."
+                    f"Attachment {path!r} is {size_bytes} bytes "
+                    f"({size_bytes / 1024 / 1024:.1f} MB), exceeds "
+                    f"MARKDOWN_VAULT_MCP_MAX_ATTACHMENT_SIZE_MB "
+                    f"({self._max_attachment_size_mb} MB). "
+                    f"Use create_download_link({path!r}) for HTTP transfer, "
+                    f"or raise MARKDOWN_VAULT_MCP_MAX_ATTACHMENT_SIZE_MB if "
+                    f"you need the bytes in context."
                 )
 
         mime_type, _ = mimetypes.guess_type(path)
@@ -531,12 +563,16 @@ class DocumentManager:
             if self._max_attachment_size_mb > 0:
                 limit_bytes = int(self._max_attachment_size_mb * 1024 * 1024)
                 if len(content) > limit_bytes:
+                    size_bytes = len(content)
                     raise ValueError(
-                        f"Content ({len(content)} bytes) exceeds the limit "
-                        f"of {self._max_attachment_size_mb} MB "
-                        f"({limit_bytes} bytes). "
-                        "Raise MARKDOWN_VAULT_MCP_MAX_ATTACHMENT_SIZE_MB or "
-                        "set it to 0 to disable the limit."
+                        f"Attachment {path!r} is {size_bytes} bytes "
+                        f"({size_bytes / 1024 / 1024:.1f} MB), exceeds "
+                        f"MARKDOWN_VAULT_MCP_MAX_ATTACHMENT_SIZE_MB "
+                        f"({self._max_attachment_size_mb} MB). "
+                        f"Use create_upload_link({path!r}) (when available) "
+                        f"for out-of-band upload, or raise "
+                        f"MARKDOWN_VAULT_MCP_MAX_ATTACHMENT_SIZE_MB if you need "
+                        f"to write the bytes through context."
                     )
             created = not abs_path.is_file()
             abs_path.parent.mkdir(parents=True, exist_ok=True)

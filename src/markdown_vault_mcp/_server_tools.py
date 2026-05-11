@@ -183,6 +183,16 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
         To recover the full text of a specific section returned by 'search',
         pass section=heading (the value from the result's 'heading' field).
 
+        **Context cost:** every byte returned counts against the LLM's
+        context budget. Reads above ``MARKDOWN_VAULT_MCP_MAX_NOTE_READ_BYTES``
+        (default 256 KB for ``.md``) or
+        ``MARKDOWN_VAULT_MCP_MAX_ATTACHMENT_SIZE_MB`` (default 1 MB for
+        binaries) raise ``ValueError`` with the right alternative. For
+        partial markdown reads, pass ``section=heading`` (use the
+        ``heading`` field from a ``search()`` result). For binary
+        transfer, use ``create_download_link(path)`` to mint a one-time
+        download URL — bytes flow over HTTP, not through context.
+
         Args:
             path: Relative path to the document or attachment
                 (e.g. "Journal/note.md" or "assets/diagram.pdf").
@@ -1046,7 +1056,12 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
                 e.g. {"title": "My Note", "tags": ["draft"]}.
                 Ignored for attachments.
             content_base64: Base64-encoded binary content for attachment
-                files. Required when path is not .md.
+                files. Required when path is not ``.md``.
+
+                **Context cost:** base64 encoding inflates by ~33%; even a 1 MB
+                attachment becomes ~1.3 MB of tokens. For files larger than
+                ~100 KB, prefer ``create_upload_link(path)`` (when available)
+                — bytes flow over HTTP POST, not through context.
             if_match: Optional etag obtained from a previous 'read' call.
                 When provided, the write only proceeds if the file has not
                 been modified since that read (optimistic concurrency).
@@ -1298,6 +1313,11 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
         Fetches content from an HTTP/HTTPS URL and writes it as a note or
         attachment. Designed for MCP-to-MCP file transfer when content is
         too large to pass through the LLM context window.
+
+        **Context cost:** zero for the bytes themselves — the file is
+        downloaded server-side and saved to the vault. After a successful
+        fetch, reference the file by its ``path`` (call ``read(path)`` only
+        for small results, otherwise pass the path to other tools).
 
         For .md paths: the response is decoded as UTF-8 text and saved as
         a markdown note with optional frontmatter. The search index is

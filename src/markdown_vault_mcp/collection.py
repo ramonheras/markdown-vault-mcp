@@ -117,6 +117,14 @@ class Collection:
             periodic fetch + ff-only updates). Started via :meth:`start`.
         git_pull_interval_s: Interval in seconds for periodic pulls. ``0``
             disables the pull loop.
+        exclude_patterns: Glob patterns (relative to *source_dir*) for files
+            and directories to exclude from indexing.
+        attachment_extensions: Allowlist of extensions (without leading dot)
+            for binary attachments.  ``["*"]`` accepts all extensions.
+        max_attachment_size_mb: Maximum binary attachment size in megabytes.
+            ``0`` disables the limit (default ``1.0``).
+        max_note_read_bytes: Maximum bytes returned by full-document reads.
+            ``0`` disables the limit (default ``262144``, i.e. 256 KB).
     """
 
     def __init__(
@@ -136,7 +144,8 @@ class Collection:
         git_pull_interval_s: int = 0,
         exclude_patterns: list[str] | None = None,
         attachment_extensions: list[str] | None = None,
-        max_attachment_size_mb: float = 10.0,
+        max_attachment_size_mb: float = 1.0,
+        max_note_read_bytes: int = 262144,
         chunks_per_doc: int = 2,
         snippet_words: int = 200,
         length_downweight_alpha: float = 0.25,
@@ -168,6 +177,7 @@ class Collection:
         self._exclude_patterns = exclude_patterns
         self._attachment_extensions = attachment_extensions
         self._max_attachment_size_mb = max_attachment_size_mb
+        self._max_note_read_bytes = max_note_read_bytes
 
         # Default state path: {source_dir}/.markdown_vault_mcp/state.json
         if state_path is None:
@@ -247,6 +257,7 @@ class Collection:
             exclude_patterns=self._exclude_patterns,
             attachment_extensions=self._attachment_extensions,
             max_attachment_size_mb=self._max_attachment_size_mb,
+            max_note_read_bytes=self._max_note_read_bytes,
             on_write_callback=self._fire_write_callback,
             on_vector_update=self._index_mgr.update_vector_index,
             on_vector_dirty=self._index_mgr.mark_dirty,

@@ -244,7 +244,8 @@ Non-markdown file support. See [Attachments](#attachments) for details.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `MARKDOWN_VAULT_MCP_ATTACHMENT_EXTENSIONS` | (built-in list) | Comma-separated allowed extensions without dot (e.g. `pdf,png,jpg`); use `*` to allow all non-`.md` files |
-| `MARKDOWN_VAULT_MCP_MAX_ATTACHMENT_SIZE_MB` | `10.0` | Maximum attachment size in MB for reads and writes; `0` disables the limit |
+| `MARKDOWN_VAULT_MCP_MAX_ATTACHMENT_SIZE_MB` | `1.0` | Maximum attachment size in MB returned by `read()` / accepted by `write()`; `0` disables the limit |
+| `MARKDOWN_VAULT_MCP_MAX_NOTE_READ_BYTES` | `262144` (256 KB) | Maximum bytes returned by full-document `read()` for `.md` files; raises `ValueError` if exceeded. Use `read(path, section=...)` for partial reads. `0` disables the limit. |
 
 ### Bearer token authentication
 
@@ -555,6 +556,17 @@ uv sync --all-extras --all-groups
 When `copier update` introduces new dependencies, CI runs `uv sync --frozen` which fails against a stale lockfile. Run `uv lock` locally and commit the refreshed `uv.lock` alongside accepting the copier-update PR.
 
 <!-- ===== TEMPLATE-OWNED SECTIONS END ===== -->
+
+## Upgrading from earlier versions
+
+- `MARKDOWN_VAULT_MCP_MAX_ATTACHMENT_SIZE_MB` default lowered from **10 MB**
+  to **1 MB**.  Most LLM contexts can't survive a 10 MB base64-encoded
+  attachment; the old default was a silent context-blow-up.  If you have
+  non-LLM consumers (scripts, CI) that need the old behaviour, set
+  `MARKDOWN_VAULT_MCP_MAX_ATTACHMENT_SIZE_MB=10` explicitly.
+- `MARKDOWN_VAULT_MCP_MAX_NOTE_READ_BYTES` is a **new** env var (default
+  256 KB).  Whole-document `.md` reads above this raise `ValueError`.
+  Partial reads via `read(path, section=heading)` bypass the cap.
 
 ## License
 
