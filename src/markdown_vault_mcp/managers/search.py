@@ -138,6 +138,66 @@ def _apply_chunks_per_doc_cap(
     return out
 
 
+class _GroupableRow(Protocol):
+    """Row contract consumed by :func:`_group_by_path`.
+
+    Adds ``heading`` and ``start_line`` to the cap-helper's contract so
+    grouped output preserves section identity and breaks score ties
+    deterministically.  ``start_line`` defaults to ``0`` for legacy vector
+    rows loaded from older .json sidecars.
+    """
+
+    path: str
+    heading: str | None
+    score: float
+    start_line: int
+
+
+_GroupableT = TypeVar("_GroupableT", bound=_GroupableRow)
+
+
+def _group_by_path(
+    rows: list[_GroupableT], *, chunks_per_file: int, file_limit: int
+) -> list[list[_GroupableT]]:
+    """Collapse score-desc rows into file groups.
+
+    Walks ``rows`` (assumed already sorted DESC by score) and emits a list
+    of groups.  Each group is a list of rows sharing the same ``path``,
+    capped at ``chunks_per_file`` rows.  At most ``file_limit`` groups are
+    returned.  Sections within a group are sorted ``(score DESC,
+    start_line ASC)`` so ties surface in document order.
+
+    Args:
+        rows: Rows pre-sorted by descending score.
+        chunks_per_file: Maximum rows per group; must be >= 1.
+        file_limit: Maximum number of groups emitted.
+
+    Returns:
+        List of groups; outer order = file rank (best file first).
+
+    Raises:
+        ValueError: If ``chunks_per_file`` < 1.
+    """
+    if chunks_per_file < 1:
+        raise ValueError(f"chunks_per_file must be >= 1, got {chunks_per_file}")
+
+    groups: dict[str, list[_GroupableT]] = {}
+    order: list[str] = []
+    for row in rows:
+        existing = groups.get(row.path)
+        if existing is None:
+            if len(order) >= file_limit:
+                continue
+            order.append(row.path)
+            groups[row.path] = [row]
+        elif len(existing) < chunks_per_file:
+            existing.append(row)
+
+    # Sort each group's sections by (score DESC, start_line ASC) so ties
+    # within a file surface in document order.
+    return [sorted(groups[p], key=lambda r: (-r.score, r.start_line)) for p in order]
+
+
 def _compute_snippet_for_semantic(
     content: str, query: str, *, snippet_words: int
 ) -> str:
