@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 from fastmcp import Client
 
+from markdown_vault_mcp import _server_deps
 from markdown_vault_mcp.server import make_server
 from tests.fixtures.git import _run_git
 
@@ -290,6 +291,131 @@ class TestGitSync:
         # Sibling file actually exists on disk (rebase landed, files written).
         for rel in conflict_files:
             assert (git_repo_pair.local_path / rel).exists(), rel
+
+    async def test_pull_reindex_failure_surfaces_on_payload(
+        self,
+        git_repo_pair: GitRepoPair,
+        _git_managed_env: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Failed reindex after a successful pull surfaces ``reindex_failed=True``.
+
+        Regression for ``fb524e8``: when ``Collection.reindex()`` raises
+        after the pull leg has already moved HEAD, the tool must not fail —
+        the side-effect on disk is real and the agent needs to see it.
+        Instead, the bookkeeping failure is surfaced on the pull payload as
+        ``reindex_failed=True`` + ``reindex_hint`` so the caller knows the
+        FTS index is stale and can recover via the standalone ``reindex``
+        tool.
+
+        The reindex callable is monkey-patched on the singleton Collection
+        AFTER the lifespan has constructed it (the singleton accessor is
+        the only seam that exposes the live instance to tests; FastMCP's
+        ``Depends(get_collection)`` resolves through the lifespan context).
+        """
+        # Seed a remote commit so ``force_pull`` actually moves HEAD —
+        # without it the pull short-circuits as "already up to date" and
+        # the post-pull reindex branch never fires.
+        _seed_remote_commit(
+            git_repo_pair,
+            clone_name="clone_reindex_fail",
+            file_name="reindex_seed.md",
+            body="seed\n",
+        )
+
+        server = make_server()
+        async with Client(server) as client:
+            # Lifespan has set the singleton; monkey-patch reindex BEFORE
+            # the tool call so the post-pull bookkeeping path raises.
+            collection = _server_deps.get_collection_singleton()
+
+            def _failing_reindex() -> None:
+                raise RuntimeError("simulated reindex failure")
+
+            monkeypatch.setattr(collection, "reindex", _failing_reindex)
+
+            result = await client.call_tool("git_sync", {"direction": "pull"})
+
+        payload = _parse_tool_data(result)
+
+        # Pull side-effect is real — HEAD moved, files on disk.
+        assert payload["pull"] is not None, payload
+        assert payload["pull"]["applied"] is True, payload["pull"]
+        assert payload["pull"]["commits_pulled"] == 1, payload["pull"]
+        # And the bookkeeping failure surfaces on the same payload.
+        assert payload["pull"]["reindex_failed"] is True, payload["pull"]
+        assert "reindex_hint" in payload["pull"], payload["pull"]
+        assert "stale" in payload["pull"]["reindex_hint"].lower()
+        # The seeded file landed on disk despite the reindex blow-up.
+        assert (git_repo_pair.local_path / "reindex_seed.md").exists()
+
+    async def test_both_direction_skips_push_when_pull_fails(
+        self,
+        git_repo_pair: GitRepoPair,
+        _git_managed_env: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """direction='both' with a real (non-dry-run) pull failure short-circuits push.
+
+        Monkey-patches ``force_pull`` after lifespan startup to return a
+        ``PullResult`` with ``applied=False`` (the strategy's managed-mode
+        startup probe rejects mismatched remote URLs, so we cannot break
+        ``origin`` ahead of time).  The tool must then:
+
+        * skip the push leg entirely (``payload["push"] is None``) — pushing
+          on top of an unreconciled clone would risk overwriting upstream;
+        * still refresh ``head_sha`` on the response so the caller sees the
+          post-sync state.
+
+        This exercises the ``direction == 'both' and not pull_result.applied
+        and not dry_run`` short-circuit (lines 1471-1475 of ``_server_tools``).
+        """
+        from markdown_vault_mcp.git import PullResult
+
+        # Stage a local commit so push has *something* it could send if the
+        # short-circuit didn't fire — makes the assertion meaningful.
+        (git_repo_pair.local_path / "would_push.md").write_text("x\n")
+        _run_git(git_repo_pair.local_path, "add", "would_push.md")
+        _run_git(git_repo_pair.local_path, "commit", "-m", "would push")
+
+        server = make_server()
+        async with Client(server) as client:
+            collection = _server_deps.get_collection_singleton()
+            strategy = collection._git_strategy
+
+            push_called = {"count": 0}
+
+            def _failing_pull(*_args: object, **_kwargs: object) -> PullResult:
+                head = strategy._head_sha(strategy._resolve_force_repo())
+                return PullResult(
+                    applied=False,
+                    fast_forward=False,
+                    commits_pulled=0,
+                    from_sha=head,
+                    to_sha=head,
+                    reason="fetch_failed",
+                )
+
+            def _spy_push(*_args: object, **_kwargs: object) -> object:
+                push_called["count"] += 1
+                raise AssertionError("push leg must be short-circuited")
+
+            monkeypatch.setattr(strategy, "force_pull", _failing_pull)
+            monkeypatch.setattr(strategy, "force_push", _spy_push)
+
+            result = await client.call_tool("git_sync", {"direction": "both"})
+
+        payload = _parse_tool_data(result)
+
+        # Pull leg ran and failed.
+        assert payload["pull"] is not None, payload
+        assert payload["pull"]["applied"] is False, payload["pull"]
+        assert payload["pull"]["reason"] == "fetch_failed", payload["pull"]
+        # Push leg short-circuited — never reached the strategy.force_push call.
+        assert payload["push"] is None, payload
+        assert push_called["count"] == 0
+        # head_sha refreshed at the short-circuit, not at the function tail.
+        assert "head_sha" in payload and len(payload["head_sha"]) == 40
 
 
 class TestGitSyncVisibility:

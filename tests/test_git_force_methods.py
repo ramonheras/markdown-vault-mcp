@@ -407,6 +407,163 @@ class TestForceMethodsErrorBranches:
         assert result.hint is not None
         assert "git push -u" in result.hint
 
+    def test_force_pull_resolve_rebase_conflicts_raises_aborts_defensively(
+        self, git_repo_pair: GitRepoPair, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """If ``_resolve_rebase_conflicts`` raises, force_pull aborts the rebase.
+
+        The defensive try/except around ``_resolve_rebase_conflicts`` (added
+        in ``fb524e8``) wraps the conflict-resolution helper so a half-rebased
+        ``rebase-merge/`` directory cannot leak into the next pull.  Without
+        this fallback the repo would be wedged: subsequent pulls would
+        bail before they even start.
+
+        Drives a real two-clone conflict (so ``git rebase`` actually halts
+        with conflicts), then monkey-patches the conflict-resolution helper
+        to raise.  Asserts:
+
+        * the tool returns ``conflict_resolution_failed``,
+        * the rebase has been aborted (no ``rebase-merge`` directory left),
+        * HEAD is back at the pre-rebase commit (working tree consistent).
+
+        Covers the ``except Exception`` block in
+        ``_force_pull_rebase_fallback`` (lines 1186-1212 of ``git.py``).
+        """
+        from markdown_vault_mcp.git import (
+            PULL_REASON_CONFLICT_RESOLUTION_FAILED,
+            GitWriteStrategy,
+        )
+
+        # Two-clone conflict on the same file → real rebase halt.
+        _seed_remote_commit(
+            git_repo_pair,
+            clone_name="clone_resolve_raise",
+            file_name="README.md",
+            body="# remote\n",
+        )
+        (git_repo_pair.local_path / "README.md").write_text("# local\n")
+        _run_git(git_repo_pair.local_path, "add", "README.md")
+        _run_git(git_repo_pair.local_path, "commit", "-m", "local edit")
+        head_before = _run_git(git_repo_pair.local_path, "rev-parse", "HEAD").strip()
+
+        strategy = GitWriteStrategy(
+            enable_pull=True,
+            enable_push=False,
+            repo_path=git_repo_pair.local_path,
+        )
+
+        def _raising_resolve(*_args: object, **_kwargs: object) -> object:
+            raise RuntimeError("simulated conflict resolution failure")
+
+        monkeypatch.setattr(strategy, "_resolve_rebase_conflicts", _raising_resolve)
+
+        result = strategy.force_pull()
+
+        assert result.applied is False
+        assert result.reason == PULL_REASON_CONFLICT_RESOLUTION_FAILED
+        # Defensive abort fired: no in-progress rebase directory left behind.
+        assert not (git_repo_pair.local_path / ".git" / "rebase-merge").exists()
+        assert not (git_repo_pair.local_path / ".git" / "rebase-apply").exists()
+        # HEAD reverted to pre-rebase state.
+        head_after = _run_git(git_repo_pair.local_path, "rev-parse", "HEAD").strip()
+        assert head_after == head_before
+
+    def test_force_pull_checkout_failure_drops_path_from_siblings(
+        self, git_repo_pair: GitRepoPair, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Failed ``git checkout @{upstream} -- <path>`` drops the path from siblings.
+
+        After the rebase-in-progress check trips the defensive abort, the
+        working tree reverts to the pre-rebase MCP content.
+        ``_force_pull_rebase_fallback`` then checks out the upstream
+        version of each conflicting file so the canonical path holds
+        upstream bytes and the saved-MCP version is written as a sibling.
+        If the checkout fails for a given path, we MUST drop it from the
+        saved list — otherwise the sibling would carry the same MCP bytes
+        as the canonical path, defeating the "remote wins, local saved as
+        sibling" invariant.
+
+        Drives a two-clone conflict, then:
+
+        * stubs ``_resolve_rebase_conflicts`` to return saved items WITHOUT
+          calling ``git rebase --continue`` (so the next ``rebase_in_progress``
+          probe returns True and the abort + restored loop both fire);
+        * stubs ``subprocess.run`` to fail specifically on the
+          ``checkout @{upstream}`` invocation that the restored loop runs.
+
+        With every checkout failing, the saved list ends up empty and
+        ``_force_pull_rebase_fallback`` surfaces ``conflict_resolution_failed``
+        (HEAD unchanged).
+
+        Covers the checkout-failure branch (lines 1313-1329 of ``git.py``).
+        """
+        import subprocess as _real_subprocess
+
+        from markdown_vault_mcp.git import (
+            PULL_REASON_CONFLICT_RESOLUTION_FAILED,
+            GitWriteStrategy,
+        )
+        from markdown_vault_mcp.git import subprocess as git_subprocess
+
+        _seed_remote_commit(
+            git_repo_pair,
+            clone_name="clone_checkout_fail",
+            file_name="README.md",
+            body="# remote\n",
+        )
+        (git_repo_pair.local_path / "README.md").write_text("# local\n")
+        _run_git(git_repo_pair.local_path, "add", "README.md")
+        _run_git(git_repo_pair.local_path, "commit", "-m", "local edit")
+
+        strategy = GitWriteStrategy(
+            enable_pull=True,
+            enable_push=False,
+            repo_path=git_repo_pair.local_path,
+        )
+
+        # Stub the conflict-resolution helper: claim the README conflict
+        # was "saved" but DO NOT run the checkout/add/--continue dance, so
+        # the rebase remains in progress when control returns to
+        # ``_force_pull_rebase_fallback``.
+        def _stub_resolve(*_args: object, **_kwargs: object) -> list[tuple[str, str]]:
+            return [("README.md", "# local\n")]
+
+        monkeypatch.setattr(strategy, "_resolve_rebase_conflicts", _stub_resolve)
+
+        # Patch subprocess.run on the git module to fail the checkout
+        # ``@{upstream}`` call.  All other subprocess.run calls (including
+        # the rebase --abort the fallback runs) pass through to the real
+        # implementation.
+        real_run = _real_subprocess.run
+
+        def _patched_run(args: list[str], **kwargs: object) -> object:
+            if isinstance(args, list) and "checkout" in args and "@{upstream}" in args:
+                return _real_subprocess.CompletedProcess(
+                    args=args,
+                    returncode=1,
+                    stdout="",
+                    stderr="error: simulated checkout failure",
+                )
+            return real_run(args, **kwargs)
+
+        monkeypatch.setattr(git_subprocess, "run", _patched_run)
+
+        head_before = _run_git(git_repo_pair.local_path, "rev-parse", "HEAD").strip()
+        result = strategy.force_pull()
+
+        # Every saved path was dropped → empty saved list → reason is
+        # conflict_resolution_failed (HEAD unchanged), not "resolved with
+        # siblings" (which would imply at least one sibling was written).
+        assert result.applied is False
+        assert result.reason == PULL_REASON_CONFLICT_RESOLUTION_FAILED
+        # HEAD did not advance.
+        head_after = _run_git(git_repo_pair.local_path, "rev-parse", "HEAD").strip()
+        assert head_after == head_before
+        assert result.from_sha == result.to_sha
+        # No leftover rebase directory — defensive abort fired and succeeded.
+        assert not (git_repo_pair.local_path / ".git" / "rebase-merge").exists()
+        assert not (git_repo_pair.local_path / ".git" / "rebase-apply").exists()
+
     def test_force_push_to_unreachable_remote_returns_push_failed(
         self, git_repo_pair: GitRepoPair
     ) -> None:

@@ -1157,6 +1157,8 @@ class GitWriteStrategy:
 
         Returns:
             :class:`PullResult` whose ``reason`` is one of
+            ``"rebased"`` (plain rebase succeeded, HEAD advanced,
+            ``applied=True``),
             ``"conflicts_resolved_with_siblings"`` (HEAD advanced,
             siblings written, ``applied=True``),
             ``"conflict_resolution_failed"`` (HEAD unchanged,
