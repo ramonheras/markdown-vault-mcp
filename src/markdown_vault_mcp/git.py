@@ -912,6 +912,87 @@ class GitWriteStrategy:
             git_dir / "rebase-apply"
         ).is_dir()
 
+    def _abort_in_progress_rebase(
+        self,
+        git_root: Path,
+        env: dict[str, str] | None,
+    ) -> bool:
+        """Run ``git rebase --abort`` synchronously.
+
+        Args:
+            git_root: Working-tree root.
+            env: Optional GIT_ASKPASS environment.
+
+        Returns:
+            ``True`` if abort succeeded; ``False`` if abort itself failed
+            (in which case the caller should bail out — the working tree
+            may be inconsistent).  Failure is logged at ERROR with
+            token-redacted stderr.
+        """
+        abort_proc = self._run_git_capturing(git_root, "rebase", "--abort", env=env)
+        if abort_proc.returncode != 0:
+            logger.error(
+                "Git force_pull: failed to abort rebase: %s",
+                self._redact((abort_proc.stderr or "").strip()),
+            )
+            return False
+        return True
+
+    def _restore_upstream_paths(
+        self,
+        git_root: Path,
+        env: dict[str, str] | None,
+        saved: list[tuple[str, str]],
+    ) -> list[tuple[str, str]]:
+        """Restore upstream content for each conflict path after rebase abort.
+
+        After ``git rebase --abort`` the working tree reverts to the
+        pre-rebase MCP state — every file in ``saved`` again contains the
+        MCP version, not the upstream version.  For each path we run
+        ``git checkout @{upstream} -- <path>`` to bring back the upstream
+        bytes so :meth:`_write_conflict_files` reads the right side
+        (canonical = upstream, sibling = MCP).
+
+        On per-path checkout failure (file deleted upstream, permission
+        error, etc.), the path is DROPPED from the returned list — writing
+        a sibling that contains the same MCP bytes as the canonical path
+        would defeat the "remote wins, local preserved" invariant.  Each
+        drop is logged at ERROR with the path name and token-redacted
+        stderr so an operator can investigate.
+
+        Args:
+            git_root: Working-tree root.
+            env: Optional GIT_ASKPASS environment.
+            saved: List of ``(rel_path, mcp_content)`` tuples returned by
+                :meth:`_resolve_conflicts_safely`.
+
+        Returns:
+            Subset of ``saved`` whose upstream restore succeeded.  May be
+            empty if every checkout failed.
+        """
+        restored: list[tuple[str, str]] = []
+        for rel_path, mcp_content in saved:
+            checkout_proc = self._run_git_capturing(
+                git_root,
+                "checkout",
+                "@{upstream}",
+                "--",
+                rel_path,
+                env=env,
+            )
+            if checkout_proc.returncode != 0:
+                logger.error(
+                    "Git force_pull: failed to restore upstream "
+                    "version of %r after rebase abort; dropping it "
+                    "from conflict siblings to avoid duplicate MCP "
+                    "content: %s",
+                    rel_path,
+                    self._redact((checkout_proc.stderr or "").strip()),
+                )
+                continue
+            restored.append((rel_path, mcp_content))
+        return restored
+
     def _write_conflict_files(
         self,
         git_root: Path,
@@ -1342,15 +1423,7 @@ class GitWriteStrategy:
             rebase_in_progress = self._check_rebase_in_progress(git_root, env)
 
             if rebase_in_progress:
-                abort_proc = self._run_git_capturing(
-                    git_root, "rebase", "--abort", env=env
-                )
-                if abort_proc.returncode != 0:
-                    abort_stderr = self._redact((abort_proc.stderr or "").strip())
-                    logger.error(
-                        "Git force_pull: failed to abort rebase: %s",
-                        abort_stderr,
-                    )
+                if not self._abort_in_progress_rebase(git_root, env):
                     return PullResult(
                         applied=False,
                         fast_forward=False,
@@ -1359,41 +1432,7 @@ class GitWriteStrategy:
                         to_sha=from_sha,
                         reason=PULL_REASON_NON_FAST_FORWARD_WITH_CONFLICTS,
                     )
-                # After abort, the working tree reverts to the pre-rebase
-                # state (MCP commits), so the original files contain MCP
-                # content, not upstream content.  Restore the upstream
-                # version for each conflicting file so _write_conflict_files
-                # reads the right side.  If checkout fails for a given
-                # path (deleted upstream, permission error, etc.), DROP it
-                # from `saved` — otherwise _write_conflict_files would
-                # produce a sibling that contains the same MCP bytes as the
-                # canonical path, defeating the "remote wins, local saved
-                # as sibling" invariant.
-                restored: list[tuple[str, str]] = []
-                for rel_path, mcp_content in saved:
-                    checkout_proc = self._run_git_capturing(
-                        git_root,
-                        "checkout",
-                        "@{upstream}",
-                        "--",
-                        rel_path,
-                        env=env,
-                    )
-                    if checkout_proc.returncode != 0:
-                        checkout_stderr = self._redact(
-                            (checkout_proc.stderr or "").strip()
-                        )
-                        logger.error(
-                            "Git force_pull: failed to restore upstream "
-                            "version of %r after rebase abort; dropping it "
-                            "from conflict siblings to avoid duplicate MCP "
-                            "content: %s",
-                            rel_path,
-                            checkout_stderr,
-                        )
-                        continue
-                    restored.append((rel_path, mcp_content))
-                saved = restored
+                saved = self._restore_upstream_paths(git_root, env, saved)
 
             if not saved:
                 logger.warning(
