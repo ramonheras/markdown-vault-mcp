@@ -209,7 +209,7 @@ class CollectionConfig:
     fastembed_cache_dir: str | None = None
 
     # Search ranking and snippet truncation
-    chunks_per_doc: int = 2
+    chunks_per_file: int = 2
     snippet_words: int = 200
     length_downweight_alpha: float = 0.25
     max_chunk_words: int = 400
@@ -255,7 +255,7 @@ class CollectionConfig:
             "max_attachment_size_mb": self.max_attachment_size_mb,
             "max_note_read_bytes": self.max_note_read_bytes,
             "git_pull_interval_s": 0,
-            "chunks_per_doc": self.chunks_per_doc,
+            "chunks_per_file": self.chunks_per_file,
             "snippet_words": self.snippet_words,
             "length_downweight_alpha": self.length_downweight_alpha,
             "max_chunk_words": self.max_chunk_words,
@@ -728,23 +728,23 @@ def load_config() -> CollectionConfig:
     )
 
     # --- Search ranking and snippet truncation ---
-    raw_chunks_per_doc = (_env("CHUNKS_PER_DOC") or "").strip()
-    if raw_chunks_per_doc:
+    raw_chunks_per_file = (_env("CHUNKS_PER_FILE") or "").strip()
+    if raw_chunks_per_file:
         try:
-            chunks_per_doc = int(raw_chunks_per_doc)
+            chunks_per_file = int(raw_chunks_per_file)
         except ValueError as exc:
             raise ValueError(
-                f"MARKDOWN_VAULT_MCP_CHUNKS_PER_DOC must be a positive integer, "
-                f"got {raw_chunks_per_doc!r}"
+                f"MARKDOWN_VAULT_MCP_CHUNKS_PER_FILE must be a positive integer, "
+                f"got {raw_chunks_per_file!r}"
             ) from exc
     else:
-        chunks_per_doc = 2
-    if chunks_per_doc < 1:
+        chunks_per_file = 2
+    if chunks_per_file < 1:
         raise ValueError(
-            f"chunks_per_doc must be >= 1, got {chunks_per_doc}; set "
-            "MARKDOWN_VAULT_MCP_CHUNKS_PER_DOC to a positive integer."
+            f"chunks_per_file must be >= 1, got {chunks_per_file}; set "
+            "MARKDOWN_VAULT_MCP_CHUNKS_PER_FILE to a positive integer."
         )
-    logger.debug("load_config: chunks_per_doc=%s", chunks_per_doc)
+    logger.debug("load_config: chunks_per_file=%s", chunks_per_file)
 
     raw_snippet_words = (_env("SNIPPET_WORDS") or "").strip()
     if raw_snippet_words:
@@ -836,7 +836,7 @@ def load_config() -> CollectionConfig:
         openai_api_key=openai_api_key,
         fastembed_model=fastembed_model,
         fastembed_cache_dir=fastembed_cache_dir,
-        chunks_per_doc=chunks_per_doc,
+        chunks_per_file=chunks_per_file,
         snippet_words=snippet_words,
         length_downweight_alpha=length_downweight_alpha,
         max_chunk_words=max_chunk_words,

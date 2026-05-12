@@ -24,10 +24,12 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeVar
 from markdown_vault_mcp.types import (
     AttachmentInfo,
     BacklinkInfo,
+    GroupedResult,
     NoteContext,
     NoteInfo,
     OutlinkInfo,
     SearchResult,
+    SectionHit,
     SimilarItem,
 )
 from markdown_vault_mcp.utils import (
@@ -276,6 +278,7 @@ class _SemanticRow:
     content: str
     score: float
     chunk_count: int
+    start_line: int = 0
 
 
 @dataclass
@@ -285,6 +288,20 @@ class _CapRow:
     path: str
     heading: str | None
     score: float
+
+
+@dataclass
+class _GroupableFTS:
+    """Adapter row exposing title/folder/content/start_line to _group_by_path
+    for the keyword channel."""
+
+    path: str
+    title: str
+    folder: str
+    heading: str | None
+    content: str
+    score: float
+    start_line: int
 
 
 class SearchManager:
@@ -321,7 +338,7 @@ class SearchManager:
         link_manager: LinkManager | None = None,
         flush_embeddings: Callable[[], None] | None = None,
         rebuild_embeddings: Callable[[], None] | None = None,
-        chunks_per_doc: int = 2,
+        chunks_per_file: int = 2,
         snippet_words: int = 200,
         length_downweight_alpha: float = 0.25,
     ) -> None:
@@ -335,7 +352,7 @@ class SearchManager:
         self._link_manager = link_manager
         self._flush_embeddings = flush_embeddings or (lambda: None)
         self._rebuild_embeddings = rebuild_embeddings or (lambda: None)
-        self._chunks_per_doc = chunks_per_doc
+        self._chunks_per_file = chunks_per_file
         self._snippet_words = snippet_words
         self._length_downweight_alpha = length_downweight_alpha
 
@@ -512,14 +529,14 @@ class SearchManager:
         mode: Literal["keyword", "semantic", "hybrid"] = "keyword",
         filters: dict[str, str] | None = None,
         folder: str | None = None,
-        chunks_per_doc: int | None = None,
+        chunks_per_file: int | None = None,
         snippet_words: int | None = None,
-    ) -> list[SearchResult]:
+    ) -> list[GroupedResult]:
         """Search the collection.
 
         Args:
             query: Search string.
-            limit: Maximum number of results to return.
+            limit: Maximum number of files (not chunks) to return.
             mode: ``"keyword"`` for BM25 FTS5, ``"semantic"`` for cosine
                 similarity, or ``"hybrid"`` for Reciprocal Rank Fusion of
                 both.
@@ -528,21 +545,23 @@ class SearchManager:
                 ``indexed_frontmatter_fields``.
             folder: If provided, restrict results to documents in this
                 folder (and its sub-folders).
-            chunks_per_doc: Maximum number of chunks to return per document.
-                ``None`` uses the instance default (``self._chunks_per_doc``).
+            chunks_per_file: Maximum number of sections returned per file.
+                ``None`` uses the instance default (``self._chunks_per_file``).
             snippet_words: Width of the FTS5 snippet window in words.
                 ``0`` returns full chunk content.  ``None`` uses the instance
                 default (``self._snippet_words``).
 
         Returns:
-            List of :class:`~markdown_vault_mcp.types.SearchResult` ordered
-            by relevance.
+            List of :class:`~markdown_vault_mcp.types.GroupedResult` ordered
+            by descending file score (max of section scores).
 
         Raises:
             ValueError: If *mode* is ``"semantic"`` or ``"hybrid"`` but no
                 embedding provider or embeddings path is configured.
         """
-        eff_cap = chunks_per_doc if chunks_per_doc is not None else self._chunks_per_doc
+        eff_cap = (
+            chunks_per_file if chunks_per_file is not None else self._chunks_per_file
+        )
         eff_snip = snippet_words if snippet_words is not None else self._snippet_words
 
         if mode == "keyword":
@@ -551,7 +570,7 @@ class SearchManager:
                 limit=limit,
                 filters=filters,
                 folder=folder,
-                chunks_per_doc=eff_cap,
+                chunks_per_file=eff_cap,
                 snippet_words=eff_snip,
             )
 
@@ -562,7 +581,7 @@ class SearchManager:
                 limit=limit,
                 filters=filters,
                 folder=folder,
-                chunks_per_doc=eff_cap,
+                chunks_per_file=eff_cap,
                 snippet_words=eff_snip,
             )
 
@@ -573,7 +592,7 @@ class SearchManager:
             limit=limit,
             filters=filters,
             folder=folder,
-            chunks_per_doc=eff_cap,
+            chunks_per_file=eff_cap,
             snippet_words=eff_snip,
         )
 
@@ -584,15 +603,11 @@ class SearchManager:
         limit: int,
         filters: dict[str, str] | None,
         folder: str | None,
-        chunks_per_doc: int,
+        chunks_per_file: int,
         snippet_words: int,
-    ) -> list[SearchResult]:
-        # Widen candidate pool so the cap doesn't starve us of `limit` rows.
-        candidate_limit = max(limit * (chunks_per_doc + 4), 50)
+    ) -> list[GroupedResult]:
+        candidate_limit = max(limit * (chunks_per_file + 4), 50)
 
-        # Fetch raw content first (no snippet projection yet) so the length-
-        # downweight has full chunk_count info. Snippet projection runs only
-        # for survivors, via a second FTS query.
         raw = self._fts.search(
             query,
             limit=candidate_limit,
@@ -603,12 +618,31 @@ class SearchManager:
         downweighted = _apply_length_downweight(
             raw, alpha=self._length_downweight_alpha
         )
-        capped = _apply_chunks_per_doc_cap(downweighted, n=chunks_per_doc, limit=limit)
+        groupable: list[_GroupableFTS] = [
+            _GroupableFTS(
+                path=r.path,
+                title=r.title,
+                folder=r.folder,
+                heading=r.heading,
+                content=r.content,
+                score=r.score,
+                start_line=0,
+            )
+            for r in downweighted
+        ]
+        groups = _group_by_path(
+            groupable, chunks_per_file=chunks_per_file, file_limit=limit
+        )
 
         if snippet_words > 0:
+            survivor_rows = [r for g in groups for r in g]
+            survivor_keys = {(r.path, r.heading) for r in survivor_rows}
+            snippet_rows = [
+                fr for fr in downweighted if (fr.path, fr.heading) in survivor_keys
+            ]
             snippets_by_key = self._fetch_snippet_map(
                 query,
-                capped,
+                snippet_rows,
                 snippet_words=snippet_words,
                 folder=folder,
                 filters=filters,
@@ -617,33 +651,35 @@ class SearchManager:
         else:
             snippets_by_key = {}
 
-        results: list[SearchResult] = []
-        for r in capped:
-            key = (r.path, r.heading)
-            if key in snippets_by_key:
-                content = snippets_by_key[key]
-            elif snippet_words > 0:
-                # Keyword survivor missing from snippet_map (rare FTS rank
-                # inversion) — apply the word-window helper so payload bounds
-                # hold.
-                content = _compute_snippet_for_semantic(
-                    r.content, query, snippet_words=snippet_words
+        out: list[GroupedResult] = []
+        for group in groups:
+            sections: list[SectionHit] = []
+            for r in group:
+                key = (r.path, r.heading)
+                if key in snippets_by_key:
+                    content = snippets_by_key[key]
+                elif snippet_words > 0:
+                    content = _compute_snippet_for_semantic(
+                        r.content, query, snippet_words=snippet_words
+                    )
+                else:
+                    content = r.content
+                sections.append(
+                    SectionHit(heading=r.heading, content=content, score=r.score)
                 )
-            else:
-                content = r.content
-            results.append(
-                SearchResult(
-                    path=r.path,
-                    title=r.title,
-                    folder=r.folder,
-                    heading=r.heading,
-                    content=content,
-                    score=r.score,
+            head = group[0]
+            out.append(
+                GroupedResult(
+                    path=head.path,
+                    title=head.title,
+                    folder=head.folder,
+                    score=max(s.score for s in sections),
                     search_type="keyword",
-                    frontmatter=self._get_frontmatter(r.path),
+                    frontmatter=self._get_frontmatter(head.path),
+                    sections=sections,
                 )
             )
-        return results
+        return out
 
     def _fetch_snippet_map(
         self,
@@ -700,15 +736,14 @@ class SearchManager:
         limit: int,
         filters: dict[str, str] | None = None,
         folder: str | None = None,
-        chunks_per_doc: int,
+        chunks_per_file: int,
         snippet_words: int,
-    ) -> list[SearchResult]:
+    ) -> list[GroupedResult]:
         self._flush_embeddings()
         vectors = self._load_vectors()
-        candidate_limit = max(limit * (chunks_per_doc + 4), 50)
+        candidate_limit = max(limit * (chunks_per_file + 4), 50)
         raw = vectors.search(query, limit=candidate_limit)
 
-        # Filter first, then batch-fetch chunk counts to avoid N+1 queries.
         filtered: list[dict[str, Any]] = []
         for r in raw:
             if folder is not None:
@@ -729,6 +764,7 @@ class SearchManager:
                 content=r["content"],
                 score=r["score"],
                 chunk_count=chunk_counts.get(r["path"], 1),
+                start_line=int(r.get("start_line", 0)),
             )
             for r in filtered
         ]
@@ -736,23 +772,35 @@ class SearchManager:
         downweighted = _apply_length_downweight(
             rows, alpha=self._length_downweight_alpha
         )
-        capped = _apply_chunks_per_doc_cap(downweighted, n=chunks_per_doc, limit=limit)
+        groups = _group_by_path(
+            downweighted, chunks_per_file=chunks_per_file, file_limit=limit
+        )
 
-        return [
-            SearchResult(
-                path=r.path,
-                title=r.title,
-                folder=r.folder,
-                heading=r.heading,
-                content=_compute_snippet_for_semantic(
-                    r.content, query, snippet_words=snippet_words
-                ),
-                score=r.score,
-                search_type="semantic",
-                frontmatter=self._get_frontmatter(r.path),
+        out: list[GroupedResult] = []
+        for group in groups:
+            sections = [
+                SectionHit(
+                    heading=r.heading,
+                    content=_compute_snippet_for_semantic(
+                        r.content, query, snippet_words=snippet_words
+                    ),
+                    score=r.score,
+                )
+                for r in group
+            ]
+            head = group[0]
+            out.append(
+                GroupedResult(
+                    path=head.path,
+                    title=head.title,
+                    folder=head.folder,
+                    score=max(s.score for s in sections),
+                    search_type="semantic",
+                    frontmatter=self._get_frontmatter(head.path),
+                    sections=sections,
+                )
             )
-            for r in capped
-        ]
+        return out
 
     def _hybrid_search(
         self,
@@ -761,35 +809,26 @@ class SearchManager:
         limit: int,
         filters: dict[str, str] | None,
         folder: str | None,
-        chunks_per_doc: int,
+        chunks_per_file: int,
         snippet_words: int,
-    ) -> list[SearchResult]:
-        """RRF merge of keyword and semantic results.
-
-        Each result set is ranked independently.  Merged score:
-        ``1 / (k + rank)`` where k=60.  Results appearing in both sets
-        have their scores summed.  Returns top *limit* by total RRF score,
-        after applying per-channel length downweight and a per-doc cap on the
-        merged sorted list.
-        """
+    ) -> list[GroupedResult]:
+        """RRF merge of keyword and semantic results, then field-collapse."""
         self._flush_embeddings()
-        candidate_limit = max(limit * (chunks_per_doc + 4), 50)
+        candidate_limit = max(limit * (chunks_per_file + 4), 50)
 
         fts_raw: list[FTSResult] = self._fts.search(
             query,
             limit=candidate_limit,
             filters=filters,
             folder=folder,
-            snippet_words=None,  # full content; snippet applied later
+            snippet_words=None,
         )
-        # Apply length downweight inside the keyword channel.
         fts_results: list[FTSResult] = _apply_length_downweight(
             fts_raw, alpha=self._length_downweight_alpha
         )
 
         vectors = self._load_vectors()
         vec_raw = vectors.search(query, limit=candidate_limit)
-        # Filter first, then batch-fetch chunk counts to avoid N+1 queries.
         vec_filtered: list[dict[str, Any]] = []
         for r in vec_raw:
             if folder is not None:
@@ -810,6 +849,7 @@ class SearchManager:
                 content=r["content"],
                 score=r["score"],
                 chunk_count=vec_chunk_counts.get(r["path"], 1),
+                start_line=int(r.get("start_line", 0)),
             )
             for r in vec_filtered
         ]
@@ -817,7 +857,6 @@ class SearchManager:
             vec_rows, alpha=self._length_downweight_alpha
         )
 
-        # RRF fusion on adjusted-rank order.
         rrf_scores: dict[tuple[str, str | None], float] = {}
         chunk_meta: dict[tuple[str, str | None], dict[str, Any]] = {}
         keyword_keys: set[tuple[str, str | None]] = set()
@@ -836,6 +875,7 @@ class SearchManager:
                     "heading": fr.heading,
                     "content": fr.content,
                     "search_type": "keyword",
+                    "start_line": 0,
                 },
             )
 
@@ -852,24 +892,37 @@ class SearchManager:
                     "heading": vr.heading,
                     "content": vr.content,
                     "search_type": "semantic",
+                    "start_line": vr.start_line,
                 },
             )
 
-        # Chunks present in both channels get labelled "hybrid".
         for key in keyword_keys & vec_keys:
             chunk_meta[key]["search_type"] = "hybrid"
 
         sorted_keys = sorted(rrf_scores, key=lambda k: rrf_scores[k], reverse=True)
 
-        cap_input = [
-            _CapRow(path=k[0], heading=k[1], score=rrf_scores[k]) for k in sorted_keys
+        groupable_rows: list[_GroupableFTS] = [
+            _GroupableFTS(
+                path=k[0],
+                title=chunk_meta[k]["title"],
+                folder=chunk_meta[k]["folder"],
+                heading=k[1],
+                content=chunk_meta[k]["content"],
+                score=rrf_scores[k],
+                start_line=int(chunk_meta[k].get("start_line", 0)),
+            )
+            for k in sorted_keys
         ]
-        capped = _apply_chunks_per_doc_cap(cap_input, n=chunks_per_doc, limit=limit)
+        groups = _group_by_path(
+            groupable_rows, chunks_per_file=chunks_per_file, file_limit=limit
+        )
 
-        keyword_capped = [c for c in capped if (c.path, c.heading) in keyword_keys]
+        keyword_survivors = [
+            r for g in groups for r in g if (r.path, r.heading) in keyword_keys
+        ]
         snippet_map: dict[tuple[str, str | None], str] = {}
-        if snippet_words > 0 and keyword_capped:
-            survivor_keys = {(c.path, c.heading) for c in keyword_capped}
+        if snippet_words > 0 and keyword_survivors:
+            survivor_keys = {(r.path, r.heading) for r in keyword_survivors}
             survivor_fts_rows = [
                 fts_r
                 for fts_r in fts_results
@@ -884,32 +937,34 @@ class SearchManager:
                 candidate_limit=candidate_limit,
             )
 
-        out: list[SearchResult] = []
-        for c in capped:
-            key = (c.path, c.heading)
-            meta = chunk_meta[key]
-            if key in snippet_map:
-                content = snippet_map[key]
-            elif snippet_words > 0:
-                # Keyword survivor missing from snippet_map (rare FTS rank
-                # inversion), or semantic-only hit — apply the word-window
-                # helper as a uniform backstop so payload bounds hold.
-                content = _compute_snippet_for_semantic(
-                    meta["content"], query, snippet_words=snippet_words
+        out: list[GroupedResult] = []
+        for group in groups:
+            sections: list[SectionHit] = []
+            for gr in group:
+                key = (gr.path, gr.heading)
+                meta = chunk_meta[key]
+                if key in snippet_map:
+                    content = snippet_map[key]
+                elif snippet_words > 0:
+                    content = _compute_snippet_for_semantic(
+                        meta["content"], query, snippet_words=snippet_words
+                    )
+                else:
+                    content = meta["content"]
+                sections.append(
+                    SectionHit(heading=gr.heading, content=content, score=gr.score)
                 )
-            else:
-                # snippet_words == 0 → caller asked for the full chunk.
-                content = meta["content"]
+            head = group[0]
+            head_meta = chunk_meta[(head.path, head.heading)]
             out.append(
-                SearchResult(
-                    path=meta["path"],
-                    title=meta["title"],
-                    folder=meta["folder"],
-                    heading=meta["heading"],
-                    content=content,
-                    score=rrf_scores[key],
-                    search_type=meta["search_type"],
-                    frontmatter=self._get_frontmatter(meta["path"]),
+                GroupedResult(
+                    path=head.path,
+                    title=head_meta["title"],
+                    folder=head_meta["folder"],
+                    score=max(s.score for s in sections),
+                    search_type=head_meta["search_type"],
+                    frontmatter=self._get_frontmatter(head.path),
+                    sections=sections,
                 )
             )
         return out

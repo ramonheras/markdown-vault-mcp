@@ -15,9 +15,9 @@ from markdown_vault_mcp.managers.search import SearchManager
 from markdown_vault_mcp.scanner import scan_directory
 from markdown_vault_mcp.types import (
     AttachmentInfo,
+    GroupedResult,
     NoteContext,
     NoteInfo,
-    SearchResult,
 )
 from markdown_vault_mcp.utils.fts import fts_row_to_note_info as _fts_row_to_note_info
 
@@ -90,10 +90,10 @@ def search_mgr(search_vault: Path) -> SearchManager:
 
 class TestKeywordSearch:
     def test_search_returns_results(self, search_mgr: SearchManager) -> None:
-        """Keyword search returns SearchResult objects."""
+        """Keyword search returns GroupedResult objects."""
         results = search_mgr.search("world")
         assert len(results) >= 1
-        assert all(isinstance(r, SearchResult) for r in results)
+        assert all(isinstance(r, GroupedResult) for r in results)
         assert all(r.search_type == "keyword" for r in results)
 
     def test_search_respects_limit(self, search_mgr: SearchManager) -> None:
@@ -520,29 +520,38 @@ class TestValidatePath:
 
 
 # ---------------------------------------------------------------------------
-# keyword pipeline — chunks_per_doc cap + snippet projection
+# keyword pipeline — chunks_per_file cap + snippet projection
 # ---------------------------------------------------------------------------
 
 
-def test_keyword_search_applies_chunks_per_doc_cap(search_mgr: SearchManager) -> None:
+def test_keyword_search_applies_chunks_per_file_cap(search_mgr: SearchManager) -> None:
     """Two chunks from the same doc cannot both occupy the top-N."""
     # The search_vault fixture has single-chunk docs, so this test asserts
-    # the manager honours the chunks_per_doc parameter without erroring;
+    # the manager honours the chunks_per_file parameter without erroring;
     # the pathology case is exercised in tests/test_search_pipeline_integration.py.
-    results = search_mgr.search("world", mode="keyword", chunks_per_doc=1, limit=10)
+    results = search_mgr.search("world", mode="keyword", chunks_per_file=1, limit=10)
     paths_in_top = [r.path for r in results]
     assert len(set(paths_in_top)) == len(paths_in_top)
 
 
 def test_keyword_search_returns_snippet(search_mgr: SearchManager) -> None:
-    """When snippet_words is set, content is shorter than (or equal to) the full chunk."""
+    """When snippet_words is set, section content is shorter than (or equal to) the full chunk."""
     long_results = search_mgr.search("world", mode="keyword", snippet_words=0, limit=10)
     short_results = search_mgr.search(
         "world", mode="keyword", snippet_words=3, limit=10
     )
+
+    def _join_sections(groups: list) -> list[str]:
+        # Flatten each GroupedResult's sections to one content string per
+        # surviving file so the per-position comparison still makes sense
+        # when files have multiple sections.
+        return [" ".join(s.content for s in g.sections) for g in groups]
+
+    short_contents = _join_sections(short_results)
+    long_contents = _join_sections(long_results)
     assert all(
-        len(s.content.split()) <= len(lg.content.split())
-        for s, lg in zip(short_results, long_results, strict=False)
+        len(s.split()) <= len(lg.split())
+        for s, lg in zip(short_contents, long_contents, strict=False)
     )
 
 
@@ -591,34 +600,41 @@ def search_mgr_with_embeddings(search_vault: Path) -> SearchManager:
     return mgr
 
 
-def test_semantic_search_applies_chunks_per_doc_cap_and_snippet(
+def test_semantic_search_applies_chunks_per_file_cap_and_snippet(
     search_mgr_with_embeddings: SearchManager,
 ) -> None:
-    """Semantic mode honours chunks_per_doc and snippet_words."""
+    """Semantic mode honours chunks_per_file and snippet_words."""
     results = search_mgr_with_embeddings.search(
         "world",
         mode="semantic",
-        chunks_per_doc=1,
+        chunks_per_file=1,
         snippet_words=5,
         limit=10,
     )
     paths = [r.path for r in results]
+    # File-level uniqueness is intrinsic to the grouped shape.
     assert len(set(paths)) == len(paths)
-    assert all(len(r.content.split()) <= 10 for r in results)
+    # chunks_per_file=1 → at most one section per group → check section length.
+    for r in results:
+        assert len(r.sections) <= 1
+        for s in r.sections:
+            assert len(s.content.split()) <= 10
 
 
-def test_hybrid_search_caps_per_doc_after_rrf(
+def test_hybrid_search_caps_per_file_after_rrf(
     search_mgr_with_embeddings: SearchManager,
 ) -> None:
     results = search_mgr_with_embeddings.search(
         "world",
         mode="hybrid",
-        chunks_per_doc=1,
+        chunks_per_file=1,
         snippet_words=5,
         limit=10,
     )
     paths = [r.path for r in results]
     assert len(set(paths)) == len(paths)
+    for r in results:
+        assert len(r.sections) <= 1
 
 
 def test_hybrid_search_uses_fts_snippet_for_keyword_hits(
@@ -628,25 +644,29 @@ def test_hybrid_search_uses_fts_snippet_for_keyword_hits(
     results = search_mgr_with_embeddings.search(
         "world",
         mode="hybrid",
-        chunks_per_doc=2,
+        chunks_per_file=2,
         snippet_words=3,
         limit=10,
     )
-    assert all(len(r.content.split()) <= 8 for r in results)
+    # Each section's content snippet is at most ~8 words (snippet_words=3 plus
+    # an ellipsis word at each end).
+    for r in results:
+        for s in r.sections:
+            assert len(s.content.split()) <= 8
 
 
 def test_hybrid_search_labels_both_channel_hits_as_hybrid(
     search_mgr_with_embeddings: SearchManager,
 ) -> None:
-    """Chunks present in both channels are labelled 'hybrid'."""
+    """Files containing a chunk present in both channels are labelled 'hybrid'."""
     results = search_mgr_with_embeddings.search(
         "world",
         mode="hybrid",
-        chunks_per_doc=10,
+        chunks_per_file=10,
         snippet_words=0,
         limit=20,
     )
-    # At least one result should be 'hybrid' (chunk hit in both channels).
+    # At least one result should be 'hybrid' (head chunk hit in both channels).
     assert any(r.search_type == "hybrid" for r in results), (
         f"expected at least one 'hybrid' label; got {[r.search_type for r in results]}"
     )
@@ -672,7 +692,7 @@ def test_fetch_snippet_map_widens_pool_to_match_caller(
     monkeypatch.setattr(search_mgr._fts, "search", spy)
 
     # Run a keyword search with a wide candidate_limit (default formula:
-    # max(limit * (chunks_per_doc + 4), 50) → 60 at limit=10, chunks_per_doc=2).
+    # max(limit * (chunks_per_file + 4), 50) → 60 at limit=10, chunks_per_file=2).
     search_mgr.search("world", mode="keyword", limit=10)
 
     assert captured, "snippet re-query did not run"

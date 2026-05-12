@@ -332,7 +332,7 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
             mode=mode,
             folder=folder,
             filters=filters,
-            chunks_per_doc=chunks_per_doc,
+            chunks_per_file=chunks_per_doc,
             snippet_words=snippet_words,
         )
         return [asdict(r) for r in results]

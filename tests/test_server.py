@@ -3303,7 +3303,11 @@ async def test_search_tool_accepts_chunks_per_doc_and_snippet_words(
     results = _parse_tool_data(result)
     paths = [r["path"] for r in results]
     assert len(set(paths)) == len(paths)
-    assert all(len((r["content"] or "").split()) <= 8 for r in results)
+    # GroupedResult shape: each result holds sections[].content; with
+    # chunks_per_doc=1 each result has exactly one section.
+    for r in results:
+        assert len(r["sections"]) == 1
+        assert len((r["sections"][0]["content"] or "").split()) <= 8
 
 
 async def test_read_tool_returns_only_named_section(

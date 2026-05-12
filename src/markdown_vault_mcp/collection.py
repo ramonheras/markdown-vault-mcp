@@ -29,6 +29,7 @@ from markdown_vault_mcp.types import (
     CommitDiff,
     DeleteResult,
     EditResult,
+    GroupedResult,
     HistoryEntry,
     IndexStats,
     MostLinkedNote,
@@ -146,7 +147,7 @@ class Collection:
         attachment_extensions: list[str] | None = None,
         max_attachment_size_mb: float = 1.0,
         max_note_read_bytes: int = 262144,
-        chunks_per_doc: int = 2,
+        chunks_per_file: int = 2,
         snippet_words: int = 200,
         length_downweight_alpha: float = 0.25,
         max_chunk_words: int = 400,
@@ -243,7 +244,7 @@ class Collection:
             link_manager=self._link_mgr,
             flush_embeddings=self._index_mgr.flush_dirty_embeddings,
             rebuild_embeddings=lambda: self._index_mgr.build_embeddings(force=True),
-            chunks_per_doc=chunks_per_doc,
+            chunks_per_file=chunks_per_file,
             snippet_words=snippet_words,
             length_downweight_alpha=length_downweight_alpha,
         )
@@ -378,28 +379,29 @@ class Collection:
         mode: Literal["keyword", "semantic", "hybrid"] = "keyword",
         filters: dict[str, str] | None = None,
         folder: str | None = None,
-        chunks_per_doc: int | None = None,
+        chunks_per_file: int | None = None,
         snippet_words: int | None = None,
-    ) -> list[SearchResult]:
+    ) -> list[GroupedResult]:
         """Search the collection.
 
         Args:
             query: Search string.
-            limit: Maximum number of results to return.
+            limit: Maximum number of files (not chunks) to return.
             mode: ``"keyword"`` for BM25 FTS5, ``"semantic"`` for cosine
                 similarity, or ``"hybrid"`` for Reciprocal Rank Fusion of both.
             filters: Dict of ``{frontmatter_key: value}`` pairs (AND semantics).
                 Only works for fields in ``indexed_frontmatter_fields``.
             folder: If provided, restrict results to documents in this folder
                 (and its sub-folders).
-            chunks_per_doc: Maximum number of chunks to return per document.
+            chunks_per_file: Maximum number of sections returned per file.
                 ``None`` uses the server default configured at startup.
             snippet_words: Width of the snippet window in words.  ``0`` returns
                 the full chunk.  ``None`` uses the server default.
 
         Returns:
-            List of :class:`~markdown_vault_mcp.types.SearchResult` ordered by
-            relevance.
+            List of :class:`~markdown_vault_mcp.types.GroupedResult` ordered
+            by descending file score (max of section scores).  Each result
+            wraps one document with up to ``chunks_per_file`` sections.
 
         Raises:
             ValueError: If *mode* is ``"semantic"`` or ``"hybrid"`` but no
@@ -412,7 +414,7 @@ class Collection:
             mode=mode,
             filters=filters,
             folder=folder,
-            chunks_per_doc=chunks_per_doc,
+            chunks_per_file=chunks_per_file,
             snippet_words=snippet_words,
         )
 

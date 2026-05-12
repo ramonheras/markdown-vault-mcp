@@ -3929,8 +3929,8 @@ def test_collection_constructs_chunker_with_max_chunk_words(tmp_path):
     assert coll._chunk_strategy.max_chunk_words == 250
 
 
-def test_collection_search_honours_default_chunks_per_doc(tmp_path):
-    """A Collection-level search uses chunks_per_doc=2 by default."""
+def test_collection_search_honours_default_chunks_per_file(tmp_path):
+    """A Collection-level search uses chunks_per_file=2 by default."""
     from markdown_vault_mcp.collection import Collection
 
     (tmp_path / "long.md").write_text(
@@ -3941,7 +3941,10 @@ def test_collection_search_honours_default_chunks_per_doc(tmp_path):
     coll = Collection(source_dir=tmp_path)
     coll.build_index()
     results = coll.search("world", mode="keyword", limit=10)
-    counts: dict[str, int] = {}
-    for r in results:
-        counts[r.path] = counts.get(r.path, 0) + 1
-    assert counts.get("long.md", 0) <= 2
+    # Each file appears at most once in the grouped output; the file score's
+    # underlying section count is capped at the default chunks_per_file=2.
+    paths = [r.path for r in results]
+    assert len(set(paths)) == len(paths)
+    long_groups = [r for r in results if r.path == "long.md"]
+    if long_groups:
+        assert len(long_groups[0].sections) <= 2
