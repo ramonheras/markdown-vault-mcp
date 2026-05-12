@@ -29,7 +29,6 @@ from markdown_vault_mcp.types import (
     NoteInfo,
     OutlinkInfo,
     SectionHit,
-    SimilarItem,
 )
 from markdown_vault_mcp.utils import (
     effective_attachment_extensions,
@@ -1281,25 +1280,22 @@ class SearchManager:
                     exc,
                 )
 
-        # Similar notes — empty if embeddings not configured or
-        # similar_limit is 0.
-        similar_dicts: list[SimilarItem] = []
+        # Similar notes — field-collapsed via shared get_similar core so the
+        # dossier never re-applies the cap on top of the cap (#469).  Use
+        # chunks_per_file=1 to keep dossiers compact: one best section per
+        # file gives the LLM enough to decide drill-worthiness.
+        similar_grouped: list[GroupedResult] = []
         if (
             similar_limit > 0
             and self._embedding_provider is not None
             and self._embeddings_path is not None
         ):
-            self._load_vectors()
-            if self._vectors is not None and self._vectors.count > 0:
-                raw = self._vectors.search_by_path(path, limit=similar_limit)
-                similar_dicts = [
-                    SimilarItem(
-                        path=r["path"],
-                        title=r["title"],
-                        score=r["score"],
-                    )
-                    for r in raw
-                ]
+            try:
+                similar_grouped = self.get_similar(
+                    path, limit=similar_limit, chunks_per_file=1
+                )
+            except ValueError:
+                logger.debug("get_context: get_similar raised for %s, similar=[]", path)
 
         # Folder peers — other notes in the same folder, capped.
         folder = row["folder"]
@@ -1327,7 +1323,7 @@ class SearchManager:
             modified_at=row["modified_at"],
             backlinks=backlink_objs,
             outlinks=outlink_objs,
-            similar=similar_dicts,
+            similar=similar_grouped,
             folder_notes=folder_notes,
             tags=tags,
         )

@@ -464,25 +464,6 @@ class MostLinkedNote:
 
 
 @dataclass
-class SimilarItem:
-    """A compact similar-note entry in :attr:`NoteContext.similar`.
-
-    A subset of :class:`SearchResult` — path, title, and score only.
-    Use :meth:`~markdown_vault_mcp.collection.Collection.get_similar` directly
-    when you need the full chunk content.
-
-    Attributes:
-        path: Relative path from the vault root.
-        title: Document title.
-        score: Cosine similarity score (higher is better).
-    """
-
-    path: str
-    title: str
-    score: float
-
-
-@dataclass
 class NoteContext:
     """Consolidated context for a document, returned by :meth:`~markdown_vault_mcp.collection.Collection.get_context`.
 
@@ -494,7 +475,9 @@ class NoteContext:
         modified_at: Last-modified time as a Unix timestamp float.
         backlinks: Documents that link to this document.
         outlinks: Links from this document with existence flags.
-        similar: Up to ``similar_limit`` semantically similar notes (compact form).
+        similar: Up to ``similar_limit`` semantically similar notes,
+            field-collapsed.  Each entry is a :class:`GroupedResult` with
+            exactly one section (chunks_per_file=1 by default).
         folder_notes: Paths of other notes in the same folder (up to 20).
         tags: Tag values for each indexed frontmatter field.
     """
@@ -506,7 +489,7 @@ class NoteContext:
     modified_at: float
     backlinks: list[BacklinkInfo]
     outlinks: list[OutlinkInfo]
-    similar: list[SimilarItem]
+    similar: list[GroupedResult]
     folder_notes: list[str]
     tags: dict[str, list[str]]
 

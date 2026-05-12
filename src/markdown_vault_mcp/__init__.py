@@ -36,7 +36,6 @@ from markdown_vault_mcp.types import (
     ReindexResult,
     RenameResult,
     SearchResult,
-    SimilarItem,
     WriteCallback,
     WriteResult,
 )
@@ -75,7 +74,6 @@ __all__ = [
     "ReindexResult",
     "RenameResult",
     "SearchResult",
-    "SimilarItem",
     "WriteCallback",
     "WriteResult",
     "git_write_strategy",

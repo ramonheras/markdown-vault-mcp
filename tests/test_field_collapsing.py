@@ -115,3 +115,24 @@ def test_get_similar_dedupes_multichunk_target(populated_collection):
         for r in results:
             assert r.sections, f"{r.path} has empty sections"
             assert r.score == max(s.score for s in r.sections)
+
+
+def test_get_context_similar_returns_grouped_results(populated_collection):
+    """get_context.similar is GroupedResult-shaped with one section per file."""
+    from markdown_vault_mcp.types import GroupedResult
+
+    ctx = populated_collection.get_context("multi.md", similar_limit=5)
+    for entry in ctx.similar:
+        assert isinstance(entry, GroupedResult)
+        assert len(entry.sections) == 1, (
+            f"get_context.similar should default to chunks_per_file=1; got "
+            f"{len(entry.sections)} sections for {entry.path}"
+        )
+
+
+def test_simitem_removed():
+    """SimilarItem is no longer exported (#469)."""
+    import pytest
+
+    with pytest.raises(ImportError):
+        from markdown_vault_mcp.types import SimilarItem  # noqa: F401

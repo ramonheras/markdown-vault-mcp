@@ -698,7 +698,11 @@ class Collection:
             link_limit: Maximum number of backlinks and outlinks to include.
 
         Returns:
-            A :class:`~markdown_vault_mcp.types.NoteContext` object.
+            A :class:`~markdown_vault_mcp.types.NoteContext` object.  Its
+            ``similar`` field is a list of
+            :class:`~markdown_vault_mcp.types.GroupedResult` entries, each
+            with exactly one section (chunks_per_file=1) so the dossier
+            stays compact.
 
         Raises:
             ValueError: If no document exists at the given path.
