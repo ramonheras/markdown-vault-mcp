@@ -1648,6 +1648,117 @@ class TestGitSyncOnce:
         conflict_files = list(work.glob("README.conflict-mcp-*.md"))
         assert len(conflict_files) == 1
 
+    def test_sync_once_conflict_commit_failure_returns_false(
+        self,
+        tmp_path: Path,
+        git_repo_with_remote: tuple[Path, Path],
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """sync_once returns False + WARNING when _write_conflict_files commit fails.
+
+        Mirrors test_force_pull_conflict_commit_failure_surfaces_resolution_failed
+        on the force_pull side; covers the sync_once None-return path added in #462.
+        The rebase --continue succeeds (so HEAD moves) before the conflict-commit
+        fails, so we also assert HEAD actually advanced.
+        """
+        import subprocess as _real_subprocess
+
+        from markdown_vault_mcp.git import subprocess as git_subprocess
+
+        work, bare = git_repo_with_remote
+
+        # Local-only divergent commit on README.md.
+        (work / "README.md").write_text("# Local diverge\n")
+        subprocess.run(
+            ["git", "-C", str(work), "add", "."],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(work), "commit", "-m", "local diverge"],
+            check=True,
+            capture_output=True,
+        )
+
+        # Advance remote via sibling clone, conflicting on the same file.
+        other = tmp_path / "other"
+        subprocess.run(
+            ["git", "clone", str(bare), str(other)],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(other), "config", "user.email", "test@test.com"],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(other), "config", "user.name", "Test"],
+            check=True,
+            capture_output=True,
+        )
+        (other / "README.md").write_text("# Remote diverge\n")
+        subprocess.run(
+            ["git", "-C", str(other), "add", "."],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(other), "commit", "-m", "remote diverge"],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(other), "push"],
+            check=True,
+            capture_output=True,
+        )
+
+        real_run = _real_subprocess.run
+
+        def _patched_run(args: list[str], **kwargs: object) -> object:
+            # Fail only the conflict-files commit; let everything else run.
+            if (
+                isinstance(args, list)
+                and "commit" in args
+                and any(isinstance(a, str) and a.startswith("conflict:") for a in args)
+            ):
+                return _real_subprocess.CompletedProcess(
+                    args=args,
+                    returncode=1,
+                    stdout="",
+                    stderr="error: pre-commit hook rejected the commit",
+                )
+            return real_run(args, **kwargs)
+
+        monkeypatch.setattr(git_subprocess, "run", _patched_run)
+
+        strategy = GitWriteStrategy(token=None, push_delay_s=0)
+        head_before = subprocess.run(
+            ["git", "-C", str(work), "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        with caplog.at_level(logging.WARNING, logger="markdown_vault_mcp.git"):
+            did_advance = strategy.sync_once(work)
+        head_after = subprocess.run(
+            ["git", "-C", str(work), "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+
+        # Commit failed → sync_once reports no advance to the caller.
+        assert did_advance is False
+        # WARNING surfaced for operator visibility.
+        assert any(
+            "conflict commit failed, skipping" in r.message for r in caplog.records
+        )
+        # The rebase --continue ran before the failing commit, so HEAD did move.
+        assert head_after != head_before
+
     def test_resolve_rebase_conflicts_max_iterations_returns_saved(
         self,
         tmp_path: Path,
@@ -1691,12 +1802,12 @@ class TestGitSyncOnce:
         assert len(result) == 1
         assert result[0] == ("README.md", "# MCP content\n")
 
-    def test_write_conflict_files_commit_failure_is_logged(
+    def test_write_conflict_files_commit_failure_returns_none(
         self,
         git_repo: Path,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
-        """_write_conflict_files logs ERROR when git commit fails but does not raise."""
+        """_write_conflict_files returns None and logs ERROR when git commit fails."""
         strategy = GitWriteStrategy(token=None, push_delay_s=0)
 
         # Create a real file for the original path.
@@ -1728,10 +1839,50 @@ class TestGitSyncOnce:
         ):
             written = strategy._write_conflict_files(git_repo, saved, env=None)
 
-        # The method still returns the written conflict file paths.
-        assert len(written) == 1
+        # Commit failed: helper signals failure to its caller via None.
+        assert written is None
         # The ERROR was logged.
         assert any("conflict commit failed" in r.message for r in caplog.records)
+
+    def test_write_conflict_files_commit_failure_redacts_token(
+        self,
+        git_repo: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Commit-failure stderr passes through _redact before being logged."""
+        strategy = GitWriteStrategy(token="secret-pat-xyz", push_delay_s=0)
+
+        (git_repo / "note.md").write_text("# Original\n")
+        saved = [("note.md", "# MCP version\n")]
+
+        import subprocess as sp
+
+        real_run = sp.run
+
+        def patched_run(cmd: list[str], **kwargs: object) -> object:
+            if isinstance(cmd, list) and "commit" in cmd:
+                from types import SimpleNamespace
+
+                return SimpleNamespace(
+                    returncode=1,
+                    stdout="",
+                    stderr="fatal: auth failed for secret-pat-xyz@host",
+                )
+            return real_run(cmd, **kwargs)
+
+        import unittest.mock as mock
+
+        with (
+            mock.patch(
+                "markdown_vault_mcp.git.subprocess.run", side_effect=patched_run
+            ),
+            caplog.at_level(logging.ERROR, logger="markdown_vault_mcp.git"),
+        ):
+            strategy._write_conflict_files(git_repo, saved, env=None)
+
+        joined = " ".join(r.getMessage() for r in caplog.records)
+        assert "secret-pat-xyz" not in joined
+        assert "***" in joined
 
     def test_write_conflict_files_invalid_frontmatter_logs_warning(
         self,
@@ -1767,6 +1918,37 @@ class TestGitSyncOnce:
         # Both frontmatter-parse warnings were logged.
         warnings = [r for r in caplog.records if "frontmatter" in r.message]
         assert len(warnings) >= 1
+
+
+class TestRebaseInProgress:
+    """Tests for the _rebase_in_progress helper (refs #466)."""
+
+    def test_returns_false_on_clean_repo(self, git_repo: Path) -> None:
+        strategy = GitWriteStrategy(token=None, push_delay_s=0)
+        assert strategy._rebase_in_progress(git_repo, env=None) is False
+
+    def test_detects_rebase_merge_directory(self, git_repo: Path) -> None:
+        (git_repo / ".git" / "rebase-merge").mkdir()
+        strategy = GitWriteStrategy(token=None, push_delay_s=0)
+        assert strategy._rebase_in_progress(git_repo, env=None) is True
+
+    def test_detects_rebase_apply_directory(self, git_repo: Path) -> None:
+        (git_repo / ".git" / "rebase-apply").mkdir()
+        strategy = GitWriteStrategy(token=None, push_delay_s=0)
+        assert strategy._rebase_in_progress(git_repo, env=None) is True
+
+    def test_ignores_stale_rebase_head_ref(self, git_repo: Path) -> None:
+        """Stale REBASE_HEAD ref must not trip the in-progress check (refs #466)."""
+        head_sha = subprocess.run(
+            ["git", "-C", str(git_repo), "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        (git_repo / ".git" / "REBASE_HEAD").write_text(head_sha + "\n")
+
+        strategy = GitWriteStrategy(token=None, push_delay_s=0)
+        assert strategy._rebase_in_progress(git_repo, env=None) is False
 
 
 class TestGitPullLoop:

@@ -888,7 +888,7 @@ class GitWriteStrategy:
             )
         return saved, None
 
-    def _check_rebase_in_progress(
+    def _rebase_in_progress(
         self,
         git_root: Path,
         env: dict[str, str] | None,
@@ -1068,7 +1068,7 @@ class GitWriteStrategy:
         git_root: Path,
         saved: list[tuple[str, str]],
         env: dict[str, str] | None,
-    ) -> list[str]:
+    ) -> list[str] | None:
         """Write conflict files and add ``conflict_with`` frontmatter to both sides.
 
         For each ``(relative_path, content)`` in *saved*:
@@ -1079,7 +1079,12 @@ class GitWriteStrategy:
            file's existing frontmatter.
 
         Returns:
-            List of conflict file relative paths that were written.
+            List of conflict file relative paths that were written and
+            committed.  Returns ``None`` when the final ``git commit`` step
+            failed (nothing-to-commit, hook failure, signing failure, etc.)
+            so callers can surface ``conflict_resolution_failed`` instead of
+            implying a successful conflict-resolution commit.  Returns an
+            empty list when *saved* is empty (nothing to do).
         """
         root = str(git_root)
         now = datetime.datetime.now(tz=datetime.UTC)
@@ -1170,8 +1175,11 @@ class GitWriteStrategy:
             logger.error(
                 "Git pull: conflict commit failed (rc=%d): %s",
                 commit_result.returncode,
-                (commit_result.stderr or commit_result.stdout or "").strip(),
+                self._redact(
+                    (commit_result.stderr or commit_result.stdout or "").strip()
+                ),
             )
+            return None
 
         return written
 
@@ -1343,7 +1351,7 @@ class GitWriteStrategy:
                         )
 
                 if remote_sha == from_sha:
-                    # Already up to date — successful no-op.
+                    # Already up to date — successful no-op (applied=True even on dry_run).
                     return PullResult(
                         applied=True,
                         fast_forward=True,
@@ -1480,7 +1488,7 @@ class GitWriteStrategy:
             # limit, or exited via ``break`` without completing), abort
             # cleanly so the working tree is consistent before we write
             # conflict files.
-            rebase_in_progress = self._check_rebase_in_progress(git_root, env)
+            rebase_in_progress = self._rebase_in_progress(git_root, env)
 
             if rebase_in_progress:
                 if not self._abort_in_progress_rebase(git_root, env):
@@ -1497,7 +1505,19 @@ class GitWriteStrategy:
                     from_sha, PULL_REASON_CONFLICT_RESOLUTION_FAILED
                 )
 
+            # Rebase has already completed via ``git rebase --continue`` — HEAD
+            # has advanced even if the sibling-files commit below fails.
+            actual_head = self._head_sha(git_root)
             written = self._write_conflict_files(git_root, saved, env)
+            if written is None:
+                return PullResult(
+                    applied=False,
+                    fast_forward=False,
+                    commits_pulled=0,
+                    from_sha=from_sha,
+                    to_sha=actual_head,
+                    reason=PULL_REASON_CONFLICT_RESOLUTION_FAILED,
+                )
             for cf in written:
                 logger.warning(
                     "Git force_pull: conflict resolved, saved MCP version as %s",
@@ -1803,24 +1823,8 @@ class GitWriteStrategy:
                         # saving the MCP version as a conflict file.
                         saved = self._resolve_rebase_conflicts(git_root, env)
 
-                        # Check if a rebase is still in progress (e.g. the
-                        # loop exited via break because no conflicting files
-                        # were found but rebase --continue had returned
-                        # non-zero, or the iteration limit was hit).
-                        rebase_head = subprocess.run(
-                            [
-                                "git",
-                                "-C",
-                                str(git_root),
-                                "rev-parse",
-                                "--verify",
-                                "REBASE_HEAD",
-                            ],
-                            capture_output=True,
-                            text=True,
-                            env=env,
-                        )
-                        rebase_in_progress = rebase_head.returncode == 0
+                        # Directory check (REBASE_HEAD lingers post-continue, #466).
+                        rebase_in_progress = self._rebase_in_progress(git_root, env)
 
                         if rebase_in_progress:
                             # Abort the incomplete rebase before committing
@@ -1834,7 +1838,7 @@ class GitWriteStrategy:
                             if abort_proc.returncode != 0:
                                 logger.error(
                                     "Git pull: failed to abort rebase: %s",
-                                    (abort_proc.stderr or "").strip(),
+                                    self._redact((abort_proc.stderr or "").strip()),
                                 )
                             # After abort, the working tree reverts to the
                             # pre-rebase state (MCP commits), so the original
@@ -1859,6 +1863,11 @@ class GitWriteStrategy:
 
                         if saved:
                             written = self._write_conflict_files(git_root, saved, env)
+                            if written is None:
+                                logger.warning(
+                                    "Git pull: conflict commit failed, skipping"
+                                )
+                                return False
                             for cf in written:
                                 logger.warning(
                                     "Git pull: conflict resolved, saved MCP version as %s",
