@@ -39,7 +39,6 @@ from markdown_vault_mcp.types import (
     OutlinkInfo,
     ReindexResult,
     RenameResult,
-    SearchResult,
     WriteCallback,
     WriteResult,
 )
@@ -636,28 +635,32 @@ class Collection:
         self._ensure_initialized()
         return self._link_mgr.get_broken_links(folder=folder)
 
-    def get_similar(self, path: str, *, limit: int = 10) -> list[SearchResult]:
-        """Return the most semantically similar chunks from other documents.
+    def get_similar(
+        self,
+        path: str,
+        *,
+        limit: int = 10,
+        chunks_per_file: int | None = None,
+    ) -> list[GroupedResult]:
+        """Return semantically similar documents grouped by file.
 
-        Uses the stored embedding vectors for ``path`` (averaged across
-        chunks) to compute cosine similarity against all other documents.
-        No re-embedding is needed.  Results are at chunk granularity —
-        the same document may appear multiple times if it has many chunks.
+        See :meth:`SearchManager.get_similar` for details.  Returns
+        :class:`~markdown_vault_mcp.types.GroupedResult` objects ordered by
+        descending file score; each result wraps one document with up to
+        ``chunks_per_file`` sections.
 
         Args:
             path: Relative path of the reference document.
-            limit: Maximum number of results to return.
+            limit: Maximum number of files to return.
+            chunks_per_file: Maximum sections per result file.
 
         Returns:
-            List of :class:`~markdown_vault_mcp.types.SearchResult` objects
-            ordered by descending similarity.  Returns ``[]`` when embeddings
-            are not configured or the document has no stored vectors.
-
-        Raises:
-            ValueError: If no document exists at the given path.
+            List of grouped results.
         """
         self._ensure_initialized()
-        return self._search_mgr.get_similar(path, limit=limit)
+        return self._search_mgr.get_similar(
+            path, limit=limit, chunks_per_file=chunks_per_file
+        )
 
     def get_recent(
         self, *, limit: int = 20, folder: str | None = None

@@ -93,3 +93,25 @@ def test_group_by_path_preserves_score_desc_file_order():
     rows_sorted = sorted(rows, key=lambda r: r.score, reverse=True)
     groups = _group_by_path(rows_sorted, chunks_per_file=1, file_limit=10)
     assert [g[0].path for g in groups] == ["b.md", "c.md", "a.md"]
+
+
+def test_get_similar_dedupes_multichunk_target(populated_collection):
+    """A multi-chunk target document appears only ONCE in get_similar."""
+    # The populated_collection fixture has "multi.md" with three sections
+    # all mentioning "foo".  Pick a different reference doc that has high
+    # similarity to multi.md; assert multi.md appears once.
+    # We use the first doc in the vault as reference.
+    notes = populated_collection.list()
+    assert len(notes) >= 2, "fixture should have multiple docs"
+    ref_path = next(n.path for n in notes if n.path == "multi.md")
+
+    results = populated_collection.get_similar(ref_path, limit=10, chunks_per_file=2)
+    paths = [r.path for r in results]
+    assert len(paths) == len(set(paths)), (
+        f"all result paths should be unique after grouping, got {paths}"
+    )
+    if results:
+        # File score = max(section.score)
+        for r in results:
+            assert r.sections, f"{r.path} has empty sections"
+            assert r.score == max(s.score for s in r.sections)

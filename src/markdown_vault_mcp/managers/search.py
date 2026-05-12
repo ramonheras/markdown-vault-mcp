@@ -28,7 +28,6 @@ from markdown_vault_mcp.types import (
     NoteContext,
     NoteInfo,
     OutlinkInfo,
-    SearchResult,
     SectionHit,
     SimilarItem,
 )
@@ -1113,26 +1112,34 @@ class SearchManager:
         rows = self._fts.get_recent(limit=limit, folder=folder)
         return [fts_row_to_note_info(row) for row in rows]
 
-    def get_similar(self, path: str, *, limit: int = 10) -> builtins.list[SearchResult]:
-        """Return the most semantically similar chunks from other documents.
+    def get_similar(
+        self,
+        path: str,
+        *,
+        limit: int = 10,
+        chunks_per_file: int | None = None,
+    ) -> builtins.list[GroupedResult]:
+        """Return the most semantically similar documents (field-collapsed).
 
         Uses the stored embedding vectors for ``path`` (averaged across
-        chunks) to compute cosine similarity against all other documents.
-        No re-embedding is needed.  Results are at chunk granularity —
-        the same document may appear multiple times if it has many chunks.
+        chunks) to compute cosine similarity, then collapses chunks of the
+        same target document into a single :class:`GroupedResult`.
 
         Args:
             path: Relative path of the reference document.
-            limit: Maximum number of results to return.
+            limit: Maximum number of *files* to return.
+            chunks_per_file: Maximum sections returned per result file.
+                ``None`` uses the instance default.
 
         Returns:
-            List of :class:`~markdown_vault_mcp.types.SearchResult` objects
-            ordered by descending similarity.  Returns ``[]`` when
-            embeddings are not configured or the document has no stored
-            vectors.
+            List of :class:`~markdown_vault_mcp.types.GroupedResult` ordered
+            by descending file score (max of section scores).  Empty list
+            when embeddings are not configured or the document has no
+            stored vectors.
 
         Raises:
-            ValueError: If no document exists at the given path.
+            ValueError: If no document exists at the given path, or
+                ``chunks_per_file`` < 1.
         """
         self._validate_path(path)
         if self._fts.get_note(path) is None:
@@ -1145,19 +1152,45 @@ class SearchManager:
         if self._vectors is None or self._vectors.count == 0:
             return []
 
-        raw_results = self._vectors.search_by_path(path, limit=limit)
-        return [
-            SearchResult(
+        eff_cpf = (
+            chunks_per_file if chunks_per_file is not None else self._chunks_per_file
+        )
+        candidate_limit = max(limit * (eff_cpf + 4), 50)
+        raw_results = self._vectors.search_by_path(path, limit=candidate_limit)
+
+        chunk_counts = self._fts.get_chunk_counts({r["path"] for r in raw_results})
+        rows: list[_SemanticRow] = [
+            _SemanticRow(
                 path=r["path"],
                 title=r.get("title", ""),
                 folder=r.get("folder", ""),
                 heading=r.get("heading"),
                 content=r.get("content", ""),
                 score=r.get("score", 0.0),
-                search_type="semantic",
-                frontmatter=self._get_frontmatter(r["path"]),
+                chunk_count=chunk_counts.get(r["path"], 1),
+                start_line=int(r.get("start_line", 0)),
             )
             for r in raw_results
+        ]
+        downweighted = _apply_length_downweight(
+            rows, alpha=self._length_downweight_alpha
+        )
+        groups = _group_by_path(downweighted, chunks_per_file=eff_cpf, file_limit=limit)
+
+        return [
+            GroupedResult(
+                path=group[0].path,
+                title=group[0].title,
+                folder=group[0].folder,
+                score=max(r.score for r in group),
+                search_type="semantic",
+                frontmatter=self._get_frontmatter(group[0].path),
+                sections=[
+                    SectionHit(heading=r.heading, content=r.content, score=r.score)
+                    for r in group
+                ],
+            )
+            for group in groups
         ]
 
     def get_context(
