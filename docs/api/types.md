@@ -3,7 +3,7 @@
 All data types returned by the `Collection` API are importable from the top-level `markdown_vault_mcp` package.
 
 ```python
-from markdown_vault_mcp import NoteContent, SearchResult, NoteContext
+from markdown_vault_mcp import NoteContent, GroupedResult, SectionHit, NoteContext
 ```
 
 ## Document Types
@@ -20,6 +20,10 @@ from markdown_vault_mcp import NoteContent, SearchResult, NoteContext
 
 ::: markdown_vault_mcp.types.SearchResult
 
+::: markdown_vault_mcp.types.SectionHit
+
+::: markdown_vault_mcp.types.GroupedResult
+
 ::: markdown_vault_mcp.types.FTSResult
 
 ::: markdown_vault_mcp.types.BacklinkInfo
@@ -29,8 +33,6 @@ from markdown_vault_mcp import NoteContent, SearchResult, NoteContext
 ::: markdown_vault_mcp.types.BrokenLinkInfo
 
 ::: markdown_vault_mcp.types.LinkInfo
-
-::: markdown_vault_mcp.types.SimilarItem
 
 ::: markdown_vault_mcp.types.NoteContext
 

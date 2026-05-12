@@ -99,6 +99,50 @@ class SearchResult:
 
 
 @dataclass
+class SectionHit:
+    """One section's contribution to a :class:`GroupedResult`.
+
+    Attributes:
+        heading: Section heading text, or ``None`` for the document intro.
+        content: Matched snippet — query-relevant window by default, or full
+            chunk if ``snippet_words=0`` was passed.
+        score: Chunk-level relevance score after length-downweight.  Not
+            comparable across search modes.
+    """
+
+    heading: str | None
+    content: str
+    score: float
+
+
+@dataclass
+class GroupedResult:
+    """A file-grouped search result.
+
+    Replaces the flat per-chunk :class:`SearchResult` across ``search``,
+    ``get_similar``, and ``get_context.similar``.  See issue #469.
+
+    Attributes:
+        path: Relative path of the document.
+        title: Document title.
+        folder: Parent folder path.
+        score: File-level score = ``max(section.score for section in sections)``.
+        search_type: ``"keyword"``, ``"semantic"``, or ``"hybrid"``.
+        frontmatter: Parsed YAML frontmatter.
+        sections: Up to the per-file cap best-matching sections, sorted by
+            ``(score DESC, start_line ASC)`` so ties surface in document order.
+    """
+
+    path: str
+    title: str
+    folder: str
+    score: float
+    search_type: Literal["keyword", "semantic", "hybrid"]
+    frontmatter: dict[str, Any]
+    sections: list[SectionHit]
+
+
+@dataclass
 class FTSResult:
     """A raw search result from the FTS5 index layer.
 
@@ -112,6 +156,9 @@ class FTSResult:
             search call.
         score: BM25 relevance score (higher is better).
         chunk_count: Total number of chunks belonging to the parent document.
+        start_line: Line number of the chunk's first line in the source
+            document.  Defaults to ``0`` for the document intro chunk and as
+            a fallback when the underlying section row cannot be resolved.
     """
 
     path: str
@@ -121,6 +168,7 @@ class FTSResult:
     content: str
     score: float
     chunk_count: int = 1
+    start_line: int = 0
 
 
 @dataclass
@@ -420,25 +468,6 @@ class MostLinkedNote:
 
 
 @dataclass
-class SimilarItem:
-    """A compact similar-note entry in :attr:`NoteContext.similar`.
-
-    A subset of :class:`SearchResult` — path, title, and score only.
-    Use :meth:`~markdown_vault_mcp.collection.Collection.get_similar` directly
-    when you need the full chunk content.
-
-    Attributes:
-        path: Relative path from the vault root.
-        title: Document title.
-        score: Cosine similarity score (higher is better).
-    """
-
-    path: str
-    title: str
-    score: float
-
-
-@dataclass
 class NoteContext:
     """Consolidated context for a document, returned by :meth:`~markdown_vault_mcp.collection.Collection.get_context`.
 
@@ -450,7 +479,9 @@ class NoteContext:
         modified_at: Last-modified time as a Unix timestamp float.
         backlinks: Documents that link to this document.
         outlinks: Links from this document with existence flags.
-        similar: Up to ``similar_limit`` semantically similar notes (compact form).
+        similar: Up to ``similar_limit`` semantically similar notes,
+            field-collapsed.  Each entry is a :class:`GroupedResult` with
+            exactly one section (chunks_per_file=1 by default).
         folder_notes: Paths of other notes in the same folder (up to 20).
         tags: Tag values for each indexed frontmatter field.
     """
@@ -462,7 +493,7 @@ class NoteContext:
     modified_at: float
     backlinks: list[BacklinkInfo]
     outlinks: list[OutlinkInfo]
-    similar: list[SimilarItem]
+    similar: list[GroupedResult]
     folder_notes: list[str]
     tags: dict[str, list[str]]
 

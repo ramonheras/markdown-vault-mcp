@@ -398,6 +398,7 @@ class IndexManager:
                             "folder": _derive_folder(note.path),
                             "heading": c.heading,
                             "content": c.content,
+                            "start_line": c.start_line,
                         }
                         for c in note.chunks
                     ]
@@ -499,6 +500,7 @@ class IndexManager:
                         "folder": folder,
                         "heading": chunk.heading,
                         "content": chunk.content,
+                        "start_line": chunk.start_line,
                     }
                 )
             if i % 100 == 0 or i == num_notes:
@@ -678,6 +680,7 @@ class IndexManager:
                             "folder": _derive_folder(note.path),
                             "heading": c.heading,
                             "content": c.content,
+                            "start_line": c.start_line,
                         }
                         for c in note.chunks
                     ]

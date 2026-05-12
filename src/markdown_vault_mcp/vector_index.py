@@ -160,7 +160,9 @@ class VectorIndex:
         Args:
             texts: Texts to embed.  Length must equal ``len(metadata)``.
             metadata: Per-row dicts (keys: ``path``, ``title``, ``folder``,
-                ``heading``, ``content``).  Each dict is stored verbatim.
+                ``heading``, ``content``, ``start_line``).  Each dict is
+                stored verbatim.  ``start_line`` is used by callers to
+                resolve ties when sorting sections of the same document.
 
         Returns:
             Number of rows added.
@@ -199,7 +201,9 @@ class VectorIndex:
             raw_vectors: Pre-computed embeddings as a list of float lists
                 (shape ``[n, dim]``).  Length must equal ``len(metadata)``.
             metadata: Per-row dicts (keys: ``path``, ``title``, ``folder``,
-                ``heading``, ``content``).  Each dict is stored verbatim.
+                ``heading``, ``content``, ``start_line``).  Each dict is
+                stored verbatim.  ``start_line`` is used by callers to
+                resolve ties when sorting sections of the same document.
 
         Returns:
             Number of rows added.

@@ -81,13 +81,18 @@ def _make_collection(vault: Path, *, with_embeddings: bool = False) -> Collectio
 
 
 def test_essay_capped_in_top_ten_keyword(diagnostic_vault: Path) -> None:
-    """The essay must not occupy more than 2 of the top 10 keyword slots."""
+    """The essay must not exceed chunks_per_file=2 sections in keyword mode."""
     coll = _make_collection(diagnostic_vault)
     coll.build_index()
 
     results = coll.search("etymology secura security care", mode="keyword", limit=10)
-    essay_slots = sum(1 for r in results if r.path == "essay.md")
-    assert essay_slots <= 2, f"essay.md occupied {essay_slots} of 10 slots (keyword)"
+    essay_groups = [r for r in results if r.path == "essay.md"]
+    # Grouped shape: essay appears at most once.
+    assert len(essay_groups) <= 1
+    if essay_groups:
+        assert len(essay_groups[0].sections) <= 2, (
+            f"essay.md surfaced {len(essay_groups[0].sections)} sections (keyword)"
+        )
     # Other docs get representation.
     other_paths = {r.path for r in results} - {"essay.md"}
     assert len(other_paths) >= 5, (
@@ -96,14 +101,18 @@ def test_essay_capped_in_top_ten_keyword(diagnostic_vault: Path) -> None:
 
 
 def test_essay_capped_in_top_ten_semantic(diagnostic_vault: Path) -> None:
-    """The essay must not occupy more than 2 of the top 10 semantic slots."""
+    """The essay must not exceed chunks_per_file=2 sections in semantic mode."""
     coll = _make_collection(diagnostic_vault, with_embeddings=True)
     coll.build_index()
     coll.build_embeddings()
 
     results = coll.search("etymology secura security care", mode="semantic", limit=10)
-    essay_slots = sum(1 for r in results if r.path == "essay.md")
-    assert essay_slots <= 2, f"essay.md occupied {essay_slots} of 10 slots (semantic)"
+    essay_groups = [r for r in results if r.path == "essay.md"]
+    assert len(essay_groups) <= 1
+    if essay_groups:
+        assert len(essay_groups[0].sections) <= 2, (
+            f"essay.md surfaced {len(essay_groups[0].sections)} sections (semantic)"
+        )
     other_paths = {r.path for r in results} - {"essay.md"}
     assert len(other_paths) >= 5, (
         f"too few other docs in top 10 (semantic): {other_paths}"
@@ -111,14 +120,18 @@ def test_essay_capped_in_top_ten_semantic(diagnostic_vault: Path) -> None:
 
 
 def test_essay_capped_in_top_ten_hybrid(diagnostic_vault: Path) -> None:
-    """The essay must not occupy more than 2 of the top 10 hybrid slots."""
+    """The essay must not exceed chunks_per_file=2 sections in hybrid mode."""
     coll = _make_collection(diagnostic_vault, with_embeddings=True)
     coll.build_index()
     coll.build_embeddings()
 
     results = coll.search("etymology secura security care", mode="hybrid", limit=10)
-    essay_slots = sum(1 for r in results if r.path == "essay.md")
-    assert essay_slots <= 2, f"essay.md occupied {essay_slots} of 10 slots (hybrid)"
+    essay_groups = [r for r in results if r.path == "essay.md"]
+    assert len(essay_groups) <= 1
+    if essay_groups:
+        assert len(essay_groups[0].sections) <= 2, (
+            f"essay.md surfaced {len(essay_groups[0].sections)} sections (hybrid)"
+        )
     other_paths = {r.path for r in results} - {"essay.md"}
     assert len(other_paths) >= 5, (
         f"too few other docs in top 10 (hybrid): {other_paths}"
@@ -126,11 +139,13 @@ def test_essay_capped_in_top_ten_hybrid(diagnostic_vault: Path) -> None:
 
 
 def test_payloads_bounded_by_default(diagnostic_vault: Path) -> None:
-    """Default snippet_words=200; payloads stay below ~220 words."""
+    """Default snippet_words=200; per-section payloads stay below ~220 words."""
     coll = _make_collection(diagnostic_vault)
     coll.build_index()
     results = coll.search("etymology secura", mode="keyword", limit=10)
     for r in results:
-        assert len(r.content.split()) <= 220, (
-            f"{r.path}: snippet has {len(r.content.split())} words"
-        )
+        for s in r.sections:
+            assert len(s.content.split()) <= 220, (
+                f"{r.path} section {s.heading!r}: "
+                f"snippet has {len(s.content.split())} words"
+            )

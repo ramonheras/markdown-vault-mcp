@@ -29,6 +29,7 @@ from markdown_vault_mcp.types import (
     CommitDiff,
     DeleteResult,
     EditResult,
+    GroupedResult,
     HistoryEntry,
     IndexStats,
     MostLinkedNote,
@@ -38,7 +39,6 @@ from markdown_vault_mcp.types import (
     OutlinkInfo,
     ReindexResult,
     RenameResult,
-    SearchResult,
     WriteCallback,
     WriteResult,
 )
@@ -146,7 +146,7 @@ class Collection:
         attachment_extensions: list[str] | None = None,
         max_attachment_size_mb: float = 1.0,
         max_note_read_bytes: int = 262144,
-        chunks_per_doc: int = 2,
+        chunks_per_file: int = 2,
         snippet_words: int = 200,
         length_downweight_alpha: float = 0.25,
         max_chunk_words: int = 400,
@@ -243,7 +243,7 @@ class Collection:
             link_manager=self._link_mgr,
             flush_embeddings=self._index_mgr.flush_dirty_embeddings,
             rebuild_embeddings=lambda: self._index_mgr.build_embeddings(force=True),
-            chunks_per_doc=chunks_per_doc,
+            chunks_per_file=chunks_per_file,
             snippet_words=snippet_words,
             length_downweight_alpha=length_downweight_alpha,
         )
@@ -378,28 +378,29 @@ class Collection:
         mode: Literal["keyword", "semantic", "hybrid"] = "keyword",
         filters: dict[str, str] | None = None,
         folder: str | None = None,
-        chunks_per_doc: int | None = None,
+        chunks_per_file: int | None = None,
         snippet_words: int | None = None,
-    ) -> list[SearchResult]:
+    ) -> list[GroupedResult]:
         """Search the collection.
 
         Args:
             query: Search string.
-            limit: Maximum number of results to return.
+            limit: Maximum number of files (not chunks) to return.
             mode: ``"keyword"`` for BM25 FTS5, ``"semantic"`` for cosine
                 similarity, or ``"hybrid"`` for Reciprocal Rank Fusion of both.
             filters: Dict of ``{frontmatter_key: value}`` pairs (AND semantics).
                 Only works for fields in ``indexed_frontmatter_fields``.
             folder: If provided, restrict results to documents in this folder
                 (and its sub-folders).
-            chunks_per_doc: Maximum number of chunks to return per document.
+            chunks_per_file: Maximum number of sections returned per file.
                 ``None`` uses the server default configured at startup.
             snippet_words: Width of the snippet window in words.  ``0`` returns
                 the full chunk.  ``None`` uses the server default.
 
         Returns:
-            List of :class:`~markdown_vault_mcp.types.SearchResult` ordered by
-            relevance.
+            List of :class:`~markdown_vault_mcp.types.GroupedResult` ordered
+            by descending file score (max of section scores).  Each result
+            wraps one document with up to ``chunks_per_file`` sections.
 
         Raises:
             ValueError: If *mode* is ``"semantic"`` or ``"hybrid"`` but no
@@ -412,7 +413,7 @@ class Collection:
             mode=mode,
             filters=filters,
             folder=folder,
-            chunks_per_doc=chunks_per_doc,
+            chunks_per_file=chunks_per_file,
             snippet_words=snippet_words,
         )
 
@@ -634,28 +635,32 @@ class Collection:
         self._ensure_initialized()
         return self._link_mgr.get_broken_links(folder=folder)
 
-    def get_similar(self, path: str, *, limit: int = 10) -> list[SearchResult]:
-        """Return the most semantically similar chunks from other documents.
+    def get_similar(
+        self,
+        path: str,
+        *,
+        limit: int = 10,
+        chunks_per_file: int | None = None,
+    ) -> list[GroupedResult]:
+        """Return semantically similar documents grouped by file.
 
-        Uses the stored embedding vectors for ``path`` (averaged across
-        chunks) to compute cosine similarity against all other documents.
-        No re-embedding is needed.  Results are at chunk granularity —
-        the same document may appear multiple times if it has many chunks.
+        See :meth:`SearchManager.get_similar` for details.  Returns
+        :class:`~markdown_vault_mcp.types.GroupedResult` objects ordered by
+        descending file score; each result wraps one document with up to
+        ``chunks_per_file`` sections.
 
         Args:
             path: Relative path of the reference document.
-            limit: Maximum number of results to return.
+            limit: Maximum number of files to return.
+            chunks_per_file: Maximum sections per result file.
 
         Returns:
-            List of :class:`~markdown_vault_mcp.types.SearchResult` objects
-            ordered by descending similarity.  Returns ``[]`` when embeddings
-            are not configured or the document has no stored vectors.
-
-        Raises:
-            ValueError: If no document exists at the given path.
+            List of grouped results.
         """
         self._ensure_initialized()
-        return self._search_mgr.get_similar(path, limit=limit)
+        return self._search_mgr.get_similar(
+            path, limit=limit, chunks_per_file=chunks_per_file
+        )
 
     def get_recent(
         self, *, limit: int = 20, folder: str | None = None
@@ -693,7 +698,11 @@ class Collection:
             link_limit: Maximum number of backlinks and outlinks to include.
 
         Returns:
-            A :class:`~markdown_vault_mcp.types.NoteContext` object.
+            A :class:`~markdown_vault_mcp.types.NoteContext` object.  Its
+            ``similar`` field is a list of
+            :class:`~markdown_vault_mcp.types.GroupedResult` entries, each
+            with exactly one section (chunks_per_file=1) so the dossier
+            stays compact.
 
         Raises:
             ValueError: If no document exists at the given path.

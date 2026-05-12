@@ -56,13 +56,16 @@ Find documents matching a query using full-text or semantic search.
 | `mode` | string | `"keyword"` | `"keyword"` (FTS5/BM25), `"semantic"` (vector similarity), or `"hybrid"` (reciprocal rank fusion) |
 | `folder` | string | `null` | Restrict to documents under this folder path |
 | `filters` | object | `null` | Filter by indexed frontmatter field values (e.g. `{"tags": "pacing"}`) |
-| `chunks_per_doc` | int | server default (`2`) | Per-document cap on the result list. Overrides `MARKDOWN_VAULT_MCP_CHUNKS_PER_DOC` for this call. `0` is rejected. |
-| `snippet_words` | int | server default (`200`) | Approximate word budget for the `content` field. `0` returns the full chunk. Overrides `MARKDOWN_VAULT_MCP_SNIPPET_WORDS` for this call. |
+| `chunks_per_file` | int | server default (`2`) | Maximum number of matching sections returned per file. Overrides `MARKDOWN_VAULT_MCP_CHUNKS_PER_FILE` for this call. `0` is rejected. |
+| `snippet_words` | int | server default (`200`) | Approximate word budget for each section's `content` field. `0` returns the full chunk. Overrides `MARKDOWN_VAULT_MCP_SNIPPET_WORDS` for this call. |
 
-**Returns:** List of result dicts ranked by relevance. Each contains: `path`, `title`, `folder`, `heading`, `content` (snippet by default — see note below), `score`, `frontmatter`, `search_type`.
+**Returns:** List of grouped result dicts ranked by relevance, one entry per file with up to `chunks_per_file` best-matching sections. Each entry contains: `path`, `title`, `folder`, `score` (max section score), `search_type`, `frontmatter`, and `sections` — a list of `{heading, content, score}` dicts sorted by score then document order.
+
+!!! note "Grouped result shape"
+    Each file appears at most once in results, with up to `chunks_per_file` sections nested under `sections`. The top-level `score` is the maximum of the section scores (MaxP aggregation). Iterate `sections` to drill into individual matches.
 
 !!! note "Snippet content and full-chunk recovery"
-    By default, `content` is a snippet of approximately 200 words centered on the query terms — not the full chunk. Pass `snippet_words=0` to receive the complete chunk. To read the full section after receiving a search result, call `read(path=result["path"], section=result["heading"])` — this returns the entire chunk from the index without re-reading the whole document.
+    By default, each section's `content` is a snippet of approximately 200 words centered on the query terms — not the full chunk. Pass `snippet_words=0` to receive the complete chunk. To read the full section after receiving a search result, call `read(path=result["path"], section=result["sections"][0]["heading"])` — this returns the entire chunk from the index without re-reading the whole document.
 
 !!! tip "Choosing a search mode"
     - Use `mode="hybrid"` when semantic search is available — it combines keyword precision with semantic understanding
@@ -630,9 +633,13 @@ Find semantically similar notes by document path. Requires embeddings to be buil
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `path` | string | required | Relative path to the document |
-| `limit` | int | `10` | Maximum results to return |
+| `limit` | int | `10` | Maximum files to return |
+| `chunks_per_file` | int | server default (`2`) | Maximum number of matching sections returned per file. Overrides `MARKDOWN_VAULT_MCP_CHUNKS_PER_FILE` for this call. `0` is rejected. |
 
-**Returns:** List of similar documents ranked by cosine similarity.
+**Returns:** List of grouped similar-document dicts ranked by cosine similarity, one entry per file with up to `chunks_per_file` best-matching sections. Each entry contains: `path`, `title`, `folder`, `score` (max section score), `search_type` (`"semantic"`), `frontmatter`, and `sections` — a list of `{heading, content, score}` dicts sorted by score then document order.
+
+!!! note "Grouped result shape"
+    Returns one entry per file with up to `chunks_per_file` best-matching sections. Default is 2 sections per file; pass `chunks_per_file=1` for compact dossiers.
 
 ### `get_recent`
 
@@ -656,10 +663,13 @@ Get a consolidated context dossier for a note. Combines backlinks, outlinks, sim
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `path` | string | required | Relative path to the document |
-| `similar_limit` | int | `5` | Max similar notes to include. Pass `0` to skip the similarity lookup (e.g. when `stats` shows `semantic_search_available=false`) |
+| `similar_limit` | int | `5` | Max similar files to include. Pass `0` to skip the similarity lookup (e.g. when `stats` shows `semantic_search_available=false`) |
 | `link_limit` | int | `10` | Max backlinks and outlinks to include each |
 
-**Returns:** Object with `path`, `title`, `folder`, `frontmatter`, `modified_at`, `backlinks`, `outlinks`, `similar`, `folder_notes`, and `tags` fields.
+**Returns:** Object with `path`, `title`, `folder`, `frontmatter`, `modified_at`, `backlinks`, `outlinks`, `similar`, `folder_notes`, and `tags` fields. The `similar` list contains grouped result dicts — one entry per file with up to `chunks_per_file` best-matching sections (default 1 for `get_context` to keep dossiers compact).
+
+!!! note "Grouped similar shape"
+    Each `similar` entry contains `path`, `title`, `folder`, `score`, `search_type`, `frontmatter`, and `sections` — a list of `{heading, content, score}` dicts. `get_context` defaults to one section per file for compact dossiers; `search` and `get_similar` default to 2.
 
 ### `get_orphan_notes`
 

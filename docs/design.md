@@ -199,12 +199,12 @@ This produces sensible merged rankings regardless of the raw score scales.
 
 Four complementary mechanisms improve result diversity and bound LLM context cost:
 
-1. **Cap document concentration.** No single document occupies more than `chunks_per_doc`
+1. **Cap document concentration.** No single document occupies more than `chunks_per_file`
    slots in the result list, regardless of search mode. Default cap: 2.
 2. **Length downweight.** Within each search channel (keyword or semantic), each chunk's
    raw score is adjusted by `score / (1 + alpha · log(chunk_count_in_doc))` before ranking
    or fusion. Long documents with many chunks slide down; short focused notes rise.
-3. **Snippet truncation.** `SearchResult.content` is truncated to approximately
+3. **Snippet truncation.** `SectionHit.content` (per section of a `GroupedResult`) is truncated to approximately
    `snippet_words` words (default 200). For keyword and hybrid results, FTS5's built-in
    `snippet()` function selects a tokenizer-aware window centered on query terms. For
    semantic-only results, a Python word-window scan picks the densest-matching window.
@@ -217,12 +217,42 @@ Four complementary mechanisms improve result diversity and bound LLM context cos
 
 | Env var | Default | Description |
 |---|---|---|
-| `MARKDOWN_VAULT_MCP_CHUNKS_PER_DOC` | `2` | Per-document cap on result slots. |
-| `MARKDOWN_VAULT_MCP_SNIPPET_WORDS` | `200` | Approximate word budget for `SearchResult.content`. `0` = no truncation. |
+| `MARKDOWN_VAULT_MCP_CHUNKS_PER_FILE` | `2` | Per-document cap on result slots. |
+| `MARKDOWN_VAULT_MCP_SNIPPET_WORDS` | `200` | Approximate word budget for `SectionHit.content`. `0` = no truncation. |
 | `MARKDOWN_VAULT_MCP_LENGTH_DOWNWEIGHT_ALPHA` | `0.25` | Strength of length downweight. `0` disables. |
 | `MARKDOWN_VAULT_MCP_MAX_CHUNK_WORDS` | `400` | Adaptive chunker threshold. Set very high to disable. |
 
-**Pipeline order:** Per-channel length downweight → fuse (RRF for hybrid) → cap per path → snippet projection → return `limit` results.
+**Pipeline order:** Per-channel length downweight → fuse (RRF for hybrid) → cap per path → snippet projection → return `limit` results. See **Field collapsing** below for the post-433 grouping step.
+
+### Field collapsing
+
+Adaptive chunking can produce multiple high-scoring rows from the same
+document, which would otherwise dominate top-K results.  The final
+shaping stage of every search mode (keyword, semantic, hybrid) collapses
+chunks under their parent document via `_group_by_path`:
+
+1. Rows arrive sorted by descending score (already length-downweighted;
+   for hybrid, RRF-fused).
+2. The helper walks rows, opening a new group per unseen path until
+   `file_limit` groups exist; subsequent rows from a seen path append
+   to the existing group up to `chunks_per_file` rows.
+3. Sections within a group are sorted `(score DESC, start_line ASC)`
+   so ties surface in document order.
+
+The returned shape is `list[GroupedResult]` where each result wraps one
+file with a `sections: list[SectionHit]` sub-list (length 1..N).  File
+score = `max(section.score)` — the MaxP aggregation established by
+[PARADE](https://ar5iv.labs.arxiv.org/html/2008.09093) and used by
+Elasticsearch's `collapse`, Vespa grouping, and Qdrant's
+`query_points_groups` primitive.
+
+`get_similar` and `get_context.similar` share the same collapsing core
+so dossiers never re-apply the cap on top of the cap.  `get_context`
+defaults to `chunks_per_file=1` for compact dossiers; `search` and
+`get_similar` default to `chunks_per_file=2`.
+
+Replaces the per-path cap from PR #433 (`_apply_chunks_per_doc_cap`),
+which thinned duplicates but did not group them.
 
 **Non-goal:** No frontmatter-based ranking. The MCP must not require, recommend, or
 special-case any frontmatter convention on vault content (no `kind`, no `noindex`, no
@@ -513,8 +543,34 @@ class Chunk:
 # --- Search types ---
 
 @dataclass
+class SectionHit:
+    """One section's contribution to a GroupedResult."""
+    heading: str | None               # section heading (None for the intro)
+    content: str                      # matched snippet (query-relevant window
+                                      # by default, full chunk if snippet_words=0)
+    score: float                      # chunk-level score after length-downweight
+
+@dataclass
+class GroupedResult:
+    """A file-grouped search result returned by search(), get_similar(),
+    and get_context.similar (since v2.0.0 / issue #469).
+
+    One entry per file with up to chunks_per_file best-matching sections."""
+    path: str                         # document relative path
+    title: str                        # document title
+    folder: str                       # derived folder
+    score: float                      # file-level score = max(section.score)
+    search_type: Literal["keyword", "semantic", "hybrid"]
+    frontmatter: dict[str, Any]       # document frontmatter
+    sections: list[SectionHit]        # up to chunks_per_file sections,
+                                      # sorted by (score DESC, start_line ASC)
+
+@dataclass
 class SearchResult:
-    """A search result from the Collection API."""
+    """Legacy single-chunk shape.  Retained for backward API compatibility
+    (exported via ``__all__``); new code returns GroupedResult.  Not
+    directly returned by search()/get_similar()/get_context after v2.0.0
+    — see GroupedResult."""
     path: str                         # document relative path
     title: str                        # document title
     folder: str                       # derived folder
@@ -862,7 +918,9 @@ class Collection:
         mode: Literal["keyword", "semantic", "hybrid"] = "keyword",
         filters: dict[str, str] | None = None,
         folder: str | None = None,
-    ) -> list[SearchResult]: ...
+        chunks_per_file: int | None = None,
+        snippet_words: int | None = None,
+    ) -> list[GroupedResult]: ...
 
     # --- Read/Write (mirrors LLM file tool semantics) ---
     def read(self, path: str) -> NoteContent | None: ...
@@ -893,7 +951,8 @@ class Collection:
     def get_backlinks(self, path: str) -> list[BacklinkInfo]: ...
     def get_outlinks(self, path: str) -> list[OutlinkInfo]: ...
     def get_broken_links(self, *, folder: str | None = None) -> list[BrokenLinkInfo]: ...
-    def get_similar(self, path: str, *, limit: int = 10) -> list[SearchResult]: ...
+    def get_similar(self, path: str, *, limit: int = 10,
+                    chunks_per_file: int | None = None) -> list[GroupedResult]: ...
     def get_recent(self, *, limit: int = 20, folder: str | None = None) -> list[NoteInfo]: ...
     def get_context(self, path: str, *, similar_limit: int = 5, link_limit: int = 10) -> NoteContext: ...
     def get_orphan_notes(self) -> list[NoteInfo]: ...
@@ -1033,8 +1092,9 @@ class FTSIndex:
 
 Uses the schema defined in [Database Schema](#database-schema). Note that
 `FTSIndex.search()` returns `list[FTSResult]` (raw BM25 results), while
-`Collection.search()` returns `list[SearchResult]` (unified results with RRF
-scoring in hybrid mode).
+`Collection.search()` returns `list[GroupedResult]` (file-grouped results
+with RRF scoring in hybrid mode; each file appears once with up to
+`chunks_per_file` matching sections).
 
 ### `vector_index.py` -- Numpy Embeddings
 

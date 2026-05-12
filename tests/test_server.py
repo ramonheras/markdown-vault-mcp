@@ -1620,6 +1620,20 @@ class TestSimilarTool:
             with pytest.raises((ToolError, McpError)):
                 await client.call_tool("get_similar", {"path": "nonexistent.md"})
 
+    @pytest.mark.usefixtures("_mcp_env")
+    async def test_get_similar_tool_accepts_chunks_per_file(self) -> None:
+        """The `get_similar` MCP tool surfaces the chunks_per_file kwarg."""
+        server = make_server()
+        async with Client(server) as client:
+            # Without embeddings this returns []; the assertion is that the
+            # call_tool schema accepts the chunks_per_file kwarg without raising.
+            result = await client.call_tool(
+                "get_similar",
+                {"path": "simple.md", "limit": 5, "chunks_per_file": 1},
+            )
+        data = _parse_tool_data(result)
+        assert isinstance(data, list)
+
 
 class TestRecentTool:
     """Integration tests for get_recent tool and recent://vault resource."""
@@ -3263,11 +3277,11 @@ class TestGetDiffTool:
         assert [c["message"] for c in data] == ["edit v4", "edit v3"]
 
 
-async def test_search_tool_accepts_chunks_per_doc_and_snippet_words(
+async def test_search_tool_accepts_chunks_per_file_and_snippet_words(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The `search` MCP tool surfaces chunks_per_doc and snippet_words."""
+    """The `search` MCP tool surfaces chunks_per_file and snippet_words."""
     # Multi-line bodies so the docs split (clears the 30-line short-doc bypass).
     long_body = (
         "# Top\n"
@@ -3295,7 +3309,7 @@ async def test_search_tool_accepts_chunks_per_doc_and_snippet_words(
             {
                 "query": "world",
                 "mode": "keyword",
-                "chunks_per_doc": 1,
+                "chunks_per_file": 1,
                 "snippet_words": 5,
                 "limit": 10,
             },
@@ -3303,7 +3317,11 @@ async def test_search_tool_accepts_chunks_per_doc_and_snippet_words(
     results = _parse_tool_data(result)
     paths = [r["path"] for r in results]
     assert len(set(paths)) == len(paths)
-    assert all(len((r["content"] or "").split()) <= 8 for r in results)
+    # GroupedResult shape: each result holds sections[].content; with
+    # chunks_per_file=1 each result has exactly one section.
+    for r in results:
+        assert len(r["sections"]) == 1
+        assert len((r["sections"][0]["content"] or "").split()) <= 8
 
 
 async def test_read_tool_returns_only_named_section(

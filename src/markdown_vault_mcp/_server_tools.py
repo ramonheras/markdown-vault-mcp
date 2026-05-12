@@ -265,7 +265,7 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
         mode: Literal["keyword", "semantic", "hybrid"] = "keyword",
         folder: str | None = None,
         filters: dict[str, str] | None = None,
-        chunks_per_doc: int | None = None,
+        chunks_per_file: int | None = None,
         snippet_words: int | None = None,
         collection: Collection = Depends(get_collection),
     ) -> list[dict[str, Any]]:
@@ -295,27 +295,32 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
                 Multiple filters are ANDed. For list fields (e.g. tags),
                 this checks membership — {"tags": "pacing"} matches any
                 document where "pacing" appears in the tags list.
-            chunks_per_doc: Maximum number of chunks to return per document.
-                Omit to use the server default. Set to 1 to get only the
-                top-ranked chunk per document (deduplicates results by path).
+            chunks_per_file: Maximum number of sections to return per file
+                (default 2).  Set to 1 to get only the top-ranked section
+                per file.  Must be >= 1.
             snippet_words: Width of the snippet window in words. Omit to use
                 the server default. Set to 0 to return full chunk content.
                 Use read(path, section=heading) for full section recovery.
 
         Returns:
-            List of result dicts ranked by relevance. Each contains:
+            List of result dicts ranked by file relevance. Each contains:
 
             - path (str): Relative path of the document.
             - title (str): Document title.
             - folder (str): Parent folder path.
-            - heading (str | None): Section heading of the matched chunk,
-              or null for the document intro.
-            - content (str): Snippet of the matched chunk (truncated by
-              snippet_words). Call read(path, section=heading) for full text.
-            - score (float): BM25 relevance score (keyword mode) or cosine
-              similarity 0.0-1.0 (semantic/hybrid); higher = better match.
-            - search_type (str): "keyword" or "semantic".
+            - score (float): File-level score = max(section.score).
+              Higher = better match.  BM25 (keyword) or cosine (semantic/
+              hybrid); not comparable across modes.
+            - search_type (str): "keyword", "semantic", or "hybrid".
             - frontmatter (dict): Parsed YAML frontmatter of the document.
+            - sections (list[dict]): Up to ``chunks_per_file`` best-matching
+              sections, each with:
+
+              - heading (str | None): Section heading or null for intro.
+              - content (str): Matched snippet (or full chunk if
+                snippet_words=0).  Call read(path, section=heading) for
+                the full section text.
+              - score (float): Chunk-level score for this section.
 
         Also useful for finding merge candidates during triage — if a
         close match exists for a new capture, prefer merging over
@@ -332,7 +337,7 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
             mode=mode,
             folder=folder,
             filters=filters,
-            chunks_per_doc=chunks_per_doc,
+            chunks_per_file=chunks_per_file,
             snippet_words=snippet_words,
         )
         return [asdict(r) for r in results]
@@ -722,6 +727,7 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
     async def get_similar(
         path: str,
         limit: int = 10,
+        chunks_per_file: int | None = None,
         collection: Collection = Depends(get_collection),
     ) -> list[dict[str, Any]]:
         """Find notes most semantically similar to the given document.
@@ -737,18 +743,25 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
             path: Relative path of the reference document (e.g.
                 "notes/topic.md"). Case-sensitive.
             limit: Maximum number of similar notes to return (default 10).
+            chunks_per_file: Maximum sections returned per file (default 2).
+                Set to 1 for one best section per file.  Must be >= 1.
 
         Returns:
-            List of result dicts ranked by similarity. Each contains:
+            List of result dicts ranked by file similarity. Each contains:
 
             - path (str): Relative path of the similar document.
             - title (str): Document title.
             - folder (str): Parent folder path.
-            - heading (str | None): Section heading of the most similar chunk.
-            - content (str): Most similar chunk text.
-            - score (float): Cosine similarity, 0.0-1.0; higher = more similar.
+            - score (float): File-level cosine similarity (max of section
+              scores), 0.0-1.0; higher = more similar.
             - search_type (str): Always "semantic".
             - frontmatter (dict): Parsed YAML frontmatter.
+            - sections (list[dict]): Up to chunks_per_file best-matching
+              sections, each with:
+
+              - heading (str | None): Section heading or null for intro.
+              - content (str): Matched chunk text.
+              - score (float): Chunk-level score for this section.
 
         Useful for finding link candidates that aren't yet wikilinked — the
         vault's organic graph is almost always denser than its explicit one.
@@ -757,7 +770,12 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
         Raises:
             ValueError: If no document exists at the given path.
         """
-        results = await asyncio.to_thread(collection.get_similar, path, limit=limit)
+        results = await asyncio.to_thread(
+            collection.get_similar,
+            path,
+            limit=limit,
+            chunks_per_file=chunks_per_file,
+        )
         return [asdict(r) for r in results]
 
     # --- Recently modified ---
@@ -861,12 +879,20 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
               - raw_target (str): Literal link target as written in the source.
               - exists (bool): True if the target document is indexed.
 
-            - similar (list): Semantically similar notes. List of dicts, each
-              with:
+            - similar (list): Semantically similar notes, field-collapsed by
+              file (chunks_per_file=1 for compact dossiers).  List of dicts,
+              each with:
 
               - path (str): Relative path of the similar document.
               - title (str): Document title.
-              - score (float): Cosine similarity, 0.0-1.0; higher = more similar.
+              - folder (str): Parent folder path.
+              - score (float): File-level cosine similarity 0.0-1.0 = score
+                of the best matching section.
+              - search_type (str): Always "semantic".
+              - frontmatter (dict): Parsed YAML frontmatter.
+              - sections (list): Single best-matching section, each with
+                heading (str|null), content (str), score (float).
+                Call get_similar(path, chunks_per_file=N) for more sections.
 
             - folder_notes (list[str]): Paths of other notes in the same
               folder (up to 20). Plain strings, not dicts.

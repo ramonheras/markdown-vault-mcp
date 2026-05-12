@@ -800,11 +800,20 @@ def register_apps(mcp: FastMCP) -> None:
             )
         except ValueError as exc:
             return [{"error": str(exc)}]
+        # GroupedResult.sections is non-empty for any hit returned by
+        # SearchManager.search; pull the snippet from the top section.
+        # The SPA browser view consumes a flat {path, title, snippet,
+        # score} shape — surfacing only the best section keeps the
+        # payload small and matches the pre-collapse rendering.
         return [
             {
                 "path": r.path,
                 "title": r.title,
-                "snippet": r.content[:200] if r.content else "",
+                "snippet": (
+                    r.sections[0].content[:200]
+                    if r.sections and r.sections[0].content
+                    else ""
+                ),
                 "score": r.score,
             }
             for r in results

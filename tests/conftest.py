@@ -75,6 +75,35 @@ def mock_provider() -> MockEmbeddingProvider:
 
 
 @pytest.fixture
+def populated_collection(tmp_path: Path):
+    """A small Collection with one doc that has 'foo' in multiple sections.
+
+    Used by test_search_grouping and other tests that exercise the
+    field-collapsed shape with multi-chunk documents.
+    """
+    from markdown_vault_mcp.collection import Collection
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    (vault / "multi.md").write_text(
+        "# A\n\n"
+        + ("foo something foo\n" * 12)
+        + "\n## B\n\n"
+        + ("foo elsewhere foo\n" * 12)
+        + "\n## C\n\nfoo third section foo\n"
+    )
+    (vault / "other.md").write_text("# Other\n\n" + ("baz baz baz\n" * 12))
+    col = Collection(
+        source_dir=vault,
+        embedding_provider=MockEmbeddingProvider(),
+        embeddings_path=tmp_path / "vectors",
+    )
+    col.build_index()
+    col.build_embeddings()
+    return col
+
+
+@pytest.fixture
 def vault_path(tmp_path: Path, fixtures_path: Path) -> Path:
     """Copy fixtures into a temp directory.
 
