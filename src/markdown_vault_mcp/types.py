@@ -156,6 +156,9 @@ class FTSResult:
             search call.
         score: BM25 relevance score (higher is better).
         chunk_count: Total number of chunks belonging to the parent document.
+        start_line: Line number of the chunk's first line in the source
+            document.  Defaults to ``0`` for the document intro chunk and as
+            a fallback when the underlying section row cannot be resolved.
     """
 
     path: str
@@ -165,6 +168,7 @@ class FTSResult:
     content: str
     score: float
     chunk_count: int = 1
+    start_line: int = 0
 
 
 @dataclass

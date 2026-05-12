@@ -637,6 +637,17 @@ class FTSIndex:
             content_expr = "f.content AS content"
             snippet_params = []
 
+        # Correlated subquery picks the matching sections row to source
+        # start_line for each FTS hit, so the keyword/hybrid channels can
+        # honour the documented (score DESC, start_line ASC) within-group
+        # tie-break.  Matching is on (document_id, content, heading) —
+        # sections.content stores the chunk text unmodified, the same value
+        # that notes_fts.content stores; the snippet() projection only
+        # rewrites the SELECT list, not the underlying f.content column
+        # referenced here.  COALESCE on heading treats NULL/empty as
+        # equivalent so identical-content chunks under different headings
+        # don't cross-match.  MIN()+fallback 0 handles legacy on-disk
+        # indices that pre-date this query (preserves prior behaviour).
         sql = f"""
             SELECT
                 f.path,
@@ -645,7 +656,14 @@ class FTSIndex:
                 f.heading,
                 {content_expr},
                 ABS(f.rank) AS score,
-                d.chunk_count AS chunk_count
+                d.chunk_count AS chunk_count,
+                COALESCE((
+                    SELECT MIN(s.start_line)
+                    FROM sections s
+                    WHERE s.document_id = d.id
+                      AND s.content = f.content
+                      AND COALESCE(s.heading, '') = COALESCE(f.heading, '')
+                ), 0) AS start_line
             FROM notes_fts f
             JOIN documents d ON d.path = f.path
             WHERE notes_fts MATCH ?
@@ -700,6 +718,7 @@ class FTSIndex:
                     content=row["content"],
                     score=row["score"],
                     chunk_count=row["chunk_count"],
+                    start_line=row["start_line"],
                 )
             )
         return results

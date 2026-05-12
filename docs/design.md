@@ -567,9 +567,10 @@ class GroupedResult:
 
 @dataclass
 class SearchResult:
-    """Legacy single-chunk shape.  Retained because FTSResult adapters and
-    a handful of internal helpers still consume it, but NOT directly returned
-    by search()/get_similar()/get_context after v2.0.0 — see GroupedResult."""
+    """Legacy single-chunk shape.  Retained for backward API compatibility
+    (exported via ``__all__``); new code returns GroupedResult.  Not
+    directly returned by search()/get_similar()/get_context after v2.0.0
+    — see GroupedResult."""
     path: str                         # document relative path
     title: str                        # document title
     folder: str                       # derived folder

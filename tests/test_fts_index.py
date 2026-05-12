@@ -365,6 +365,51 @@ class TestSearch:
         with pytest.raises(sqlite3.OperationalError, match="database is locked"):
             idx.search("hello")
 
+    def test_search_returns_start_line(self) -> None:
+        """search() propagates start_line from the sections row.
+
+        Regression for the keyword/hybrid (score DESC, start_line ASC)
+        within-group tie-break (PR #471 review): FTSResult must carry the
+        chunk's start_line so :func:`_group_by_path` can break ties in
+        document order instead of relying on a hardcoded 0.
+        """
+        idx = FTSIndex(":memory:")
+        idx.upsert_note(
+            make_note(
+                "multi.md",
+                title="Multi-section",
+                chunks=[
+                    Chunk(
+                        heading=None,
+                        heading_level=0,
+                        content="alpha keyword intro",
+                        start_line=0,
+                    ),
+                    Chunk(
+                        heading="Section A",
+                        heading_level=1,
+                        content="alpha keyword middle",
+                        start_line=10,
+                    ),
+                    Chunk(
+                        heading="Section B",
+                        heading_level=1,
+                        content="alpha keyword tail",
+                        start_line=42,
+                    ),
+                ],
+            )
+        )
+        results = idx.search("keyword", limit=10)
+        # All three chunks should match.
+        assert len(results) == 3
+        # Every result must expose start_line as an int.
+        for r in results:
+            assert isinstance(r.start_line, int)
+        # And the set must match the source chunks' start_lines — proving the
+        # column was actually plumbed through (vs. the prior hardcoded 0).
+        assert {r.start_line for r in results} == {0, 10, 42}
+
 
 class TestUpsert:
     def test_upsert_note_replaces_existing(self) -> None:

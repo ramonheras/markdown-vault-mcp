@@ -582,7 +582,7 @@ class SearchManager:
                 heading=r.heading,
                 content=r.content,
                 score=r.score,
-                start_line=0,
+                start_line=r.start_line,
             )
             for r in downweighted
         ]
@@ -831,7 +831,7 @@ class SearchManager:
                     "heading": fr.heading,
                     "content": fr.content,
                     "search_type": "keyword",
-                    "start_line": 0,
+                    "start_line": fr.start_line,
                 },
             )
 
@@ -913,15 +913,16 @@ class SearchManager:
             head = group[0]
             head_meta = chunk_meta[(head.path, head.heading)]
             # File-level search_type: union over the group's sections.
-            # "hybrid" if any section appeared in both channels, OR if some
-            # sections are keyword-only and others are semantic-only (the
-            # file as a whole spans both channels); else "keyword" if all
-            # sections are keyword-only; else "semantic".
+            # "hybrid" if the group spans both channels — covers both
+            # (a) any single section appeared in both channels and
+            # (b) some sections keyword-only, others semantic-only.  Set
+            # theory makes (a) a subset of (in_keyword AND in_vec), so the
+            # single conjunction below catches both cases.  Otherwise the
+            # group is single-channel.
             group_keys = {(r.path, r.heading) for r in group}
-            in_both = bool(group_keys & keyword_keys & vec_keys)
             in_keyword = bool(group_keys & keyword_keys)
             in_vec = bool(group_keys & vec_keys)
-            if in_both or (in_keyword and in_vec):
+            if in_keyword and in_vec:
                 file_search_type: Literal["keyword", "semantic", "hybrid"] = "hybrid"
             elif in_keyword:
                 file_search_type = "keyword"
