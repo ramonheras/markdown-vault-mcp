@@ -578,6 +578,17 @@ When `copier update` introduces new dependencies, CI runs `uv sync --frozen` whi
 
 ## Upgrading from earlier versions
 
+- **v2.0.0 (issue #469): `search`, `get_similar`, and `get_context.similar` now return grouped results.**
+  Each file appears once with a `sections` list; the flat `content`, `heading`, and `score`
+  fields have moved inside each `SectionHit`. Library consumers must update iteration:
+
+  ```python
+  # Before: result.content, result.heading
+  # After:  result.sections[0].content, result.sections[0].heading
+  ```
+
+  `MARKDOWN_VAULT_MCP_CHUNKS_PER_FILE` replaces `MARKDOWN_VAULT_MCP_CHUNKS_PER_DOC`.
+  `SimilarItem` is removed; use `GroupedResult` (also re-exported at the package level).
 - `MARKDOWN_VAULT_MCP_MAX_ATTACHMENT_SIZE_MB` default lowered from **10 MB**
   to **1 MB**.  Most LLM contexts can't survive a 10 MB base64-encoded
   attachment; the old default was a silent context-blow-up.  If you have

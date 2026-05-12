@@ -912,13 +912,28 @@ class SearchManager:
                 )
             head = group[0]
             head_meta = chunk_meta[(head.path, head.heading)]
+            # File-level search_type: union over the group's sections.
+            # "hybrid" if any section appeared in both channels, OR if some
+            # sections are keyword-only and others are semantic-only (the
+            # file as a whole spans both channels); else "keyword" if all
+            # sections are keyword-only; else "semantic".
+            group_keys = {(r.path, r.heading) for r in group}
+            in_both = bool(group_keys & keyword_keys & vec_keys)
+            in_keyword = bool(group_keys & keyword_keys)
+            in_vec = bool(group_keys & vec_keys)
+            if in_both or (in_keyword and in_vec):
+                file_search_type: Literal["keyword", "semantic", "hybrid"] = "hybrid"
+            elif in_keyword:
+                file_search_type = "keyword"
+            else:
+                file_search_type = "semantic"
             out.append(
                 GroupedResult(
                     path=head.path,
                     title=head_meta["title"],
                     folder=head_meta["folder"],
                     score=max(s.score for s in sections),
-                    search_type=head_meta["search_type"],
+                    search_type=file_search_type,
                     frontmatter=self._get_frontmatter(head.path),
                     sections=sections,
                 )

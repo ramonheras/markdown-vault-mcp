@@ -672,6 +672,97 @@ def test_hybrid_search_labels_both_channel_hits_as_hybrid(
     )
 
 
+def test_hybrid_search_search_type_is_group_union_not_head(
+    monkeypatch: pytest.MonkeyPatch,
+    search_mgr_with_embeddings: SearchManager,
+) -> None:
+    """File-level search_type is the union over the group's sections.
+
+    Regression for the case where the head section is single-channel but a
+    lower section in the same file is in both channels.  The file as a whole
+    spans both channels, so it must be labelled "hybrid" — not "keyword".
+    """
+    from markdown_vault_mcp.types import FTSResult
+
+    # Stub FTS: alpha.md returns ONE keyword-only chunk at heading "Top".
+    fake_fts = [
+        FTSResult(
+            path="alpha.md",
+            title="Alpha",
+            folder="",
+            heading="Top",
+            content="hello world",
+            score=1.0,
+        ),
+        FTSResult(
+            path="alpha.md",
+            title="Alpha",
+            folder="",
+            heading="Shared",
+            content="shared text",
+            score=0.9,
+        ),
+    ]
+
+    def fake_search(_query, *, limit, filters=None, folder=None, snippet_words=None):  # noqa: ARG001
+        return list(fake_fts)
+
+    monkeypatch.setattr(search_mgr_with_embeddings._fts, "search", fake_search)
+
+    # Stub vectors: alpha.md/"Shared" appears in both channels; alpha.md/"VecOnly"
+    # appears in semantic only.  The head section of the group (highest RRF score)
+    # will be alpha.md/"Top" — keyword-only — yet the file must still be "hybrid".
+    vectors = search_mgr_with_embeddings._load_vectors()
+    fake_vec_rows = [
+        {
+            "path": "alpha.md",
+            "title": "Alpha",
+            "folder": "",
+            "heading": "Shared",
+            "content": "shared text",
+            "score": 0.8,
+            "start_line": 10,
+        },
+        {
+            "path": "alpha.md",
+            "title": "Alpha",
+            "folder": "",
+            "heading": "VecOnly",
+            "content": "semantic-only chunk",
+            "score": 0.7,
+            "start_line": 20,
+        },
+    ]
+
+    def fake_vec_search(_query, *, limit):  # noqa: ARG001
+        return list(fake_vec_rows)
+
+    monkeypatch.setattr(vectors, "search", fake_vec_search)
+
+    results = search_mgr_with_embeddings.search(
+        "world",
+        mode="hybrid",
+        chunks_per_file=10,
+        snippet_words=0,
+        limit=5,
+    )
+    alpha = next(r for r in results if r.path == "alpha.md")
+    section_headings = [s.heading for s in alpha.sections]
+    assert "Top" in section_headings, (
+        f"expected 'Top' section to survive grouping; got {section_headings}"
+    )
+    assert "Shared" in section_headings or "VecOnly" in section_headings, (
+        f"expected at least one cross-channel section to survive grouping; "
+        f"got {section_headings}"
+    )
+    # The file as a whole spans both channels → must be "hybrid", not "keyword".
+    assert alpha.search_type == "hybrid", (
+        f"file-level search_type should be union over sections; got "
+        f"{alpha.search_type!r} when sections include both keyword-only and "
+        f"semantic-only chunks"
+    )
+
+
 def test_fetch_snippet_map_widens_pool_to_match_caller(
     monkeypatch: pytest.MonkeyPatch,
     search_mgr: SearchManager,

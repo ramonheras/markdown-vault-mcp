@@ -114,7 +114,7 @@ The TOC prepends a synthetic H1 from the document title and deduplicates if the 
 
 Top 10 semantically similar notes for a document. Requires embeddings to be built. This is a URI template — replace `{path}` with the document's relative path.
 
-Results are at **chunk granularity** — the same document may appear multiple times if it has many chunks. Each entry is a full `SearchResult` object.
+Results are **grouped per file** — each file appears at most once, with up to `chunks_per_file` (server default `2`) best-matching sections in a `sections` array. Each entry is a `GroupedResult` dict with `path`, `title`, `folder`, `score` (max section score), `search_type` (`"semantic"`), `frontmatter`, and `sections` — a list of `{heading, content, score}` dicts sorted by score then document order.
 
 **Example:** `similar://vault/Journal/note.md`
 
@@ -122,8 +122,29 @@ Results are at **chunk granularity** — the same document may appear multiple t
 
 ```json
 [
-  {"path": "Journal/related-note.md", "title": "Related Note", "folder": "Journal", "heading": null, "content": "...", "score": 0.87, "search_type": "semantic", "frontmatter": {}},
-  {"path": "Research/topic.md", "title": "Topic Overview", "folder": "Research", "heading": null, "content": "...", "score": 0.82, "search_type": "semantic", "frontmatter": {}}
+  {
+    "path": "Journal/related-note.md",
+    "title": "Related Note",
+    "folder": "Journal",
+    "score": 0.87,
+    "search_type": "semantic",
+    "frontmatter": {},
+    "sections": [
+      {"heading": "Overview", "content": "...", "score": 0.87},
+      {"heading": "Details", "content": "...", "score": 0.81}
+    ]
+  },
+  {
+    "path": "Research/topic.md",
+    "title": "Topic Overview",
+    "folder": "Research",
+    "score": 0.82,
+    "search_type": "semantic",
+    "frontmatter": {},
+    "sections": [
+      {"heading": null, "content": "...", "score": 0.82}
+    ]
+  }
 ]
 ```
 
