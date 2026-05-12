@@ -73,14 +73,7 @@ class _ScorableRow(Protocol):
     chunk_count: int
 
 
-class _CappableRow(Protocol):
-    """Row contract consumed by the per-document cap helper."""
-
-    path: str
-
-
 _ScorableT = TypeVar("_ScorableT", bound=_ScorableRow)
-_CappableT = TypeVar("_CappableT", bound=_CappableRow)
 
 
 def _apply_length_downweight(
@@ -104,38 +97,12 @@ def _apply_length_downweight(
         new_score = row.score / factor
         # Protocols can't promise __dataclass_fields__; the helper's
         # contract is "callers pass dataclasses" (FTSResult / _SemanticRow
-        # / _CapRow all are), enforced at runtime by replace() itself.
+        # both are), enforced at runtime by replace() itself.
         new_row = _dc_replace(row, score=new_score)  # type: ignore[type-var]
         adjusted.append((new_row, new_score))
 
     adjusted.sort(key=lambda t: t[1], reverse=True)
     return [r for r, _ in adjusted]
-
-
-def _apply_chunks_per_doc_cap(
-    rows: list[_CappableT], *, n: int, limit: int
-) -> list[_CappableT]:
-    """Walk ``rows`` in order; keep at most ``n`` rows per ``path``; stop at ``limit``.
-
-    Order is preserved.
-
-    Raises:
-        ValueError: If ``n`` is less than 1.
-    """
-    if n < 1:
-        raise ValueError(f"chunks_per_doc cap must be >= 1, got {n}")
-    out: list[_CappableT] = []
-    counts: dict[str, int] = {}
-    for row in rows:
-        path = row.path
-        c = counts.get(path, 0)
-        if c >= n:
-            continue
-        counts[path] = c + 1
-        out.append(row)
-        if len(out) >= limit:
-            break
-    return out
 
 
 class _GroupableRow(Protocol):
@@ -277,15 +244,6 @@ class _SemanticRow:
     score: float
     chunk_count: int
     start_line: int = 0
-
-
-@dataclass
-class _CapRow:
-    """Adapter row for the post-RRF cap step (only needs .path / .score)."""
-
-    path: str
-    heading: str | None
-    score: float
 
 
 @dataclass
