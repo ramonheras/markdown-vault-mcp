@@ -136,3 +136,68 @@ def test_simitem_removed():
 
     with pytest.raises(ImportError):
         from markdown_vault_mcp.types import SimilarItem  # noqa: F401
+
+
+def test_sabsa_repro_one_reference_doc_dedups_target_chunks(tmp_path):
+    """Regression for issue #469 user report.
+
+    A short reference doc has its best similar match in a long doc with
+    multiple H2 sections covering the same topic.  Before #469, the long
+    doc occupied 4 of 5 returned slots; after, it appears once.
+
+    Note: ``MockEmbeddingProvider`` returns hash-seeded random vectors, so the
+    *exact* similarity ordering between ``ref.md`` and ``long.md``'s chunks
+    isn't guaranteed by the chunk content.  What is guaranteed is the file-
+    collapsing invariant: regardless of how chunks rank, ``long.md`` must
+    appear at most once in the result list when its multiple chunks would
+    otherwise occupy several slots.
+    """
+    from markdown_vault_mcp.collection import Collection
+    from tests.conftest import MockEmbeddingProvider
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    (vault / "ref.md").write_text(
+        "# Reference\n\n" + ("SABSA enterprise security architecture.\n" * 12)
+    )
+    (vault / "long.md").write_text(
+        "# Long\n\n## Section A\n\n"
+        + ("SABSA security architecture details.\n" * 12)
+        + "\n## Section B\n\n"
+        + ("More SABSA enterprise material.\n" * 12)
+        + "\n## Section C\n\n"
+        + ("SABSA framework discussion.\n" * 12)
+        + "\n## Section D\n\n"
+        + ("Security architecture deep dive.\n" * 12)
+    )
+    (vault / "other.md").write_text(
+        "# Other\n\n" + ("Something different about reading lists.\n" * 12)
+    )
+
+    col = Collection(
+        source_dir=vault,
+        embedding_provider=MockEmbeddingProvider(),
+        embeddings_path=tmp_path / "vectors",
+        max_chunk_words=20,  # force adaptive chunking to split long.md
+    )
+    col.build_index()
+    col.build_embeddings()
+
+    # Sanity check: long.md must actually produce multiple chunks for the
+    # regression test to be meaningful.  If it doesn't, fixture sizing or
+    # the adaptive chunker has drifted and the test should be updated.
+    long_chunks = [m for m in col._vectors._metadata if m["path"] == "long.md"]
+    assert len(long_chunks) >= 2, (
+        f"long.md must produce >= 2 chunks for this regression to be "
+        f"meaningful; got {len(long_chunks)} chunks "
+        f"(headings={[m['heading'] for m in long_chunks]})"
+    )
+
+    results = col.get_similar("ref.md", limit=5)
+    paths = [r.path for r in results]
+    # long.md appears at most once even though it generated multiple chunks
+    assert paths.count("long.md") <= 1, (
+        f"long.md should be deduplicated by file collapsing; got {paths}"
+    )
+    # Result paths are unique (file collapsing invariant)
+    assert len(set(paths)) == len(paths), f"paths should be unique: {paths}"
