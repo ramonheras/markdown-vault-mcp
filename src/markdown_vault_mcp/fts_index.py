@@ -57,6 +57,8 @@ CREATE TABLE IF NOT EXISTS sections (
     FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE
 );
 
+CREATE INDEX IF NOT EXISTS idx_sections_docid ON sections(document_id);
+
 CREATE TABLE IF NOT EXISTS document_tags (
     id INTEGER PRIMARY KEY,
     document_id INTEGER NOT NULL,
@@ -199,6 +201,13 @@ def _open_connection(db_path: Path | str) -> sqlite3.Connection:
             logger.debug(
                 "fts_index: chunk_count column already added by concurrent process"
             )
+    # Migration: idx_sections_docid was added 2026-05-12 to back the
+    # correlated subquery on sections(document_id) used in keyword search
+    # for start_line propagation. CREATE INDEX IF NOT EXISTS is idempotent.
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_sections_docid ON sections(document_id)"
+    )
+    conn.commit()
     # Ensure foreign_keys stays ON for subsequent statements (executescript
     # does not guarantee this survives across statement boundaries in all
     # SQLite versions).

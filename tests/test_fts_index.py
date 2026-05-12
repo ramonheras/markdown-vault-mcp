@@ -410,6 +410,25 @@ class TestSearch:
         # column was actually plumbed through (vs. the prior hardcoded 0).
         assert {r.start_line for r in results} == {0, 10, 42}
 
+    def test_sections_has_document_id_index(self) -> None:
+        """sections.document_id is indexed for the correlated subquery in search().
+
+        The keyword channel issues a correlated subquery over ``sections`` to
+        propagate ``start_line`` to each FTS row. Without an index on
+        ``sections.document_id`` that subquery degrades to a full-table scan per
+        result row — sibling tables (``links``, ``document_tags``,
+        ``document_aliases``) all have explicit ``document_id`` indexes, so the
+        gap on ``sections`` was a perf regression flagged by local review.
+        """
+        idx = FTSIndex(":memory:")
+        cur = idx._conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='sections'"
+        )
+        index_names = {row[0] for row in cur.fetchall()}
+        assert any(
+            "docid" in n.lower() or "document_id" in n.lower() for n in index_names
+        ), f"expected an index on sections(document_id); got {index_names}"
+
 
 class TestUpsert:
     def test_upsert_note_replaces_existing(self) -> None:
