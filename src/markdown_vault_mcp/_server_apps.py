@@ -802,9 +802,9 @@ def register_apps(mcp: FastMCP) -> None:
             return [{"error": str(exc)}]
         # GroupedResult.sections is non-empty for any hit returned by
         # SearchManager.search; pull the snippet from the top section.
-        # Task 8 will reshape the app-facing payload to surface every
-        # section; for now we preserve the single-snippet shape the SPA
-        # already consumes.
+        # The SPA browser view consumes a flat {path, title, snippet,
+        # score} shape — surfacing only the best section keeps the
+        # payload small and matches the pre-collapse rendering.
         return [
             {
                 "path": r.path,
