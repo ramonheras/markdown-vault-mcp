@@ -2150,6 +2150,57 @@ class GitWriteStrategy:
             )
         return entries
 
+    @staticmethod
+    def _resolve_path_at_ref(
+        git_root: Path,
+        ref: str,
+        cur_rel: str,
+        env: dict[str, str] | None,
+    ) -> str | None:
+        """Return the path *cur_rel* had at *ref* via rename detection, else None."""
+        try:
+            result = subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(git_root),
+                    "diff",
+                    "--name-status",
+                    # 30% threshold: catch rename-with-edits per #338, avoid template false-positives.
+                    "--find-renames=30",
+                    # -z: NUL-terminated fields, tolerates tabs/newlines in paths.
+                    "-z",
+                    ref,
+                    "HEAD",
+                ],
+                capture_output=True,
+                text=True,
+                check=True,
+                env=env,
+            )
+        except subprocess.CalledProcessError:
+            return None
+        # Stream: <status>\0<path>\0  (R*/C* add a second path before the closing NUL).
+        items = result.stdout.split("\0")[:-1]
+        i = 0
+        while i < len(items):
+            status = items[i]
+            if status.startswith("R"):
+                if i + 2 >= len(items):
+                    break
+                if items[i + 2] == cur_rel:
+                    return items[i + 1]
+                i += 3
+            elif status.startswith("C"):
+                if i + 2 >= len(items):
+                    break
+                i += 3
+            else:
+                if i + 1 >= len(items):
+                    break
+                i += 2
+        return None
+
     def get_file_diff(
         self,
         repo_path: Path,
@@ -2162,9 +2213,10 @@ class GitWriteStrategy:
         """Return a unified diff of *path* from *ref* to HEAD.
 
         Exactly one of *ref* or *since_timestamp* must be supplied.  When
-        *since_timestamp* is given, it is resolved to the most recent commit
-        at or before that instant via ``git rev-list`` (boundary inclusive:
-        a commit whose author date equals *since_timestamp* is selected).
+        *since_timestamp* is given, it is resolved via
+        ``git rev-list --before=<ts> -1 HEAD`` to the most recent commit at
+        or before that instant.  Boundary is **inclusive**: a commit whose
+        committer date equals *since_timestamp* IS the resolved ref.
 
         Args:
             repo_path: Path inside the git repository.
@@ -2236,24 +2288,48 @@ class GitWriteStrategy:
                 raise ValueError("Either 'ref' or 'since_timestamp' must be provided")
 
             if not per_commit:
+                # Recover path-at-ref so diffs across renames show real deltas.
+                try:
+                    cur_rel = path.resolve().relative_to(git_root).as_posix()
+                except ValueError:
+                    cur_rel = None
+                old_path = (
+                    self._resolve_path_at_ref(git_root, ref, cur_rel, env)
+                    if cur_rel is not None
+                    else None
+                )
+                if old_path is None or cur_rel is None or old_path == cur_rel:
+                    diff_cmd = [
+                        "git",
+                        "-C",
+                        str(git_root),
+                        "diff",
+                        f"{ref}..HEAD",
+                        "--",
+                        path_str,
+                    ]
+                else:
+                    diff_cmd = [
+                        "git",
+                        "-C",
+                        str(git_root),
+                        "diff",
+                        f"{ref}:{old_path}",
+                        f"HEAD:{cur_rel}",
+                    ]
                 try:
                     result = subprocess.run(
-                        [
-                            "git",
-                            "-C",
-                            str(git_root),
-                            "diff",
-                            f"{ref}..HEAD",
-                            "--",
-                            path_str,
-                        ],
+                        diff_cmd,
                         capture_output=True,
                         text=True,
                         check=True,
                         env=env,
                     )
                 except subprocess.CalledProcessError as exc:
-                    raise ValueError(f"Commit {ref!r} not found in history") from exc
+                    raise ValueError(
+                        f"Could not compute diff against {ref!r}: invalid ref or "
+                        f"path not present at that revision"
+                    ) from exc
                 diff = result.stdout
                 if len(diff.encode()) > _DIFF_MAX_BYTES:
                     omitted = len(diff.encode()) - _DIFF_MAX_BYTES

@@ -2537,7 +2537,7 @@ class TestGetFileDiff:
         """get_file_diff raises ValueError for an unknown ref."""
         repo, _ = self._make_repo_with_commits(tmp_path)
         strategy = GitWriteStrategy()
-        with pytest.raises(ValueError, match="not found in history"):
+        with pytest.raises(ValueError, match="Could not compute diff against"):
             strategy.get_file_diff(repo, repo / "note.md", "deadbeef", per_commit=False)
 
     def test_since_timestamp_single_diff(self, tmp_path: Path) -> None:
@@ -2658,6 +2658,185 @@ class TestGetFileDiff:
         assert isinstance(diffs[0], CommitDiff)
         # The rename commit should produce a non-empty diff
         assert diffs[0].diff
+
+    def test_single_diff_across_rename(self, tmp_path: Path) -> None:
+        """Single diff shows content delta across renames, not a full-file add."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        subprocess.run(
+            ["git", "-C", str(repo), "init"], capture_output=True, check=True
+        )
+        subprocess.run(
+            ["git", "-C", str(repo), "config", "user.email", "t@t.com"],
+            capture_output=True,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(repo), "config", "user.name", "T"],
+            capture_output=True,
+            check=True,
+        )
+        # Commit 1: add note.md with baseline content
+        (repo / "note.md").write_text("# Title\nOriginal line\n")
+        subprocess.run(
+            ["git", "-C", str(repo), "add", "."], capture_output=True, check=True
+        )
+        subprocess.run(
+            ["git", "-C", str(repo), "commit", "-m", "add note"],
+            capture_output=True,
+            check=True,
+        )
+        first_sha = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        # Commit 2: rename + modify content
+        subprocess.run(
+            ["git", "-C", str(repo), "mv", "note.md", "renamed.md"],
+            capture_output=True,
+            check=True,
+        )
+        (repo / "renamed.md").write_text("# Title\nModified line\n")
+        subprocess.run(
+            ["git", "-C", str(repo), "add", "."], capture_output=True, check=True
+        )
+        subprocess.run(
+            ["git", "-C", str(repo), "commit", "-m", "rename+edit"],
+            capture_output=True,
+            check=True,
+        )
+
+        strategy = GitWriteStrategy()
+        diff = strategy.get_file_diff(
+            repo, repo / "renamed.md", first_sha, per_commit=False
+        )
+        assert isinstance(diff, str)
+        # True content delta: the "Original line" must appear as a removal,
+        # and "Modified line" as an addition.  A naive `git diff <ref>..HEAD
+        # -- renamed.md` would show a full-file addition (no `-Original line`).
+        assert "-Original line" in diff
+        assert "+Modified line" in diff
+
+    def test_resolve_path_at_ref_handles_tab_in_filename(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """_resolve_path_at_ref parses -z NUL output and tolerates tab in path."""
+        old_path = "dir/old\tname.md"
+        new_path = "dir/new\tname.md"
+        # Synthetic `git diff --name-status -z`: status\0path\0 (R adds 2nd path).
+        fake_stdout = f"M\0other.md\0R092\0{old_path}\0{new_path}\0"
+
+        def fake_run(*_args: object, **_kw: object) -> subprocess.CompletedProcess[str]:
+            return subprocess.CompletedProcess(
+                args=[], returncode=0, stdout=fake_stdout, stderr=""
+            )
+
+        monkeypatch.setattr("markdown_vault_mcp.git.subprocess.run", fake_run)
+        result = GitWriteStrategy._resolve_path_at_ref(
+            tmp_path, "deadbeef", new_path, env=None
+        )
+        assert result == old_path
+
+    def test_resolve_path_at_ref_returns_none_when_no_match(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """No rename row matching cur_rel -> None, not a crash."""
+        fake_stdout = "M\0other.md\0A\0added.md\0"
+
+        def fake_run(*_args: object, **_kw: object) -> subprocess.CompletedProcess[str]:
+            return subprocess.CompletedProcess(
+                args=[], returncode=0, stdout=fake_stdout, stderr=""
+            )
+
+        monkeypatch.setattr("markdown_vault_mcp.git.subprocess.run", fake_run)
+        assert (
+            GitWriteStrategy._resolve_path_at_ref(
+                tmp_path, "deadbeef", "missing.md", env=None
+            )
+            is None
+        )
+
+    def test_resolve_path_at_ref_skips_non_matching_rename(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Non-matching R entry advances i += 3 (does not re-read new-path as status)."""
+        # R row whose new-path is not cur_rel, followed by an M row.  If the
+        # parser advanced by 2 instead of 3 it would treat 'other_new.md' as the
+        # next status token and misread the stream; advancing by 3 lands on 'M'
+        # which doesn't match cur_rel either, so the final answer is None.
+        fake_stdout = "R092\0other_old.md\0other_new.md\0M\0target.md\0"
+
+        def fake_run(*_args: object, **_kw: object) -> subprocess.CompletedProcess[str]:
+            return subprocess.CompletedProcess(
+                args=[], returncode=0, stdout=fake_stdout, stderr=""
+            )
+
+        monkeypatch.setattr("markdown_vault_mcp.git.subprocess.run", fake_run)
+        assert (
+            GitWriteStrategy._resolve_path_at_ref(
+                tmp_path, "deadbeef", "target.md", env=None
+            )
+            is None
+        )
+
+    def test_resolve_path_at_ref_skips_copy_entries(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """C<score> entries (copies) are skipped, never returned as a rename match."""
+        fake_stdout = "C092\0source.md\0target.md\0"
+
+        def fake_run(*_args: object, **_kw: object) -> subprocess.CompletedProcess[str]:
+            return subprocess.CompletedProcess(
+                args=[], returncode=0, stdout=fake_stdout, stderr=""
+            )
+
+        monkeypatch.setattr("markdown_vault_mcp.git.subprocess.run", fake_run)
+        assert (
+            GitWriteStrategy._resolve_path_at_ref(
+                tmp_path, "deadbeef", "target.md", env=None
+            )
+            is None
+        )
+
+    def test_resolve_path_at_ref_handles_truncated_rename_output(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Truncated R<score>\\0old\\0 (missing new-path) returns None without raising."""
+        fake_stdout = "R092\0old.md\0"
+
+        def fake_run(*_args: object, **_kw: object) -> subprocess.CompletedProcess[str]:
+            return subprocess.CompletedProcess(
+                args=[], returncode=0, stdout=fake_stdout, stderr=""
+            )
+
+        monkeypatch.setattr("markdown_vault_mcp.git.subprocess.run", fake_run)
+        assert (
+            GitWriteStrategy._resolve_path_at_ref(
+                tmp_path, "deadbeef", "target.md", env=None
+            )
+            is None
+        )
+
+    def test_resolve_path_at_ref_handles_truncated_else_output(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Truncated M\\0 (missing path) returns None without raising."""
+        fake_stdout = "M\0"
+
+        def fake_run(*_args: object, **_kw: object) -> subprocess.CompletedProcess[str]:
+            return subprocess.CompletedProcess(
+                args=[], returncode=0, stdout=fake_stdout, stderr=""
+            )
+
+        monkeypatch.setattr("markdown_vault_mcp.git.subprocess.run", fake_run)
+        assert (
+            GitWriteStrategy._resolve_path_at_ref(
+                tmp_path, "deadbeef", "target.md", env=None
+            )
+            is None
+        )
 
     def test_git_log_failure_raises_value_error(self, tmp_path: Path) -> None:
         """get_file_history converts CalledProcessError to ValueError."""
