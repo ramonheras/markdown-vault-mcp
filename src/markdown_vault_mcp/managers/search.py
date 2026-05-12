@@ -1145,9 +1145,8 @@ class SearchManager:
             )
             for r in raw_results
         ]
-        downweighted = _apply_length_downweight(
-            rows, alpha=self._length_downweight_alpha
-        )
+        # Skip downweight: grouping already dedupes multi-chunk docs; see #472.
+        downweighted = _apply_length_downweight(rows, alpha=0.0)
         groups = _group_by_path(downweighted, chunks_per_file=eff_cpf, file_limit=limit)
 
         return [
