@@ -106,6 +106,34 @@ class TestVaultUploadReceiver:
             col.close()
             _server_deps._collection_singleton = saved
 
+    def test_attachment_upload_bypasses_max_attachment_size_mb(
+        self, tmp_path: Path
+    ) -> None:
+        """Receiver path commits attachments over MAX_ATTACHMENT_SIZE_MB.
+
+        The cap protects LLM context for base64 callers of the MCP write
+        tool.  Upload-link uploads flow over HTTP and are gated by
+        UPLOAD_MAX_BYTES, so the inner cap must NOT apply here.
+        """
+        col = Collection(
+            source_dir=tmp_path,
+            read_only=False,
+            attachment_extensions=["pdf"],
+            max_attachment_size_mb=0.000001,
+        )
+        col.build_index()
+        saved = _server_deps._collection_singleton
+        _server_deps.set_collection_singleton(col)
+        try:
+            payload = b"%PDF-1.4 " + b"\x00" * 1024
+            record = _make_record("big.pdf")
+            result = uploads._vault_upload_receiver(record, payload)
+            assert result == {"path": "big.pdf", "size_bytes": len(payload)}
+            assert (tmp_path / "big.pdf").read_bytes() == payload
+        finally:
+            col.close()
+            _server_deps._collection_singleton = saved
+
 
 class TestValidateUploadTarget:
     """``_validate_upload_target`` rejects bad paths at link-creation time."""
@@ -253,13 +281,24 @@ class TestUploadEndToEnd:
             # 4. Verify the file actually landed in the vault on disk.
             assert (_upload_vault / "uploaded.md").read_bytes() == payload
 
-            # 5. Verify it is now readable via the ``read`` MCP tool —
-            #    proves the FTS index was updated synchronously by
-            #    Collection.write (not just the filesystem write).
+            # 5. Verify it is now readable via the ``read`` MCP tool.
+            #    ``read`` for a whole-document .md reads disk directly,
+            #    so this only proves the file landed on disk.
             read_result = await client.call_tool("read", {"path": "uploaded.md"})
             read_data = json.loads(read_result.content[0].text)
             assert read_data["path"] == "uploaded.md"
             assert read_data["content"] == payload.decode("utf-8")
+
+            # 6. Verify the upload is searchable — proves Collection.write
+            #    upserted the FTS index synchronously.  A regression that
+            #    drops ``self._fts.upsert_note(note)`` would fail this.
+            search_result = await client.call_tool("search", {"query": "Uploaded"})
+            search_data = json.loads(search_result.content[0].text)
+            assert isinstance(search_data, list)
+            search_paths = {r["path"] for r in search_data}
+            assert "uploaded.md" in search_paths, (
+                f"uploaded.md should be searchable after upload; got {search_paths}"
+            )
 
     async def test_invalid_utf8_md_upload_returns_400(
         self, _upload_vault: Path
@@ -293,10 +332,11 @@ class TestUploadEndToEnd:
                 f"got {response.status_code}: {response.text}"
             )
 
+    @pytest.mark.parametrize("http_transport", ["http", "sse", "streamable-http"])
     async def test_create_upload_link_registered_via_make_server_arg(
-        self, _upload_vault: Path
+        self, _upload_vault: Path, http_transport: str
     ) -> None:
-        """``create_upload_link`` is registered when ``make_server`` gets ``transport="http"``.
+        """``create_upload_link`` is registered for every HTTP-flavoured transport.
 
         Regression test for the ``transport="auto"`` footgun: pvl-core's
         ``register_file_exchange_upload(transport="auto")`` reads
@@ -307,15 +347,20 @@ class TestUploadEndToEnd:
         derive ``fx_transport`` from its own ``transport`` arg and pass it
         through explicitly.
 
+        Also a regression test for #459: ``"streamable-http"`` previously
+        fell through to ``fx_transport="stdio"`` and disabled the upload
+        route silently for third-party embedders calling ``make_server``
+        with that value.
+
         ``_upload_vault`` clears both env vars (see ``_CLEAR_VARS``) so
         this test fails if ``make_server`` ever regresses to passing
         ``"auto"``.
         """
-        server = make_server(transport="http")
+        server = make_server(transport=http_transport)
         async with Client(server) as client:
             tools = await client.list_tools()
             tool_names = {tool.name for tool in tools}
             assert "create_upload_link" in tool_names, (
-                f"create_upload_link not registered (transport wiring regression?). "
+                f"create_upload_link not registered for transport={http_transport!r}. "
                 f"Registered tools: {sorted(tool_names)}"
             )
