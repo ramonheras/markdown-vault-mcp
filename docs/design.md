@@ -199,7 +199,7 @@ This produces sensible merged rankings regardless of the raw score scales.
 
 Four complementary mechanisms improve result diversity and bound LLM context cost:
 
-1. **Cap document concentration.** No single document occupies more than `chunks_per_doc`
+1. **Cap document concentration.** No single document occupies more than `chunks_per_file`
    slots in the result list, regardless of search mode. Default cap: 2.
 2. **Length downweight.** Within each search channel (keyword or semantic), each chunk's
    raw score is adjusted by `score / (1 + alpha · log(chunk_count_in_doc))` before ranking
@@ -217,12 +217,42 @@ Four complementary mechanisms improve result diversity and bound LLM context cos
 
 | Env var | Default | Description |
 |---|---|---|
-| `MARKDOWN_VAULT_MCP_CHUNKS_PER_DOC` | `2` | Per-document cap on result slots. |
+| `MARKDOWN_VAULT_MCP_CHUNKS_PER_FILE` | `2` | Per-document cap on result slots. |
 | `MARKDOWN_VAULT_MCP_SNIPPET_WORDS` | `200` | Approximate word budget for `SearchResult.content`. `0` = no truncation. |
 | `MARKDOWN_VAULT_MCP_LENGTH_DOWNWEIGHT_ALPHA` | `0.25` | Strength of length downweight. `0` disables. |
 | `MARKDOWN_VAULT_MCP_MAX_CHUNK_WORDS` | `400` | Adaptive chunker threshold. Set very high to disable. |
 
-**Pipeline order:** Per-channel length downweight → fuse (RRF for hybrid) → cap per path → snippet projection → return `limit` results.
+**Pipeline order:** Per-channel length downweight → fuse (RRF for hybrid) → cap per path → snippet projection → return `limit` results. See **Field collapsing** below for the post-433 grouping step.
+
+### Field collapsing
+
+Adaptive chunking can produce multiple high-scoring rows from the same
+document, which would otherwise dominate top-K results.  The final
+shaping stage of every search mode (keyword, semantic, hybrid) collapses
+chunks under their parent document via `_group_by_path`:
+
+1. Rows arrive sorted by descending score (already length-downweighted;
+   for hybrid, RRF-fused).
+2. The helper walks rows, opening a new group per unseen path until
+   `file_limit` groups exist; subsequent rows from a seen path append
+   to the existing group up to `chunks_per_file` rows.
+3. Sections within a group are sorted `(score DESC, start_line ASC)`
+   so ties surface in document order.
+
+The returned shape is `list[GroupedResult]` where each result wraps one
+file with a `sections: list[SectionHit]` sub-list (length 1..N).  File
+score = `max(section.score)` — the MaxP aggregation established by
+[PARADE](https://ar5iv.labs.arxiv.org/html/2008.09093) and used by
+Elasticsearch's `collapse`, Vespa grouping, and Qdrant's
+`query_points_groups` primitive.
+
+`get_similar` and `get_context.similar` share the same collapsing core
+so dossiers never re-apply the cap on top of the cap.  `get_context`
+defaults to `chunks_per_file=1` for compact dossiers; `search` and
+`get_similar` default to `chunks_per_file=2`.
+
+Replaces the per-path cap from PR #433 (`_apply_chunks_per_doc_cap`),
+which thinned duplicates but did not group them.
 
 **Non-goal:** No frontmatter-based ranking. The MCP must not require, recommend, or
 special-case any frontmatter convention on vault content (no `kind`, no `noindex`, no
