@@ -15,41 +15,10 @@ from fastmcp import Client
 
 from markdown_vault_mcp._server_apps import _hashed
 from markdown_vault_mcp.server import make_server
+from tests.conftest import _CLEAR_VARS, get_app_html
 
 if TYPE_CHECKING:
     from pathlib import Path
-
-
-_CLEAR_VARS = (
-    "MARKDOWN_VAULT_MCP_INDEX_PATH",
-    "MARKDOWN_VAULT_MCP_EMBEDDINGS_PATH",
-    "MARKDOWN_VAULT_MCP_STATE_PATH",
-    "MARKDOWN_VAULT_MCP_INDEXED_FIELDS",
-    "MARKDOWN_VAULT_MCP_REQUIRED_FIELDS",
-    "MARKDOWN_VAULT_MCP_EXCLUDE",
-    "MARKDOWN_VAULT_MCP_GIT_TOKEN",
-    "MARKDOWN_VAULT_MCP_TEMPLATES_FOLDER",
-    "MARKDOWN_VAULT_MCP_SERVER_NAME",
-    "MARKDOWN_VAULT_MCP_INSTRUCTIONS",
-    "MARKDOWN_VAULT_MCP_BEARER_TOKEN",
-    "MARKDOWN_VAULT_MCP_AUTH_MODE",
-    "MARKDOWN_VAULT_MCP_BASE_URL",
-    "MARKDOWN_VAULT_MCP_OIDC_CONFIG_URL",
-    "MARKDOWN_VAULT_MCP_OIDC_CLIENT_ID",
-    "MARKDOWN_VAULT_MCP_OIDC_CLIENT_SECRET",
-    "MARKDOWN_VAULT_MCP_OIDC_JWT_SIGNING_KEY",
-    "MARKDOWN_VAULT_MCP_OIDC_AUDIENCE",
-    "MARKDOWN_VAULT_MCP_OIDC_REQUIRED_SCOPES",
-    "MARKDOWN_VAULT_MCP_APP_DOMAIN",
-)
-
-
-@pytest.fixture
-def _mcp_env(vault_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", str(vault_path))
-    monkeypatch.delenv("MARKDOWN_VAULT_MCP_READ_ONLY", raising=False)
-    for var in _CLEAR_VARS:
-        monkeypatch.delenv(var, raising=False)
 
 
 def _parse_tool_data(result: Any) -> Any:
@@ -69,55 +38,47 @@ def _parse_tool_data(result: Any) -> Any:
 class TestGraphExplorerHTML:
     """Verify graph explorer elements exist in the SPA HTML."""
 
-    async def _get_html(self) -> str:
-        server = make_server()
-        async with Client(server) as client:
-            resource = await client.read_resource("ui://vault/app.html")
-            return (
-                resource[0].text if hasattr(resource[0], "text") else str(resource[0])
-            )
-
     async def test_vis_network_vendored(self) -> None:
-        html = await self._get_html()
+        html = await get_app_html()
         assert "vis-network@" in html
         assert "(vendored)" in html
 
     async def test_graph_container(self) -> None:
-        html = await self._get_html()
+        html = await get_app_html()
         assert 'id="graph-container"' in html
 
     async def test_vis_network_initialization(self) -> None:
-        html = await self._get_html()
+        html = await get_app_html()
         assert "vis.Network" in html
         assert "vis.DataSet" in html
 
     async def test_click_handler(self) -> None:
-        html = await self._get_html()
+        html = await get_app_html()
         assert "network.on('click'" in html
 
     async def test_hover_tooltip(self) -> None:
-        html = await self._get_html()
+        html = await get_app_html()
         # Tooltip via node.title property
         assert "tooltipDelay" in html
 
     async def test_double_click_handler(self) -> None:
-        html = await self._get_html()
+        html = await get_app_html()
         assert "doubleClick" in html
         # Double-click triggers focus mode (clear + reload for this node only)
         assert "loadGraph(nodeId)" in html
 
     async def test_dynamic_expansion(self) -> None:
-        html = await self._get_html()
+        html = await get_app_html()
         assert "expandNode" in html
         assert _hashed("vault_graph_neighborhood") in html
 
     async def test_hub_view(self) -> None:
-        html = await self._get_html()
+        html = await get_app_html()
         assert _hashed("vault_graph_hubs") in html
         assert "loadHubs" in html
 
     async def test_node_visual_encoding(self) -> None:
-        html = await self._get_html()
+        html = await get_app_html()
         # Node size proportional to backlink_count via value
         assert "backlink_count" in html
         # Edge color by type
@@ -126,31 +87,31 @@ class TestGraphExplorerHTML:
         assert "borderDashes" in html
 
     async def test_send_to_claude_button(self) -> None:
-        html = await self._get_html()
+        html = await get_app_html()
         assert 'id="graph-send-btn"' in html
 
     async def test_fullscreen_button(self) -> None:
-        html = await self._get_html()
+        html = await get_app_html()
         assert 'id="graph-fullscreen-btn"' in html
 
     async def test_mini_context_card(self) -> None:
-        html = await self._get_html()
+        html = await get_app_html()
         assert 'id="graph-mini-card"' in html
         assert "showMiniCard" in html
         assert "Full Context" in html
         assert "Open in Browser" in html
 
     async def test_xss_protection_eschtml(self) -> None:
-        html = await self._get_html()
+        html = await get_app_html()
         assert "escHtml" in html
 
     async def test_cdn_crash_guard(self) -> None:
-        html = await self._get_html()
+        html = await get_app_html()
         # loadGraph must check nodesDS before calling clear()
         assert "vis CDN failed" in html or "!nodesDS" in html
 
     async def test_host_css_variables_in_graph(self) -> None:
-        html = await self._get_html()
+        html = await get_app_html()
         assert "getColors" in html
         assert "--color-text-info" in html
 
@@ -203,6 +164,30 @@ class TestGraphDataTools:
             data = _parse_tool_data(result)
             assert "nodes" in data
             assert "edges" in data
+
+    async def test_hubs_does_not_read_hub_documents(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """vault_graph_hubs uses MostLinkedNote.folder, not per-hub collection.read."""
+        from markdown_vault_mcp.collection import Collection
+
+        original_read = Collection.read
+        read_paths: list[str] = []
+
+        def _spy(self: Collection, path: str) -> Any:
+            read_paths.append(path)
+            return original_read(self, path)
+
+        monkeypatch.setattr(Collection, "read", _spy)
+        server = make_server()
+        async with Client(server) as client:
+            result = await client.call_tool(_hashed("vault_graph_hubs"), {})
+            data = _parse_tool_data(result)
+        hub_paths = {n["id"] for n in data["nodes"] if n["group"] == "hub"}
+        assert hub_paths, "fixture should produce at least one hub"
+        assert not (hub_paths & set(read_paths)), (
+            f"hub documents should not be read directly; read={read_paths}"
+        )
 
     async def test_edges_have_type(self) -> None:
         server = make_server()
@@ -274,40 +259,32 @@ class TestGraphDataTools:
 class TestSemanticGraphHTML:
     """Verify semantic similarity graph features in the SPA HTML."""
 
-    async def _get_html(self) -> str:
-        server = make_server()
-        async with Client(server) as client:
-            resource = await client.read_resource("ui://vault/app.html")
-            return (
-                resource[0].text if hasattr(resource[0], "text") else str(resource[0])
-            )
-
     async def test_semantic_toggle_button(self) -> None:
-        html = await self._get_html()
+        html = await get_app_html()
         assert 'id="graph-semantic-btn"' in html
 
     async def test_include_semantic_passed_to_tool(self) -> None:
-        html = await self._get_html()
+        html = await get_app_html()
         assert "include_semantic" in html
         assert "semanticEnabled" in html
 
     async def test_semantic_edge_color_constant(self) -> None:
-        html = await self._get_html()
+        html = await get_app_html()
         assert "_SEMANTIC_EDGE_COLOR" in html
 
     async def test_semantic_edge_dashed(self) -> None:
-        html = await self._get_html()
+        html = await get_app_html()
         # Semantic edges rendered as dashed lines
         assert "isSemantic" in html
         assert "dashes" in html
 
     async def test_folder_color_palette(self) -> None:
-        html = await self._get_html()
+        html = await get_app_html()
         assert "_FOLDER_COLORS" in html
         assert "_folderColor" in html
 
     async def test_cross_view_currentpath(self) -> None:
-        html = await self._get_html()
+        html = await get_app_html()
         assert "currentPath" in html
 
 
@@ -482,3 +459,168 @@ class TestIncludeSemanticEdges:
         assert "edges" in data
         semantic_edges = [e for e in data["edges"] if e.get("type") == "semantic"]
         assert semantic_edges == []
+
+
+# ---------------------------------------------------------------------------
+# max_nodes BFS cap
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def _star_vault(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    # Star-pattern vault: hub.md links to 20 spokes; each spoke links back.
+    vault = tmp_path / "star_vault"
+    vault.mkdir()
+    spokes = "\n".join(f"- [s{i}](spoke{i}.md)" for i in range(20))
+    (vault / "hub.md").write_text(f"# Hub\n\n{spokes}\n")
+    for i in range(20):
+        (vault / f"spoke{i}.md").write_text(f"# Spoke {i}\n\n[hub](hub.md)\n")
+    monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", str(vault))
+    monkeypatch.delenv("MARKDOWN_VAULT_MCP_READ_ONLY", raising=False)
+    for var in _CLEAR_VARS:
+        monkeypatch.delenv(var, raising=False)
+    return vault
+
+
+class TestGraphNeighborhoodMaxNodes:
+    """Verify max_nodes caps BFS output and sets the truncated flag."""
+
+    async def test_max_nodes_caps_node_count(self, _star_vault: Path) -> None:
+        server = make_server()
+        async with Client(server) as client:
+            result = await client.call_tool(
+                _hashed("vault_graph_neighborhood"),
+                {"path": "hub.md", "depth": 2, "max_nodes": 5},
+            )
+        data = _parse_tool_data(result)
+        assert len(data["nodes"]) <= 5
+        assert data["truncated"] is True
+
+    async def test_truncated_false_when_under_cap(self, _star_vault: Path) -> None:
+        server = make_server()
+        async with Client(server) as client:
+            result = await client.call_tool(
+                _hashed("vault_graph_neighborhood"),
+                {"path": "hub.md", "depth": 2, "max_nodes": 500},
+            )
+        data = _parse_tool_data(result)
+        assert data["truncated"] is False
+
+    async def test_max_nodes_caps_semantic_expansion(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """max_nodes also bounds the semantic-expansion phase, not just BFS."""
+        from .conftest import MockEmbeddingProvider
+
+        # Star vault: forces BFS to hit the cap; semantic phase must not bypass it
+        vault = tmp_path / "sem_star"
+        vault.mkdir()
+        spokes = "\n".join(f"- [s{i}](spoke{i}.md)" for i in range(20))
+        (vault / "hub.md").write_text(f"# Hub\n\n{spokes}\n")
+        for i in range(20):
+            (vault / f"spoke{i}.md").write_text(f"# Spoke {i}\n\n[hub](hub.md)\n")
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", str(vault))
+        monkeypatch.setenv(
+            "MARKDOWN_VAULT_MCP_EMBEDDINGS_PATH", str(tmp_path / "embeddings")
+        )
+        for var in _CLEAR_VARS:
+            if var != "MARKDOWN_VAULT_MCP_EMBEDDINGS_PATH":
+                monkeypatch.delenv(var, raising=False)
+
+        mock_prov = MockEmbeddingProvider()
+        with patch(
+            "markdown_vault_mcp.providers.get_embedding_provider",
+            return_value=mock_prov,
+        ):
+            server = make_server()
+            async with Client(server) as client:
+                result = await client.call_tool(
+                    _hashed("vault_graph_neighborhood"),
+                    {
+                        "path": "hub.md",
+                        "depth": 2,
+                        "max_nodes": 5,
+                        "include_semantic": True,
+                    },
+                )
+        data = _parse_tool_data(result)
+        assert len(data["nodes"]) <= 5
+        assert data["truncated"] is True
+
+    async def test_max_nodes_caps_semantic_inner_branch(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Inner semantic-cap fires when expansion fills the cap mid-iteration (PR #478)."""
+        from .conftest import MockEmbeddingProvider
+
+        # Vault forces the *inner* cap branch in _vault_graph_neighborhood:
+        # BFS from center returns {center, B} = 2 nodes (below cap=4).
+        # Semantic expansion for `center` then adds enough fresh candidates
+        # to reach the cap mid-loop; the next non-member candidate must
+        # trigger the inner ``len(nodes) >= max_nodes`` guard (lines 564-566).
+        vault = tmp_path / "sem_inner"
+        vault.mkdir()
+        # center links only to B (BFS yields exactly {center, B} at depth=1)
+        (vault / "center.md").write_text("# Center\n\n[B](B.md)\n")
+        (vault / "B.md").write_text("# B\n\n[center](center.md)\n")
+        # Four semantic-only notes (unlinked from center/B). With max_nodes=4
+        # and nodes already at 2, the loop adds two and the third trips the
+        # inner cap regardless of MockEmbeddingProvider's similarity ordering.
+        for label in ("C", "D", "E", "F"):
+            (vault / f"{label}.md").write_text(
+                f"# {label}\n\nstandalone note {label}\n"
+            )
+
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", str(vault))
+        monkeypatch.setenv(
+            "MARKDOWN_VAULT_MCP_EMBEDDINGS_PATH", str(tmp_path / "embeddings")
+        )
+        for var in _CLEAR_VARS:
+            if var != "MARKDOWN_VAULT_MCP_EMBEDDINGS_PATH":
+                monkeypatch.delenv(var, raising=False)
+
+        mock_prov = MockEmbeddingProvider()
+        with patch(
+            "markdown_vault_mcp.providers.get_embedding_provider",
+            return_value=mock_prov,
+        ):
+            server = make_server()
+            async with Client(server) as client:
+                result = await client.call_tool(
+                    _hashed("vault_graph_neighborhood"),
+                    {
+                        "path": "center.md",
+                        "depth": 1,
+                        "max_nodes": 4,
+                        "include_semantic": True,
+                    },
+                )
+        data = _parse_tool_data(result)
+        assert len(data["nodes"]) == 4
+        assert data["truncated"] is True
+        # Inner branch fired: at least one semantic candidate was rejected
+        # because the cap was reached mid-loop, so not every standalone
+        # note (C/D/E/F) ended up in the result set.
+        node_ids = {n["id"] for n in data["nodes"]}
+        standalone = {"C.md", "D.md", "E.md", "F.md"}
+        assert len(standalone & node_ids) < len(standalone)
+
+
+@pytest.mark.usefixtures("_mcp_env")
+class TestGraphNeighborhoodMaxNodesDefault:
+    """Default max_nodes preserves prior behavior on small fixture vault."""
+
+    async def test_default_does_not_truncate_small_vault(self) -> None:
+        server = make_server()
+        async with Client(server) as client:
+            result = await client.call_tool(
+                _hashed("vault_graph_neighborhood"),
+                {"path": "simple.md", "depth": 2},
+            )
+        data = _parse_tool_data(result)
+        assert data["truncated"] is False
+        assert len(data["nodes"]) < 200

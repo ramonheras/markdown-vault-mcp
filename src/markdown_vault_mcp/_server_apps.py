@@ -409,6 +409,7 @@ def register_apps(mcp: FastMCP) -> None:
         path: str,
         depth: int = 1,
         include_semantic: bool = False,
+        max_nodes: int = 200,
         collection: Collection = Depends(get_collection),
     ) -> dict[str, Any]:
         """Return the link neighborhood of a note as a node/edge graph (app-only).
@@ -422,6 +423,10 @@ def register_apps(mcp: FastMCP) -> None:
             include_semantic: When True, add dashed semantic-similarity edges
                 for each interior node (requires embeddings to be configured;
                 silently omitted when unavailable).
+            max_nodes: Soft cap on returned node count (default 200). BFS
+                and any semantic expansion both stop once the cap is hit;
+                the response sets ``truncated=True``. Bounds dense-vault
+                depth=2 traversals that would otherwise bog down vis-network.
 
         Returns:
             Dict with:
@@ -439,13 +444,19 @@ def register_apps(mcp: FastMCP) -> None:
               - from (str): Source node ID.
               - to (str): Target node ID.
               - type (str): "markdown", "wikilink", "reference", or "semantic".
+
+            - truncated (bool): True when BFS hit the ``max_nodes`` cap.
         """
         nodes: dict[str, dict[str, Any]] = {}
         edges: list[dict[str, Any]] = []
         visited: set[str] = set()
         queue: collections.deque[tuple[str, int]] = collections.deque([(path, 0)])
+        truncated = False
 
         while queue:
+            if len(nodes) >= max_nodes:
+                truncated = True
+                break
             current, d = queue.popleft()
             if current in visited:
                 continue
@@ -525,6 +536,9 @@ def register_apps(mcp: FastMCP) -> None:
         if include_semantic:
             sem_seen: set[frozenset[str]] = set()
             for node_path in list(nodes.keys()):
+                if len(nodes) >= max_nodes:
+                    truncated = True
+                    break
                 try:
                     similar = await asyncio.to_thread(
                         collection.get_similar, node_path, limit=5
@@ -547,6 +561,9 @@ def register_apps(mcp: FastMCP) -> None:
                         continue
                     sem_seen.add(pair)
                     if sr.path not in nodes:
+                        if len(nodes) >= max_nodes:
+                            truncated = True
+                            break
                         sim_note = await asyncio.to_thread(collection.read, sr.path)
                         sim_label = (
                             sim_note.title
@@ -565,7 +582,11 @@ def register_apps(mcp: FastMCP) -> None:
                         {"from": node_path, "to": sr.path, "type": "semantic"}
                     )
 
-        return {"nodes": list(nodes.values()), "edges": unique_edges}
+        return {
+            "nodes": list(nodes.values()),
+            "edges": unique_edges,
+            "truncated": truncated,
+        }
 
     @mcp.tool(
         icons=_TOOL_ICONS["vault_graph_hubs"],
@@ -613,15 +634,12 @@ def register_apps(mcp: FastMCP) -> None:
         seen_edges: set[tuple[str, str]] = set()
 
         for hub in hubs:
-            # TODO: extend get_most_linked to return folder, eliminating this per-hub read
-            hub_note = await asyncio.to_thread(collection.read, hub.path)
-            hub_folder = hub_note.folder if hub_note else ""
             nodes[hub.path] = {
                 "id": hub.path,
                 "label": hub.title,
                 "group": "hub",
                 "backlink_count": hub.backlink_count,
-                "folder": hub_folder,
+                "folder": hub.folder,
             }
 
             # Get immediate connections for each hub

@@ -387,7 +387,7 @@ if(__exports != exports)module.exports = exports;return module.exports}));
     font-size: 12px; cursor: not-allowed; opacity: 0.6; font-family: inherit;
   }
 </style>
-<!-- vendor-spa-source-sha256:36e5b23914e3f7451e50e5f1968d9cbbdbf22c54eb8ddd58a530ace0c722e252 -->
+<!-- vendor-spa-source-sha256:44d3a8d9966af461479c0d78b8467c3a6b2735ea3fe80eda0f5ab989295366b2 -->
 </head>
 <body>
 <div class="app-container">
@@ -990,8 +990,9 @@ app.onteardown = () => {
       const data = parseToolResult(result);
       if (!data) return;
       addGraphData(data);
+      const truncSuffix = data.truncated ? ' (truncated — zoom in for more)' : '';
       window.updateContext('graph explorer', path, nodesDS.get(path)?.label,
-        'Visible: ' + nodesDS.length + ' notes, ' + edgesDS.length + ' links');
+        'Visible: ' + nodesDS.length + ' notes, ' + edgesDS.length + ' links' + truncSuffix);
     } catch (err) {
       console.warn('Graph expand failed:', err);
     }
@@ -1298,7 +1299,7 @@ app.onteardown = () => {
     searchClear.style.display = '';
     try {
       const result = await app.callServerTool({
-        name: 'vault___vault_search', arguments: { query, mode: 'keyword', limit: 20 }
+        name: 'vault___vault_search', arguments: { query, mode: 'hybrid', limit: 20 }
       });
       const data = parseToolResult(result) || [];
       treeEl.innerHTML = '';
