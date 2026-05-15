@@ -36,8 +36,9 @@ def test_max_chunk_words_none_preserves_h1_h2_only_behavior():
 
 def test_oversize_h1_splits_at_h2():
     """An H1 chunk exceeding max_chunk_words is re-split at H2."""
-    # Use one word per line so the fixture clears the 30-line short-doc bypass.
-    sub_body = "\n".join(["lorem"] * 300)
+    # Sub_body sized to fit within the budget once split at H2, isolating
+    # the H2-split mechanism from the word-budget fallback.
+    sub_body = "\n".join(["lorem"] * 50)
     body = f"# Top\n## Sub A\n{sub_body}\n## Sub B\n{sub_body}\n"
     chunker = HeadingChunker(max_chunk_words=200)
     chunks = chunker.chunk(body, {})
@@ -64,29 +65,189 @@ def test_recursion_descends_to_h6():
     assert "L6a" in headings and "L6b" in headings
 
 
-def test_oversize_chunk_with_no_deeper_headings_stays_one_chunk():
-    """A 1000-word H6 with no deeper headings stays as one chunk."""
+def test_oversize_h6_leaf_falls_back_to_word_budget_split():
+    """An oversize H6 leaf with no deeper headings splits on word budget."""
     body = "###### Solo\n" + "\n".join(["lorem"] * 100) + "\n"
     chunker = HeadingChunker(max_chunk_words=50)
     chunks = chunker.chunk(body, {})
-    assert len(chunks) == 1
-    assert chunks[0].heading == "Solo"
+    assert len(chunks) >= 2
+    assert all(c.heading == "Solo" for c in chunks)
+    assert all(c.heading_level == 6 for c in chunks)
+    assert all(len(c.content.split()) <= 50 for c in chunks)
 
 
-def test_preamble_stays_one_chunk_regardless_of_size():
-    """Preamble (no heading) is not refined further."""
+def test_oversize_preamble_falls_back_to_word_budget_split():
+    """Preamble (no heading) that exceeds the budget is fragmented."""
+    # One word per line so the body clears the 30-line short-doc bypass and
+    # the document enters the heading-split path, putting the long preamble
+    # into the preamble-leaf branch of _refine_oversize.
     preamble_words = 1000
     body = (
-        " ".join(["lorem"] * preamble_words)
-        + "\n\n# Heading\n\n"
-        + " ".join(["ipsum"] * 50)
+        "\n".join(["lorem"] * preamble_words)
+        + "\n# Heading\n"
+        + "\n".join(["ipsum"] * 50)
         + "\n"
     )
     chunker = HeadingChunker(max_chunk_words=200)
     chunks = chunker.chunk(body, {})
-    # First chunk is the oversize preamble (heading=None), preserved.
-    assert chunks[0].heading is None
-    assert len(chunks[0].content.split()) >= preamble_words
+    preamble_chunks = [c for c in chunks if c.heading is None]
+    assert len(preamble_chunks) >= 2
+    assert all(len(c.content.split()) <= 200 for c in preamble_chunks)
+    total = sum(len(c.content.split()) for c in preamble_chunks)
+    assert total == preamble_words
+
+
+def test_no_headings_oversize_doc_falls_back_to_word_budget_split():
+    """A long doc with no headings at all still respects the budget."""
+    # 60 lines (clears 30-line short-doc bypass), no markdown headings.
+    body = "\n".join(["lorem"] * 60) + "\n"
+    chunker = HeadingChunker(max_chunk_words=20)
+    chunks = chunker.chunk(body, {})
+    assert len(chunks) >= 2
+    assert all(c.heading is None for c in chunks)
+    assert all(len(c.content.split()) <= 20 for c in chunks)
+    assert sum(len(c.content.split()) for c in chunks) == 60
+
+
+def test_subsplit_preamble_inherits_parent_heading():
+    """A parent section's body-before-first-subheading inherits the parent's
+    heading attribution rather than dropping to None when the parent's
+    content recurses to a deeper heading level.
+
+    Uses three heading levels so the recursion path actually fires: H1/H2
+    are handled at the top-level `_split_at_levels(levels=(1, 2))`, but
+    the "Parent" H2 chunk exceeds budget and recurses with `levels=(3,)`.
+    Inside that recursion `_split_at_levels` returns a preamble with
+    `heading=None`; the fix promotes it to inherit Parent's heading.
+    Without the fix the test would observe `heading=None` on those
+    preamble chunks.
+    """
+    body = (
+        "# Top\n"
+        + "\n".join(["top body"] * 5)
+        + "\n## Parent\n"
+        + "\n".join(["parent preamble"] * 15)  # 30 words → preamble of Parent
+        + "\n### Child\n"
+        + "\n".join(["child body"] * 20)  # 40 words under Child
+        + "\n"
+    )
+    chunker = HeadingChunker(max_chunk_words=50)
+    chunks = chunker.chunk(body, {})
+    preamble_chunks = [c for c in chunks if "parent preamble" in c.content]
+    assert preamble_chunks, "preamble text should appear in at least one chunk"
+    for c in preamble_chunks:
+        assert c.heading == "Parent", (
+            f"preamble chunk got heading={c.heading!r}, expected 'Parent'"
+        )
+
+
+def test_budget_split_preserves_line_structure_in_oversize_paragraph():
+    """An oversize paragraph keeps line boundaries — tables stay tabular."""
+    # 30 consecutive table rows (no blank lines → one paragraph).  Each
+    # row "| alpha | beta | gamma |" tokenises to 7 words (pipes count as
+    # tokens via str.split()), so total = 210 words.  Budget=60 → roughly
+    # 8 rows per chunk; word-split would strip every newline, line-bin-pack
+    # keeps them so the table still renders.
+    rows = ["| alpha | beta | gamma |"] * 30
+    body = "\n".join(rows) + "\n"
+    chunker = HeadingChunker(max_chunk_words=60)
+    chunks = chunker.chunk(body, {})
+    assert all("|" in c.content for c in chunks)
+    assert all("\n" in c.content for c in chunks), (
+        "line-structured oversize paragraph lost newlines — word-split fell back"
+    )
+    assert all(len(c.content.split()) <= 60 for c in chunks)
+
+
+def test_budget_split_word_splits_only_individual_oversize_lines():
+    """Word-split fires only for a single line that itself exceeds budget;
+    surrounding normal lines line-bin-pack and keep their newlines.
+
+    Distinguishes the new line-level-first fallback from the previous
+    global word-split: a regression that reverts to "join all lines and
+    word-split" would strip newlines from the surrounding short lines.
+    """
+    short_lines = [f"a{i} b{i} c{i}" for i in range(10)]  # 10 lines, 3 words each
+    oversize = " ".join([f"x{i}" for i in range(200)])  # 1 line, 200 words
+    body = "\n".join([*short_lines, oversize, *short_lines]) + "\n"
+    chunker = HeadingChunker(max_chunk_words=50)
+    chunks = chunker.chunk(body, {})
+    assert all(len(c.content.split()) <= 50 for c in chunks)
+    # Some chunks must have internal newlines (line-bin-packed short lines)
+    # AND some must not (word-split fragments of the single oversize line).
+    has_newline = [c for c in chunks if "\n" in c.content]
+    no_newline = [c for c in chunks if "\n" not in c.content]
+    assert has_newline, "short-line bin-pack output lost newlines"
+    assert no_newline, "no word-split chunk emitted for the oversize single line"
+
+
+def test_budget_split_preserves_blank_line_separators():
+    """Bin-packed paragraphs keep their blank-line separators in chunk content.
+
+    Four 10-word paragraphs (40 words total) with budget=25 force
+    `_budget_split` to fire (40 > 25) and produce two chunks each
+    bin-packing two paragraphs (10 + 10 = 20, no emit; +10 = 30 > 25,
+    emit).  Each emitted chunk must preserve the inter-paragraph blank
+    line — without the fix the separator gets stripped during paragraph
+    collection and `pending_lines.extend(lines)` joins the line-ended
+    paragraphs with no blank between them.
+    """
+    paragraphs = [
+        "\n".join([f"{tag}{i}" for i in range(10)])
+        for tag in ("alpha", "beta", "gamma", "delta")
+    ]
+    body = "\n\n".join(paragraphs) + "\n"
+
+    chunker = HeadingChunker(max_chunk_words=25)
+    chunks = chunker.chunk(body, {})
+
+    assert len(chunks) == 2
+    assert all("\n\n" in c.content for c in chunks), (
+        "blank line between bin-packed paragraphs was lost"
+    )
+
+
+def test_budget_split_bin_packs_small_paragraphs():
+    """Sub-budget paragraphs accumulate then flush before the next overflow."""
+    # Build a body with 6 distinct paragraphs of ~40 words each, separated by
+    # blank lines so the paragraph collector sees them as separate units.
+    # 40 lines per paragraph + blank line * 6 paragraphs clears 30-line bypass.
+    paragraphs = []
+    for tag in range(6):
+        words = [f"p{tag}word{i}" for i in range(40)]
+        paragraphs.append("\n".join(words))
+    body = ("\n\n".join(paragraphs)) + "\n"
+
+    chunker = HeadingChunker(max_chunk_words=100)
+    chunks = chunker.chunk(body, {})
+
+    # No paragraph (40 words) exceeds the budget, so word-split never fires.
+    # Pairs of paragraphs (80 words) fit; adding a third (120) would overflow,
+    # so chunks bin-pack two paragraphs at a time → 3 emitted chunks.
+    assert len(chunks) == 3
+    assert all(len(c.content.split()) <= 100 for c in chunks)
+    # Every fragment is a preamble (no heading) because the body has no headings.
+    assert all(c.heading is None for c in chunks)
+
+
+def test_no_chunk_exceeds_budget_anywhere():
+    """Short-doc bypass also honours the budget when content is oversize.
+
+    Each token-stream is space-joined (single line), so the body lands
+    under the 30-line short-doc threshold and enters the
+    ``len(lines) <= short_doc_lines`` branch.  _budget_split fragments
+    the single emitted chunk; assertion checks the budget invariant
+    holds on every fragment.
+    """
+    body = (
+        " ".join(["alpha"] * 6000)
+        + "\n\n# Big H1\n\n"
+        + " ".join(["beta"] * 5000)
+        + "\n\n## Small Trailer\n\nshort\n"
+    )
+    chunker = HeadingChunker(max_chunk_words=300)
+    chunks = chunker.chunk(body, {})
+    assert all(len(c.content.split()) <= 300 for c in chunks)
 
 
 def test_short_doc_bypass_still_applies():

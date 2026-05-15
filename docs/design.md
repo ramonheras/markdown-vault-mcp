@@ -211,7 +211,14 @@ Four complementary mechanisms improve result diversity and bound LLM context cos
    Full chunk recovery is available via `read(path, section=heading)`.
 4. **Adaptive heading-level chunking.** The `HeadingChunker` recursively re-splits
    oversize chunks at deeper heading levels (H1 → H6) until each fits `max_chunk_words`
-   words or no sub-headings of the next level exist. Default threshold: 400 words.
+   words. When heading-based refinement cannot make further progress (a leaf section
+   with no deeper sub-headings, a preamble before the first heading, or a
+   no-headings document), the chunker falls back to a paragraph- and word-boundary
+   split so the budget is a **hard** invariant for every emitted chunk. Default
+   threshold: 400 words. This matters for embedding providers with context limits
+   (e.g. the default FastEmbed model `BAAI/bge-small-en-v1.5` exposes a 512-token
+   context; `nomic-embed-text-v1.5` has 8192 tokens natively but Ollama serves it
+   with `n_ctx_train=2048` by default — both silently truncate beyond their cap).
 
 **Config knobs:**
 
@@ -297,9 +304,15 @@ class ChunkStrategy(Protocol):
 - `WholeDocumentChunker`: one chunk per document. Good for short documents.
 
 **Adaptive heading-level chunking**: When `max_chunk_words` is set, oversize
-chunks are recursively re-split at deeper heading levels (H1 → H6) until each
-fits or no headings of the next level exist inside. `max_chunk_words=None`
-preserves the legacy H1/H2-only behaviour.
+chunks are recursively re-split at deeper heading levels (H1 → H6). Any chunk
+that still exceeds the budget after the H6 pass — or that never had a deeper
+heading to split on (e.g. a preamble, a no-headings document, a long flat H6
+section) — is then fragmented on paragraph and word boundaries by an internal
+`_budget_split` helper. The result is a **hard cap**: every emitted chunk
+satisfies `words(chunk) <= max_chunk_words` regardless of source structure,
+so embedding providers with context-window limits don't silently truncate.
+`max_chunk_words=None` preserves the legacy H1/H2-only behaviour with no
+word-budget enforcement.
 
 **Future** (deferred):
 - `SlidingWindowChunker`: fixed-size overlapping windows with configurable
