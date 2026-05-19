@@ -862,6 +862,18 @@ class TestLoadConfigEmbeddingFields:
         config = load_config()
         assert config.openai_base_url == "https://api.compat.example/v1"
 
+    def test_openai_base_url_prefixed_env_var_wins(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """load_config() prefers prefixed base URL over OPENAI_BASE_URL."""
+        monkeypatch.setenv(
+            "MARKDOWN_VAULT_MCP_OPENAI_BASE_URL",
+            "https://api.prefixed.example/v1",
+        )
+        monkeypatch.setenv("OPENAI_BASE_URL", "https://api.bare.example/v1")
+        config = load_config()
+        assert config.openai_base_url == "https://api.prefixed.example/v1"
+
     def test_openai_base_url_default(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -889,6 +901,18 @@ class TestLoadConfigEmbeddingFields:
         monkeypatch.setenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-large")
         config = load_config()
         assert config.openai_embedding_model == "text-embedding-3-large"
+
+    def test_openai_embedding_model_prefixed_env_var_wins(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """load_config() prefers prefixed model over OPENAI_EMBEDDING_MODEL."""
+        monkeypatch.setenv(
+            "MARKDOWN_VAULT_MCP_OPENAI_EMBEDDING_MODEL",
+            "prefixed-embedding-model",
+        )
+        monkeypatch.setenv("OPENAI_EMBEDDING_MODEL", "bare-embedding-model")
+        config = load_config()
+        assert config.openai_embedding_model == "prefixed-embedding-model"
 
     def test_openai_embedding_model_default(
         self, monkeypatch: pytest.MonkeyPatch

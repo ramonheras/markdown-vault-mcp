@@ -198,6 +198,15 @@ curl https://api.openai.com/v1/embeddings \
   -d '{"input": "test", "model": "text-embedding-3-small"}'
 ```
 
+For OpenAI-compatible providers:
+
+```bash
+curl "$OPENAI_BASE_URL/embeddings" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d "{\"input\": \"test\", \"model\": \"$OPENAI_EMBEDDING_MODEL\"}"
+```
+
 You should get a JSON response with an embedding array. After starting the server, test hybrid search:
 
 > Search for "project ideas" using hybrid mode
