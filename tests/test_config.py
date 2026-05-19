@@ -589,6 +589,8 @@ class TestCollectionConfigDefaults:
         assert config.ollama_model == "nomic-embed-text"
         assert config.ollama_cpu_only is False
         assert config.openai_api_key is None
+        assert config.openai_base_url == "https://api.openai.com/v1"
+        assert config.openai_embedding_model == "text-embedding-3-small"
         assert config.fastembed_model == "BAAI/bge-small-en-v1.5"
         assert config.fastembed_cache_dir is None
 
@@ -613,6 +615,8 @@ class TestCollectionConfigDefaults:
             ollama_model="mxbai-embed-large",
             ollama_cpu_only=True,
             openai_api_key="sk-test",
+            openai_base_url="https://api.siliconflow.cn/v1",
+            openai_embedding_model="BAAI/bge-m3",
             fastembed_model="BAAI/bge-base-en-v1.5",
             fastembed_cache_dir="/tmp/cache",
         )
@@ -629,6 +633,8 @@ class TestCollectionConfigDefaults:
         assert config.ollama_model == "mxbai-embed-large"
         assert config.ollama_cpu_only is True
         assert config.openai_api_key == "sk-test"
+        assert config.openai_base_url == "https://api.siliconflow.cn/v1"
+        assert config.openai_embedding_model == "BAAI/bge-m3"
         assert config.fastembed_model == "BAAI/bge-base-en-v1.5"
         assert config.fastembed_cache_dir == "/tmp/cache"
 
@@ -835,6 +841,65 @@ class TestLoadConfigEmbeddingFields:
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
         config = load_config()
         assert config.openai_api_key is None
+
+    def test_openai_base_url_prefixed_env_var(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """load_config() reads MARKDOWN_VAULT_MCP_OPENAI_BASE_URL."""
+        monkeypatch.setenv(
+            "MARKDOWN_VAULT_MCP_OPENAI_BASE_URL",
+            "https://api.siliconflow.cn/v1/",
+        )
+        config = load_config()
+        assert config.openai_base_url == "https://api.siliconflow.cn/v1"
+
+    def test_openai_base_url_bare_env_var(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """load_config() reads OPENAI_BASE_URL when the prefixed var is absent."""
+        monkeypatch.delenv("MARKDOWN_VAULT_MCP_OPENAI_BASE_URL", raising=False)
+        monkeypatch.setenv("OPENAI_BASE_URL", "https://api.compat.example/v1")
+        config = load_config()
+        assert config.openai_base_url == "https://api.compat.example/v1"
+
+    def test_openai_base_url_default(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """load_config() defaults openai_base_url to the OpenAI API base URL."""
+        monkeypatch.delenv("MARKDOWN_VAULT_MCP_OPENAI_BASE_URL", raising=False)
+        monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+        config = load_config()
+        assert config.openai_base_url == "https://api.openai.com/v1"
+
+    def test_openai_embedding_model_prefixed_env_var(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """load_config() reads MARKDOWN_VAULT_MCP_OPENAI_EMBEDDING_MODEL."""
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_OPENAI_EMBEDDING_MODEL", "BAAI/bge-m3")
+        config = load_config()
+        assert config.openai_embedding_model == "BAAI/bge-m3"
+
+    def test_openai_embedding_model_bare_env_var(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """load_config() reads OPENAI_EMBEDDING_MODEL when prefixed var is absent."""
+        monkeypatch.delenv(
+            "MARKDOWN_VAULT_MCP_OPENAI_EMBEDDING_MODEL", raising=False
+        )
+        monkeypatch.setenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-large")
+        config = load_config()
+        assert config.openai_embedding_model == "text-embedding-3-large"
+
+    def test_openai_embedding_model_default(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """load_config() defaults openai_embedding_model to text-embedding-3-small."""
+        monkeypatch.delenv(
+            "MARKDOWN_VAULT_MCP_OPENAI_EMBEDDING_MODEL", raising=False
+        )
+        monkeypatch.delenv("OPENAI_EMBEDDING_MODEL", raising=False)
+        config = load_config()
+        assert config.openai_embedding_model == "text-embedding-3-small"
 
     def test_fastembed_model_prefixed(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """load_config() reads MARKDOWN_VAULT_MCP_FASTEMBED_MODEL."""

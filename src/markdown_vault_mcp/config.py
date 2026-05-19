@@ -142,6 +142,12 @@ class CollectionConfig:
             Ollama (default ``False``).
         openai_api_key: OpenAI API key for embeddings (logged as set/not
             set).
+        openai_base_url: OpenAI-compatible API base URL for embeddings
+            (default ``"https://api.openai.com/v1"``).  This can point to
+            providers such as SiliconFlow that expose the OpenAI embeddings
+            API shape.
+        openai_embedding_model: OpenAI-compatible embedding model name
+            (default ``"text-embedding-3-small"``).
         fastembed_model: FastEmbed model name (default
             ``"BAAI/bge-small-en-v1.5"``).
         fastembed_cache_dir: Directory for FastEmbed model cache.  ``None``
@@ -205,6 +211,8 @@ class CollectionConfig:
     ollama_model: str = "nomic-embed-text"
     ollama_cpu_only: bool = False
     openai_api_key: str | None = None
+    openai_base_url: str = "https://api.openai.com/v1"
+    openai_embedding_model: str = "text-embedding-3-small"
     fastembed_model: str = "BAAI/bge-small-en-v1.5"
     fastembed_cache_dir: str | None = None
 
@@ -429,6 +437,11 @@ def load_config() -> CollectionConfig:
     - ``MARKDOWN_VAULT_MCP_OLLAMA_CPU_ONLY``: CPU-only Ollama inference;
       default ``false``.
     - ``OPENAI_API_KEY``: OpenAI API key (ecosystem standard, bare env var).
+    - ``MARKDOWN_VAULT_MCP_OPENAI_BASE_URL`` or ``OPENAI_BASE_URL``:
+      OpenAI-compatible API base URL; default ``"https://api.openai.com/v1"``.
+    - ``MARKDOWN_VAULT_MCP_OPENAI_EMBEDDING_MODEL`` or
+      ``OPENAI_EMBEDDING_MODEL``: embedding model name; default
+      ``"text-embedding-3-small"``.
     - ``MARKDOWN_VAULT_MCP_FASTEMBED_MODEL``: FastEmbed model name; default
       ``"BAAI/bge-small-en-v1.5"``.
     - ``MARKDOWN_VAULT_MCP_FASTEMBED_CACHE_DIR``: FastEmbed model cache
@@ -717,6 +730,24 @@ def load_config() -> CollectionConfig:
         "load_config: openai_api_key=%s", "set" if openai_api_key else "not set"
     )
 
+    raw_openai_base_url = (
+        _env("OPENAI_BASE_URL") or os.environ.get("OPENAI_BASE_URL") or ""
+    ).strip()
+    openai_base_url: str = (
+        raw_openai_base_url or "https://api.openai.com/v1"
+    ).rstrip("/")
+    logger.debug("load_config: openai_base_url=%s", openai_base_url)
+
+    raw_openai_embedding_model = (
+        _env("OPENAI_EMBEDDING_MODEL")
+        or os.environ.get("OPENAI_EMBEDDING_MODEL")
+        or ""
+    ).strip()
+    openai_embedding_model: str = (
+        raw_openai_embedding_model or "text-embedding-3-small"
+    )
+    logger.debug("load_config: openai_embedding_model=%s", openai_embedding_model)
+
     raw_fastembed_model = (_env("FASTEMBED_MODEL") or "").strip()
     fastembed_model: str = raw_fastembed_model or "BAAI/bge-small-en-v1.5"
     logger.debug("load_config: fastembed_model=%s", fastembed_model)
@@ -834,6 +865,8 @@ def load_config() -> CollectionConfig:
         ollama_model=ollama_model,
         ollama_cpu_only=ollama_cpu_only,
         openai_api_key=openai_api_key,
+        openai_base_url=openai_base_url,
+        openai_embedding_model=openai_embedding_model,
         fastembed_model=fastembed_model,
         fastembed_cache_dir=fastembed_cache_dir,
         chunks_per_file=chunks_per_file,

@@ -172,8 +172,18 @@ OPENAI_API_KEY=sk-your-api-key-here
 MARKDOWN_VAULT_MCP_EMBEDDINGS_PATH=/path/to/store/embeddings
 ```
 
+For OpenAI-compatible providers, override the base URL and model:
+
+```bash
+MARKDOWN_VAULT_MCP_EMBEDDING_PROVIDER=openai
+OPENAI_API_KEY=your-provider-api-key
+OPENAI_BASE_URL=https://api.siliconflow.cn/v1
+OPENAI_EMBEDDING_MODEL=BAAI/bge-m3
+MARKDOWN_VAULT_MCP_EMBEDDINGS_PATH=/path/to/store/embeddings
+```
+
 !!! warning "Privacy"
-    Document content (titles, headings, body text) is sent to OpenAI for embedding. Do not use this provider if your vault contains sensitive data you don't want to share with OpenAI. Use Ollama or FastEmbed for fully local, private embeddings.
+    Document content (titles, headings, body text) is sent to the configured OpenAI-compatible provider for embedding. Do not use this provider if your vault contains sensitive data you don't want to share with that provider. Use Ollama or FastEmbed for fully local, private embeddings.
 
 !!! tip "Cost"
     OpenAI embeddings are inexpensive. `text-embedding-3-small` costs $0.02 per million tokens. A vault of 1,000 notes (~500K tokens) costs about $0.01 to embed. Reindexing only processes changed documents.

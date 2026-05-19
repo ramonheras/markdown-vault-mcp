@@ -173,22 +173,30 @@ class OllamaProvider(EmbeddingProvider):
 
 
 class OpenAIProvider(EmbeddingProvider):
-    """Embedding provider backed by the OpenAI Embeddings API.
+    """Embedding provider backed by the OpenAI-compatible Embeddings API.
 
     Args:
         api_key: OpenAI API key for authentication.
-
-    Uses the ``text-embedding-3-small`` model.
+        base_url: Base URL for an OpenAI-compatible API.
+        model: Embedding model name.
     """
 
     _MODEL = "text-embedding-3-small"
-    _ENDPOINT = "https://api.openai.com/v1/embeddings"
+    _BASE_URL = "https://api.openai.com/v1"
 
-    def __init__(self, api_key: str) -> None:
+    def __init__(
+        self,
+        api_key: str,
+        *,
+        base_url: str = _BASE_URL,
+        model: str = _MODEL,
+    ) -> None:
         """Initialise OpenAIProvider with an explicit API key.
 
         Args:
             api_key: OpenAI API key for authentication.
+            base_url: Base URL for an OpenAI-compatible API.
+            model: Embedding model name.
 
         Raises:
             ImportError: If ``httpx`` is not installed.
@@ -206,9 +214,16 @@ class OpenAIProvider(EmbeddingProvider):
         if not api_key:
             raise RuntimeError("OpenAIProvider requires a non-empty api_key.")
         self._api_key = api_key
+        self._base_url = (base_url or self._BASE_URL).rstrip("/")
+        self._endpoint = f"{self._base_url}/embeddings"
+        self._model = model or self._MODEL
         self._dimension: int | None = None
 
-        logger.debug("OpenAIProvider initialised: model=%s", self._MODEL)
+        logger.debug(
+            "OpenAIProvider initialised: base_url=%s model=%s",
+            self._base_url,
+            self._model,
+        )
 
     def embed(self, texts: list[str]) -> list[list[float]]:
         """Embed a batch of texts via the OpenAI Embeddings API.
@@ -222,19 +237,19 @@ class OpenAIProvider(EmbeddingProvider):
         Raises:
             RuntimeError: If the OpenAI API returns an error response.
         """
-        payload = {"input": texts, "model": self._MODEL}
+        payload = {"input": texts, "model": self._model}
         headers = {
             "Authorization": f"Bearer {self._api_key}",
             "Content-Type": "application/json",
         }
 
         logger.debug(
-            "POST %s model=%s texts=%d", self._ENDPOINT, self._MODEL, len(texts)
+            "POST %s model=%s texts=%d", self._endpoint, self._model, len(texts)
         )
 
         with self._httpx.Client() as client:
             response = client.post(
-                self._ENDPOINT, json=payload, headers=headers, timeout=30.0
+                self._endpoint, json=payload, headers=headers, timeout=30.0
             )
 
         if response.status_code != 200:
@@ -277,7 +292,7 @@ class OpenAIProvider(EmbeddingProvider):
 
     @property
     def model_name(self) -> str:
-        return self._MODEL
+        return self._model
 
 
 class FastEmbedProvider(EmbeddingProvider):
@@ -396,7 +411,11 @@ def get_embedding_provider(config: CollectionConfig) -> EmbeddingProvider:
 
     if explicit == "openai":
         logger.info("Using OpenAIProvider (embedding_provider=openai)")
-        return OpenAIProvider(api_key=config.openai_api_key or "")
+        return OpenAIProvider(
+            api_key=config.openai_api_key or "",
+            base_url=config.openai_base_url,
+            model=config.openai_embedding_model,
+        )
 
     if explicit == "ollama":
         logger.info("Using OllamaProvider (embedding_provider=ollama)")
@@ -425,7 +444,11 @@ def get_embedding_provider(config: CollectionConfig) -> EmbeddingProvider:
     # Auto-detect: OpenAI API key present?
     if config.openai_api_key:
         logger.info("Auto-detected OpenAIProvider (openai_api_key is set)")
-        return OpenAIProvider(api_key=config.openai_api_key)
+        return OpenAIProvider(
+            api_key=config.openai_api_key,
+            base_url=config.openai_base_url,
+            model=config.openai_embedding_model,
+        )
 
     # Auto-detect: Ollama reachable?
     host = config.ollama_host.rstrip("/")
