@@ -1014,7 +1014,6 @@ class SearchManager:
             return notes
 
         exts = self._effective_attachment_extensions()
-        source_resolved = self._source_dir.resolve()
         attachments: list[AttachmentInfo] = []
 
         # Attachment scan runs outside _write_lock — result is a best-effort
@@ -1028,7 +1027,10 @@ class SearchManager:
             if "*" not in exts and suffix not in exts:
                 continue
             try:
-                rel = abs_path.relative_to(source_resolved)
+                # rglob yields paths anchored at the unresolved self._source_dir;
+                # using .resolve() here would mismatch when source_dir is itself
+                # a symlink and silently drop every attachment.
+                rel = abs_path.relative_to(self._source_dir)
             except ValueError as exc:
                 logger.warning(
                     "_list_attachments: skipping %s — outside source_dir (%s)",

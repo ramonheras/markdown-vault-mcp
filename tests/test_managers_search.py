@@ -195,6 +195,33 @@ class TestList:
         attachment_paths = [i.path for i in items if isinstance(i, AttachmentInfo)]
         assert ".hidden/secret.png" not in attachment_paths
 
+    def test_list_attachments_when_source_dir_is_symlink(self, tmp_path: Path) -> None:
+        # rglob anchors paths at the unresolved source_dir; relative_to must
+        # use the same unresolved path or attachments under a symlink-mounted
+        # SOURCE_DIR get filtered out by the ValueError branch.
+        real = tmp_path / "real"
+        real.mkdir()
+        (real / "image.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+        vault_link = tmp_path / "vault"
+        try:
+            vault_link.symlink_to(real, target_is_directory=True)
+        except (OSError, NotImplementedError) as exc:
+            pytest.skip(f"symlink creation not supported here: {exc}")
+
+        fts = FTSIndex(db_path=":memory:", indexed_frontmatter_fields=["tags"])
+        link_mgr = LinkManager(fts=fts, source_dir=vault_link)
+        mgr = SearchManager(
+            fts=fts,
+            source_dir=vault_link,
+            indexed_frontmatter_fields=["tags"],
+            link_manager=link_mgr,
+            attachment_extensions=["png"],
+        )
+
+        items = mgr.list(include_attachments=True)
+        attachment_paths = [i.path for i in items if isinstance(i, AttachmentInfo)]
+        assert "image.png" in attachment_paths
+
 
 # ---------------------------------------------------------------------------
 # list_folders
