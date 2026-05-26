@@ -6,7 +6,7 @@ All configuration is via environment variables. Most use the `MARKDOWN_VAULT_MCP
 
 | Variable | Type | Default | Required | Description |
 |----------|------|---------|----------|-------------|
-| `MARKDOWN_VAULT_MCP_SOURCE_DIR` | path | — | **Yes** | Path to the markdown vault directory |
+| `MARKDOWN_VAULT_MCP_SOURCE_DIR` | path | — | **Yes** | Path to the markdown vault directory. Symbolic links inside the vault are followed on Python 3.13+ (3.11/3.12 do not follow symlinks); cyclic links hang the scan, so symlink-farm layouts must be acyclic |
 | `MARKDOWN_VAULT_MCP_READ_ONLY` | bool | `true` | No | Set to `false` to enable write operations |
 | `MARKDOWN_VAULT_MCP_INDEX_PATH` | path | in-memory | No | Path to the SQLite FTS5 index file; set for persistence across restarts |
 | `MARKDOWN_VAULT_MCP_EMBEDDINGS_PATH` | path | disabled | No | Path to the numpy embeddings file; required to enable semantic search |
