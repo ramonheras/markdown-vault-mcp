@@ -1379,6 +1379,8 @@ For MCP server deployment:
 | `MARKDOWN_VAULT_MCP_FASTEMBED_MODEL` | FastEmbed model | `BAAI/bge-small-en-v1.5` |
 | `MARKDOWN_VAULT_MCP_FASTEMBED_CACHE_DIR` | FastEmbed model cache directory | FastEmbed default |
 | `OPENAI_API_KEY` | OpenAI API key | none |
+| `OPENAI_BASE_URL` / `MARKDOWN_VAULT_MCP_OPENAI_BASE_URL` | OpenAI-compatible API base URL (SiliconFlow, Together, internal gateways, …) | `https://api.openai.com/v1` |
+| `OPENAI_EMBEDDING_MODEL` / `MARKDOWN_VAULT_MCP_OPENAI_EMBEDDING_MODEL` | OpenAI-compatible embedding model name | `text-embedding-3-small` |
 
 #### Example Configurations
 

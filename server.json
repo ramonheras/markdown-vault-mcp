@@ -95,6 +95,16 @@
           "isSecret": true
         },
         {
+          "name": "OPENAI_BASE_URL",
+          "description": "OpenAI-compatible API base URL (e.g. SiliconFlow, Together, internal gateways); also accepts MARKDOWN_VAULT_MCP_OPENAI_BASE_URL",
+          "default": "https://api.openai.com/v1"
+        },
+        {
+          "name": "OPENAI_EMBEDDING_MODEL",
+          "description": "OpenAI-compatible embedding model name; also accepts MARKDOWN_VAULT_MCP_OPENAI_EMBEDDING_MODEL",
+          "default": "text-embedding-3-small"
+        },
+        {
           "name": "MARKDOWN_VAULT_MCP_OLLAMA_MODEL",
           "description": "Ollama embedding model name",
           "default": "nomic-embed-text"
@@ -315,6 +325,16 @@
           "name": "OPENAI_API_KEY",
           "description": "OpenAI API key (required when MARKDOWN_VAULT_MCP_EMBEDDING_PROVIDER=openai)",
           "isSecret": true
+        },
+        {
+          "name": "OPENAI_BASE_URL",
+          "description": "OpenAI-compatible API base URL (e.g. SiliconFlow, Together, internal gateways); also accepts MARKDOWN_VAULT_MCP_OPENAI_BASE_URL",
+          "default": "https://api.openai.com/v1"
+        },
+        {
+          "name": "OPENAI_EMBEDDING_MODEL",
+          "description": "OpenAI-compatible embedding model name; also accepts MARKDOWN_VAULT_MCP_OPENAI_EMBEDDING_MODEL",
+          "default": "text-embedding-3-small"
         },
         {
           "name": "MARKDOWN_VAULT_MCP_OLLAMA_MODEL",
