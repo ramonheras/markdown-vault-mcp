@@ -18,6 +18,7 @@ from markdown_vault_mcp.fts_index import _derive_folder
 from markdown_vault_mcp.scanner import parse_note, scan_directory
 from markdown_vault_mcp.types import IndexStats, ParsedNote, ReindexResult
 from markdown_vault_mcp.utils import is_path_excluded
+from markdown_vault_mcp.utils.fs import GLOB_SYMLINK_KWARGS
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -243,7 +244,7 @@ class IndexManager:
                 vectors.save(self._embeddings_path)
 
         # Count how many files were skipped due to required_frontmatter.
-        all_files = list(self._source_dir.glob("**/*.md"))
+        all_files = list(self._source_dir.glob("**/*.md", **GLOB_SYMLINK_KWARGS))
         skipped = len(all_files) - len(notes)
 
         # Resolve vault-wide wikilinks now that all documents are indexed.

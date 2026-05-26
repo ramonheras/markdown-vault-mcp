@@ -13,6 +13,7 @@ import yaml
 
 from markdown_vault_mcp.hashing import compute_etag
 from markdown_vault_mcp.types import Chunk, LinkInfo, ParsedNote
+from markdown_vault_mcp.utils.fs import GLOB_SYMLINK_KWARGS
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -794,7 +795,7 @@ def scan_directory(
     exclude_patterns = exclude_patterns or []
     skipped_required: int = 0
 
-    for abs_path in sorted(source_dir.glob(glob_pattern)):
+    for abs_path in sorted(source_dir.glob(glob_pattern, **GLOB_SYMLINK_KWARGS)):
         if not abs_path.is_file():
             continue
 

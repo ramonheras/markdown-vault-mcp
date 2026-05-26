@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -63,6 +64,28 @@ def test_scan_directory_discovers_all_md_files(fixtures_path: Path) -> None:
         "subfolder/deep/doc.md",
     }
     assert paths == expected
+
+
+@pytest.mark.skipif(
+    sys.version_info < (3, 13),
+    reason="recurse_symlinks kwarg added in 3.13",
+)
+def test_scan_directory_follows_symlinked_subdirs(tmp_path: Path) -> None:
+    # Python 3.13 changed Path.glob to skip symlinked subdirs by default; this
+    # would silently zero-index symlink-farm vault layouts (issue #508).
+    real = tmp_path / "real"
+    real.mkdir()
+    (real / "linked.md").write_text("# Linked\nBody.\n")
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    try:
+        (vault / "via_symlink").symlink_to(real, target_is_directory=True)
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip(f"symlink creation not supported here: {exc}")
+
+    paths = {n.path for n in scan_directory(vault)}
+    assert "via_symlink/linked.md" in paths
 
 
 # ---------------------------------------------------------------------------

@@ -36,6 +36,7 @@ from markdown_vault_mcp.utils import (
     is_path_excluded,
     validate_path,
 )
+from markdown_vault_mcp.utils.fs import GLOB_SYMLINK_KWARGS
 
 if TYPE_CHECKING:
     import builtins
@@ -1013,12 +1014,11 @@ class SearchManager:
             return notes
 
         exts = self._effective_attachment_extensions()
-        source_resolved = self._source_dir.resolve()
         attachments: list[AttachmentInfo] = []
 
         # Attachment scan runs outside _write_lock — result is a best-effort
         # snapshot and is not atomic with the FTS note listing above.
-        for abs_path in self._source_dir.rglob("*"):
+        for abs_path in self._source_dir.rglob("*", **GLOB_SYMLINK_KWARGS):
             if not abs_path.is_file():
                 continue
             if abs_path.suffix.lower() == ".md":
@@ -1027,7 +1027,10 @@ class SearchManager:
             if "*" not in exts and suffix not in exts:
                 continue
             try:
-                rel = abs_path.relative_to(source_resolved)
+                # rglob yields paths anchored at the unresolved self._source_dir;
+                # using .resolve() here would mismatch when source_dir is itself
+                # a symlink and silently drop every attachment.
+                rel = abs_path.relative_to(self._source_dir)
             except ValueError as exc:
                 logger.warning(
                     "_list_attachments: skipping %s — outside source_dir (%s)",
