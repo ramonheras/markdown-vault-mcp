@@ -36,6 +36,7 @@ from markdown_vault_mcp.utils import (
     is_path_excluded,
     validate_path,
 )
+from markdown_vault_mcp.utils.fs import GLOB_SYMLINK_KWARGS
 
 if TYPE_CHECKING:
     import builtins
@@ -1018,7 +1019,7 @@ class SearchManager:
 
         # Attachment scan runs outside _write_lock — result is a best-effort
         # snapshot and is not atomic with the FTS note listing above.
-        for abs_path in self._source_dir.rglob("*"):
+        for abs_path in self._source_dir.rglob("*", **GLOB_SYMLINK_KWARGS):
             if not abs_path.is_file():
                 continue
             if abs_path.suffix.lower() == ".md":

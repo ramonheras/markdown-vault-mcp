@@ -10,6 +10,7 @@ from pathlib import Path
 
 from markdown_vault_mcp.hashing import compute_file_hash
 from markdown_vault_mcp.types import ChangeSet, ParsedNote
+from markdown_vault_mcp.utils.fs import GLOB_SYMLINK_KWARGS
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +76,7 @@ class ChangeTracker:
 
         # Build a mapping of relative path → sha256 for current disk contents.
         disk_state: dict[str, str] = {}
-        for abs_path in sorted(source_dir.glob(glob_pattern)):
+        for abs_path in sorted(source_dir.glob(glob_pattern, **GLOB_SYMLINK_KWARGS)):
             if not abs_path.is_file():
                 continue
             try:
