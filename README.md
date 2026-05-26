@@ -222,6 +222,8 @@ All configuration is via environment variables with the `MARKDOWN_VAULT_MCP_` pr
 | `MARKDOWN_VAULT_MCP_EMBEDDING_PROVIDER` | auto-detect | Embedding provider: `openai`, `ollama`, or `fastembed` |
 | `OLLAMA_HOST` | `http://localhost:11434` | Ollama server URL (**not** `MARKDOWN_VAULT_MCP_`-prefixed) |
 | `OPENAI_API_KEY` | — | OpenAI API key for the OpenAI embedding provider (**not** `MARKDOWN_VAULT_MCP_`-prefixed) |
+| `MARKDOWN_VAULT_MCP_OPENAI_BASE_URL` / `OPENAI_BASE_URL` | `https://api.openai.com/v1` | OpenAI-compatible API base URL for embeddings |
+| `MARKDOWN_VAULT_MCP_OPENAI_EMBEDDING_MODEL` / `OPENAI_EMBEDDING_MODEL` | `text-embedding-3-small` | OpenAI-compatible embedding model name |
 | `MARKDOWN_VAULT_MCP_OLLAMA_MODEL` | `nomic-embed-text` | Ollama embedding model name |
 | `MARKDOWN_VAULT_MCP_OLLAMA_CPU_ONLY` | `false` | Force Ollama to use CPU only |
 | `MARKDOWN_VAULT_MCP_FASTEMBED_MODEL` | `BAAI/bge-small-en-v1.5` | FastEmbed model name |

@@ -258,6 +258,25 @@ class TestOpenAIProvider:
         url = call_args[0][0] if call_args[0] else call_args[1]["url"]
         assert url == "https://api.openai.com/v1/embeddings"
 
+    def test_custom_base_url_and_model(self) -> None:
+        mock_client, _ = _make_httpx_mock(
+            json_body={"data": [{"index": 0, "embedding": [0.1]}]}
+        )
+        with patch("httpx.Client", return_value=mock_client):
+            provider = OpenAIProvider(
+                api_key="sk-test",
+                base_url="https://api.siliconflow.cn/v1/",
+                model="BAAI/bge-m3",
+            )
+            provider.embed(["hello"])
+
+        call_args = mock_client.post.call_args
+        url = call_args[0][0] if call_args[0] else call_args[1]["url"]
+        assert url == "https://api.siliconflow.cn/v1/embeddings"
+        _, call_kwargs = mock_client.post.call_args
+        assert call_kwargs["json"]["model"] == "BAAI/bge-m3"
+        assert provider.model_name == "BAAI/bge-m3"
+
 
 class TestFastEmbedProvider:
     def test_embed_uses_fastembed_model_and_cache(self) -> None:
@@ -324,10 +343,16 @@ class TestGetEmbeddingProvider:
         return mock_client
 
     def test_explicit_openai_returns_openai_provider(self) -> None:
-        cfg = _config(embedding_provider="openai", openai_api_key="sk-test")
+        cfg = _config(
+            embedding_provider="openai",
+            openai_api_key="sk-test",
+            openai_base_url="https://api.siliconflow.cn/v1",
+            openai_embedding_model="BAAI/bge-m3",
+        )
         with patch("httpx.Client"):
             provider = get_embedding_provider(cfg)
         assert isinstance(provider, OpenAIProvider)
+        assert provider.model_name == "BAAI/bge-m3"
 
     def test_explicit_ollama_returns_ollama_provider(self) -> None:
         cfg = _config(embedding_provider="ollama")
