@@ -874,9 +874,7 @@ class TestLoadConfigEmbeddingFields:
         config = load_config()
         assert config.openai_base_url == "https://api.prefixed.example/v1"
 
-    def test_openai_base_url_default(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_openai_base_url_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """load_config() defaults openai_base_url to the OpenAI API base URL."""
         monkeypatch.delenv("MARKDOWN_VAULT_MCP_OPENAI_BASE_URL", raising=False)
         monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
@@ -895,9 +893,7 @@ class TestLoadConfigEmbeddingFields:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """load_config() reads OPENAI_EMBEDDING_MODEL when prefixed var is absent."""
-        monkeypatch.delenv(
-            "MARKDOWN_VAULT_MCP_OPENAI_EMBEDDING_MODEL", raising=False
-        )
+        monkeypatch.delenv("MARKDOWN_VAULT_MCP_OPENAI_EMBEDDING_MODEL", raising=False)
         monkeypatch.setenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-large")
         config = load_config()
         assert config.openai_embedding_model == "text-embedding-3-large"
@@ -918,9 +914,7 @@ class TestLoadConfigEmbeddingFields:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """load_config() defaults openai_embedding_model to text-embedding-3-small."""
-        monkeypatch.delenv(
-            "MARKDOWN_VAULT_MCP_OPENAI_EMBEDDING_MODEL", raising=False
-        )
+        monkeypatch.delenv("MARKDOWN_VAULT_MCP_OPENAI_EMBEDDING_MODEL", raising=False)
         monkeypatch.delenv("OPENAI_EMBEDDING_MODEL", raising=False)
         config = load_config()
         assert config.openai_embedding_model == "text-embedding-3-small"

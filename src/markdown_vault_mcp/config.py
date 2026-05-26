@@ -733,19 +733,15 @@ def load_config() -> CollectionConfig:
     raw_openai_base_url = (
         _env("OPENAI_BASE_URL") or os.environ.get("OPENAI_BASE_URL") or ""
     ).strip()
-    openai_base_url: str = (
-        raw_openai_base_url or "https://api.openai.com/v1"
-    ).rstrip("/")
+    openai_base_url: str = (raw_openai_base_url or "https://api.openai.com/v1").rstrip(
+        "/"
+    )
     logger.debug("load_config: openai_base_url=%s", openai_base_url)
 
     raw_openai_embedding_model = (
-        _env("OPENAI_EMBEDDING_MODEL")
-        or os.environ.get("OPENAI_EMBEDDING_MODEL")
-        or ""
+        _env("OPENAI_EMBEDDING_MODEL") or os.environ.get("OPENAI_EMBEDDING_MODEL") or ""
     ).strip()
-    openai_embedding_model: str = (
-        raw_openai_embedding_model or "text-embedding-3-small"
-    )
+    openai_embedding_model: str = raw_openai_embedding_model or "text-embedding-3-small"
     logger.debug("load_config: openai_embedding_model=%s", openai_embedding_model)
 
     raw_fastembed_model = (_env("FASTEMBED_MODEL") or "").strip()
