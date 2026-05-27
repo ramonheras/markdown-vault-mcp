@@ -34,10 +34,10 @@ def _json_default(obj: Any) -> str:
     raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
 
 
-# DDL executed once on connection open.
+# DDL executed once on connection open. `foreign_keys` is intentionally NOT
+# set here — `_apply_pragmas` sets it on every connection (primary and
+# per-thread) before `_init_schema` runs.
 _SCHEMA_SQL = """
-PRAGMA foreign_keys = ON;
-
 CREATE TABLE IF NOT EXISTS documents (
     id INTEGER PRIMARY KEY,
     path TEXT UNIQUE NOT NULL,
@@ -1142,26 +1142,22 @@ class FTSIndex:
         Returns:
             Number of link rows whose ``target_path`` was updated.
         """
+        conn = self._conn()
         # Load all document paths once into a Python set/list for in-memory
         # matching — avoids O(N) SQL round-trips (one SELECT per wikilink row).
         doc_paths: list[str] = [
-            r["path"]
-            for r in self._conn().execute("SELECT path FROM documents").fetchall()
+            r["path"] for r in conn.execute("SELECT path FROM documents").fetchall()
         ]
 
         # Build alias → document path mapping for fallback resolution.
         # Case-insensitive: Obsidian alias matching is case-insensitive.
-        alias_rows = (
-            self._conn()
-            .execute(
-                """
+        alias_rows = conn.execute(
+            """
             SELECT da.alias, d.path
             FROM document_aliases da
             JOIN documents d ON d.id = da.document_id
             """
-            )
-            .fetchall()
-        )
+        ).fetchall()
         # Map lowercased alias to list of document paths (multiple docs could
         # share an alias; pick shortest path like the path-based resolution).
         alias_map: dict[str, list[str]] = {}
@@ -1171,19 +1167,15 @@ class FTSIndex:
         # Fetch all wikilinks eligible for vault-wide resolution.
         # Explicit relative prefixes (./  ../) are excluded — those were
         # resolved at scan time and must not be overwritten.
-        rows = (
-            self._conn()
-            .execute(
-                """
+        rows = conn.execute(
+            """
             SELECT id, raw_target, target_path
             FROM links
             WHERE link_type = 'wikilink'
               AND raw_target NOT LIKE './%'
               AND raw_target NOT LIKE '../%'
             """
-            )
-            .fetchall()
-        )
+        ).fetchall()
 
         # Resolve each wikilink in Python, then batch-UPDATE.
         updates: list[tuple[str, int]] = []
@@ -1216,7 +1208,6 @@ class FTSIndex:
             if new_path != row["target_path"]:
                 updates.append((new_path, row["id"]))
 
-        conn = self._conn()
         with conn:
             conn.executemany("UPDATE links SET target_path = ? WHERE id = ?", updates)
         updated = len(updates)

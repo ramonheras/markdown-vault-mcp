@@ -58,6 +58,42 @@ def fts_memory():
         idx.close()
 
 
+@pytest.fixture
+def close_tracker() -> tuple[list[object], type]:
+    """Return (closed_list, tracker_class) for monkey-patching `sqlite3.connect`.
+
+    The tracker class is a forwarding wrapper around a `sqlite3.Connection`
+    that records every `close()` call into `closed_list`. Needed because
+    `sqlite3.Connection.close` is a read-only attribute and cannot be
+    monkey-patched directly.
+    """
+    closed: list[object] = []
+
+    class _CloseTracker:
+        _inner: sqlite3.Connection
+
+        def __init__(self, inner: sqlite3.Connection) -> None:
+            object.__setattr__(self, "_inner", inner)
+
+        def close(self) -> None:
+            closed.append(self._inner)
+            self._inner.close()
+
+        def __getattr__(self, name: str) -> object:
+            return getattr(self._inner, name)
+
+        def __setattr__(self, name: str, value: object) -> None:
+            setattr(self._inner, name, value)
+
+        def __enter__(self) -> sqlite3.Connection:
+            return self._inner.__enter__()
+
+        def __exit__(self, *args: object) -> object:
+            return self._inner.__exit__(*args)  # type: ignore[arg-type]
+
+    return closed, _CloseTracker
+
+
 def _make_collection(tmp_path: Path) -> Collection:
     """Build a writeable file-backed Collection."""
     vault = tmp_path / "vault"
@@ -414,40 +450,18 @@ def test_concurrent_build_and_reads_pr518_pattern(tmp_path: Path) -> None:
 
 
 def test_init_baseexception_cleanup_closes_primary(
-    monkeypatch: pytest.MonkeyPatch, tmp_db: Path
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_db: Path,
+    close_tracker: tuple[list[object], type],
 ) -> None:
     """If _init_schema fails, the primary connection must be closed before
     the exception propagates — no leaked file handle."""
 
-    closed: list[object] = []
+    closed, tracker_cls = close_tracker
     real_connect = sqlite3.connect
 
-    class _CloseTracker:
-        """Forwarding wrapper that records close() calls (sqlite3.Connection.close is read-only)."""
-
-        _inner: sqlite3.Connection
-
-        def __init__(self, inner: sqlite3.Connection) -> None:
-            object.__setattr__(self, "_inner", inner)
-
-        def close(self) -> None:
-            closed.append(self._inner)
-            self._inner.close()
-
-        def __getattr__(self, name: str) -> object:
-            return getattr(self._inner, name)
-
-        def __setattr__(self, name: str, value: object) -> None:
-            setattr(self._inner, name, value)
-
-        def __enter__(self) -> sqlite3.Connection:
-            return self._inner.__enter__()
-
-        def __exit__(self, *args: object) -> object:
-            return self._inner.__exit__(*args)  # type: ignore[arg-type]
-
     def tracking_connect(*args: object, **kwargs: object) -> sqlite3.Connection:
-        return _CloseTracker(real_connect(*args, **kwargs))  # type: ignore[return-value,arg-type]
+        return tracker_cls(real_connect(*args, **kwargs))  # type: ignore[return-value,arg-type,no-any-return]
 
     monkeypatch.setattr(
         "markdown_vault_mcp.fts_index.sqlite3.connect", tracking_connect
@@ -493,40 +507,18 @@ def test_probe_shared_cache_raises_when_documents_invisible(
 
 
 def test_conn_slow_path_baseexception_cleanup(
-    monkeypatch: pytest.MonkeyPatch, fts: FTSIndex
+    monkeypatch: pytest.MonkeyPatch,
+    fts: FTSIndex,
+    close_tracker: tuple[list[object], type],
 ) -> None:
     """If _apply_pragmas fails on a per-thread open, the new connection
     must be closed and the TLS slot left unset so a retry re-opens."""
 
-    closed: list[object] = []
+    closed, tracker_cls = close_tracker
     real_connect = sqlite3.connect
 
-    class _CloseTracker:
-        """Forwarding wrapper that records close() calls (sqlite3.Connection.close is read-only)."""
-
-        _inner: sqlite3.Connection
-
-        def __init__(self, inner: sqlite3.Connection) -> None:
-            object.__setattr__(self, "_inner", inner)
-
-        def close(self) -> None:
-            closed.append(self._inner)
-            self._inner.close()
-
-        def __getattr__(self, name: str) -> object:
-            return getattr(self._inner, name)
-
-        def __setattr__(self, name: str, value: object) -> None:
-            setattr(self._inner, name, value)
-
-        def __enter__(self) -> sqlite3.Connection:
-            return self._inner.__enter__()
-
-        def __exit__(self, *args: object) -> object:
-            return self._inner.__exit__(*args)  # type: ignore[arg-type]
-
     def tracking_connect(*args: object, **kwargs: object) -> sqlite3.Connection:
-        return _CloseTracker(real_connect(*args, **kwargs))  # type: ignore[return-value,arg-type]
+        return tracker_cls(real_connect(*args, **kwargs))  # type: ignore[return-value,arg-type,no-any-return]
 
     monkeypatch.setattr(
         "markdown_vault_mcp.fts_index.sqlite3.connect", tracking_connect
