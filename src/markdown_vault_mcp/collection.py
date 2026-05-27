@@ -89,6 +89,17 @@ class Collection:
     Instantiate once per collection root.  Call :meth:`build_index` (or let
     lazy initialisation handle it) before querying.
 
+    **Thread safety (issue #519):** every public method on this class is safe
+    to call from any thread, concurrently with other reads and writes from
+    any other thread. Writes serialise against each other via the internal
+    ``_write_lock`` (RLock). ``close()`` is safe from any thread; after
+    ``close()`` the collection must not be used. Cross-method atomicity
+    (e.g. read-then-write without intervening concurrent write) is the
+    caller's responsibility — pass ``if_match=`` to write methods for
+    optimistic concurrency. ``fork()`` is not supported. See ``docs/design.md``
+    "Collection thread-safety contract" for the underlying per-thread
+    SQLite-connection model.
+
     Args:
         source_dir: Root directory of the markdown collection.
         index_path: Path to the SQLite index file.  ``None`` (default) uses
