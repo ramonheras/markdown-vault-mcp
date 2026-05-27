@@ -258,6 +258,11 @@ class FTSIndex:
                     "fts_index.__init__ cleanup: error closing primary",
                     exc_info=True,
                 )
+            # Mirror the _conn() slow-path TLS clear: if a partially-built
+            # FTSIndex's _local.conn still pointed at the now-closed primary,
+            # a caller holding the instance after __init__ raised would
+            # fast-path the closed conn instead of getting ProgrammingError.
+            self._local.conn = None
             self._all_conns.clear()
             self._primary_conn = None
             raise
@@ -417,7 +422,11 @@ class FTSIndex:
             # and the registry append would otherwise leave a closed conn in
             # TLS for the next fast-path call to silently return.
             self._local.conn = None
-            with contextlib.suppress(ValueError):
+            # Re-acquire _reg_lock for the registry mutation: a concurrent
+            # close() iterates _all_conns under the lock, so an unguarded
+            # remove() here could trigger "list changed size during iteration"
+            # in close().
+            with self._reg_lock, contextlib.suppress(ValueError):
                 self._all_conns.remove(new_conn)
             new_conn.close()
             raise
