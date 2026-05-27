@@ -546,6 +546,60 @@ def test_conn_slow_path_baseexception_cleanup(
     assert len(closed) >= 1, "new per-thread connection must be closed on failure"
 
 
+def test_conn_slow_path_failure_clears_tls_slot(fts: FTSIndex) -> None:
+    """If the slow-path open fails AFTER ``self._local.conn`` was set but
+    BEFORE registration completes (e.g. a BaseException between the two
+    writes inside the lock), the cleanup MUST clear the TLS slot so the
+    next ``_conn()`` call does not fast-path return a closed connection.
+
+    Regression for the bug where ``self._local.conn = new_conn`` was
+    assigned and a BaseException between that and ``_all_conns.append``
+    left a closed conn in TLS for subsequent silent reuse.
+
+    Injection method: patch ``list.append`` on ``_all_conns`` so the
+    append raises after the TLS assignment has already happened.
+    """
+    append_calls = {"n": 0}
+
+    class _ExplodingList(list):
+        def append(self, item: object) -> None:
+            append_calls["n"] += 1
+            # First patched call is the worker's registration — fail after
+            # the TLS slot has already been set inside the lock block.
+            if append_calls["n"] == 1:
+                raise RuntimeError("simulated failure between TLS set and append")
+            super().append(item)
+
+    # Swap registry with the exploding subclass, preserving the primary
+    # connection entry the fixture registered before the patch.
+    fts._all_conns = _ExplodingList(fts._all_conns)
+
+    first_error: list[BaseException] = []
+    second_result: list[sqlite3.Connection] = []
+
+    def worker() -> None:
+        try:
+            fts._conn()
+        except BaseException as exc:
+            first_error.append(exc)
+        # Subsequent call from the same thread must NOT fast-path return a
+        # stale closed conn — it must go to the slow path and succeed.
+        try:
+            second_result.append(fts._conn())
+        except BaseException as exc:
+            first_error.append(exc)
+
+    t = threading.Thread(target=worker)
+    t.start()
+    t.join()
+
+    assert len(first_error) == 1, f"unexpected errors: {first_error!r}"
+    assert isinstance(first_error[0], RuntimeError)
+    assert len(second_result) == 1
+    # The recovered conn must be usable.
+    second_result[0].execute("SELECT 1").fetchone()
+
+
 def test_close_continues_when_one_connection_raises(fts: FTSIndex) -> None:
     """If one ``conn.close()`` raises a non-sqlite3 exception (e.g. OSError),
     ``close()`` must continue iterating and close the remaining connections —

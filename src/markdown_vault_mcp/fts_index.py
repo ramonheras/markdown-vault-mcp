@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import datetime
 import json
 import logging
@@ -411,6 +412,13 @@ class FTSIndex:
         except BaseException:
             # Cover KeyboardInterrupt / SystemExit / asyncio.CancelledError —
             # sqlite3.Error alone would leak the open connection on teardown.
+            # Clear the TLS slot first: CPython delivers signals at bytecode
+            # boundaries, so an interrupt between the _local.conn assignment
+            # and the registry append would otherwise leave a closed conn in
+            # TLS for the next fast-path call to silently return.
+            self._local.conn = None
+            with contextlib.suppress(ValueError):
+                self._all_conns.remove(new_conn)
             new_conn.close()
             raise
         return new_conn
