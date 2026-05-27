@@ -288,15 +288,21 @@ def test_memory_db_is_shared_across_threads(fts_memory: FTSIndex) -> None:
     empty DB and the schema was invisible. The translation must fix this.
     """
 
+    errors: list[BaseException] = []
+
     def query(out: dict[str, object]) -> None:
-        conn = fts_memory._conn()
-        # If the per-thread conn sees an empty DB, this raises OperationalError.
-        out["count"] = conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0]
+        try:
+            conn = fts_memory._conn()
+            # If the per-thread conn sees an empty DB, this raises OperationalError.
+            out["count"] = conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0]
+        except BaseException as exc:
+            errors.append(exc)
 
     out: dict[str, object] = {}
     t = threading.Thread(target=query, args=(out,))
     t.start()
     t.join()
+    assert not errors, f"worker thread raised: {errors[0]!r}"
     assert out.get("count") == 0
 
 
@@ -387,6 +393,10 @@ def test_concurrent_build_and_reads_pr518_pattern(tmp_path: Path) -> None:
     fg.start()
     fg.join(timeout=60)
     bg.join(timeout=10)
+    # If either thread is still alive the join timed out — a deadlock would
+    # otherwise leave errors empty and let the test silently pass.
+    assert not fg.is_alive(), "foreground thread timed out — possible deadlock"
+    assert not bg.is_alive(), "background thread timed out — possible deadlock"
 
     try:
         for exc in errors:
@@ -401,3 +411,144 @@ def test_concurrent_build_and_reads_pr518_pattern(tmp_path: Path) -> None:
         assert not errors, f"unexpected errors: {errors!r}"
     finally:
         coll.close()
+
+
+def test_init_baseexception_cleanup_closes_primary(
+    monkeypatch: pytest.MonkeyPatch, tmp_db: Path
+) -> None:
+    """If _init_schema fails, the primary connection must be closed before
+    the exception propagates — no leaked file handle."""
+
+    closed: list[object] = []
+    real_connect = sqlite3.connect
+
+    class _CloseTracker:
+        """Forwarding wrapper that records close() calls (sqlite3.Connection.close is read-only)."""
+
+        _inner: sqlite3.Connection
+
+        def __init__(self, inner: sqlite3.Connection) -> None:
+            object.__setattr__(self, "_inner", inner)
+
+        def close(self) -> None:
+            closed.append(self._inner)
+            self._inner.close()
+
+        def __getattr__(self, name: str) -> object:
+            return getattr(self._inner, name)
+
+        def __setattr__(self, name: str, value: object) -> None:
+            setattr(self._inner, name, value)
+
+        def __enter__(self) -> sqlite3.Connection:
+            return self._inner.__enter__()
+
+        def __exit__(self, *args: object) -> object:
+            return self._inner.__exit__(*args)  # type: ignore[arg-type]
+
+    def tracking_connect(*args: object, **kwargs: object) -> sqlite3.Connection:
+        return _CloseTracker(real_connect(*args, **kwargs))  # type: ignore[return-value,arg-type]
+
+    monkeypatch.setattr(
+        "markdown_vault_mcp.fts_index.sqlite3.connect", tracking_connect
+    )
+
+    def boom_schema(_self: object, _conn: object) -> None:
+        raise RuntimeError("simulated schema failure")
+
+    monkeypatch.setattr(FTSIndex, "_init_schema", boom_schema)
+
+    with pytest.raises(RuntimeError, match="simulated schema failure"):
+        FTSIndex(db_path=tmp_db)
+
+    assert len(closed) == 1, (
+        f"primary connection must be closed exactly once; got {len(closed)}"
+    )
+
+
+def test_probe_shared_cache_raises_when_documents_invisible(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If a second connection to the shared-cache URI cannot see the
+    schema, _probe_shared_cache must raise RuntimeError with an
+    operator-actionable message — not let per-thread reads fail mysteriously
+    downstream."""
+
+    real_connect = sqlite3.connect
+    call_count = {"n": 0}
+
+    def fake_connect(*args: object, **kwargs: object) -> sqlite3.Connection:
+        call_count["n"] += 1
+        # Simulate SQLITE_ENABLE_SHARED_CACHE missing by giving the probe
+        # (second connect) a fresh empty in-memory DB instead of joining
+        # the shared cache.
+        if call_count["n"] == 2:
+            return real_connect(":memory:", check_same_thread=False)
+        return real_connect(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr("markdown_vault_mcp.fts_index.sqlite3.connect", fake_connect)
+
+    with pytest.raises(RuntimeError, match="shared-cache probe failed"):
+        FTSIndex(db_path=":memory:")
+
+
+def test_conn_slow_path_baseexception_cleanup(
+    monkeypatch: pytest.MonkeyPatch, fts: FTSIndex
+) -> None:
+    """If _apply_pragmas fails on a per-thread open, the new connection
+    must be closed and the TLS slot left unset so a retry re-opens."""
+
+    closed: list[object] = []
+    real_connect = sqlite3.connect
+
+    class _CloseTracker:
+        """Forwarding wrapper that records close() calls (sqlite3.Connection.close is read-only)."""
+
+        _inner: sqlite3.Connection
+
+        def __init__(self, inner: sqlite3.Connection) -> None:
+            object.__setattr__(self, "_inner", inner)
+
+        def close(self) -> None:
+            closed.append(self._inner)
+            self._inner.close()
+
+        def __getattr__(self, name: str) -> object:
+            return getattr(self._inner, name)
+
+        def __setattr__(self, name: str, value: object) -> None:
+            setattr(self._inner, name, value)
+
+        def __enter__(self) -> sqlite3.Connection:
+            return self._inner.__enter__()
+
+        def __exit__(self, *args: object) -> object:
+            return self._inner.__exit__(*args)  # type: ignore[arg-type]
+
+    def tracking_connect(*args: object, **kwargs: object) -> sqlite3.Connection:
+        return _CloseTracker(real_connect(*args, **kwargs))  # type: ignore[return-value,arg-type]
+
+    monkeypatch.setattr(
+        "markdown_vault_mcp.fts_index.sqlite3.connect", tracking_connect
+    )
+
+    def boom_pragmas(_self: object, _conn: object) -> None:
+        raise RuntimeError("simulated pragma failure")
+
+    monkeypatch.setattr(FTSIndex, "_apply_pragmas", boom_pragmas)
+
+    errors: list[BaseException] = []
+
+    def worker() -> None:
+        try:
+            fts._conn()
+        except BaseException as exc:
+            errors.append(exc)
+
+    t = threading.Thread(target=worker)
+    t.start()
+    t.join()
+
+    assert len(errors) == 1
+    assert isinstance(errors[0], RuntimeError)
+    assert len(closed) >= 1, "new per-thread connection must be closed on failure"

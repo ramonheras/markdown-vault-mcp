@@ -225,26 +225,41 @@ class FTSIndex:
         self._closed = False
         self._primary_conn: sqlite3.Connection | None = None
 
-        # Open primary connection on the constructing thread.
+        # Open primary connection on the constructing thread. The whole
+        # init-schema + probe sequence runs under one BaseException cleanup
+        # block so any failure (pragma, ALTER TABLE, or the shared-cache
+        # probe) closes the primary connection — symmetric with the
+        # slow-path cleanup in _conn().
         primary = self._connect()
         try:
             # PRAGMAS FIRST — busy_timeout must be active for ALTER TABLE migrations
             # in _init_schema (per #519 carryover).
             self._apply_pragmas(primary)
             self._init_schema(primary)
+            self._local.conn = primary
+            self._primary_conn = primary
+            self._all_conns.append(primary)
+            # Fail-fast probe: if shared-cache ``:memory:`` translation is in
+            # use but SQLITE_ENABLE_SHARED_CACHE was disabled at build time, a
+            # second connection to the URI will see an empty DB. Surface that
+            # immediately instead of letting per-thread reads fail mysteriously
+            # downstream.
+            if self._is_memory:
+                self._probe_shared_cache()
         except BaseException:
-            primary.close()
+            # Close the primary regardless of how far init progressed (the
+            # probe call may fail after append, leaving primary in
+            # _all_conns; reset both paths to a clean state).
+            try:
+                primary.close()
+            except Exception:
+                logger.debug(
+                    "fts_index.__init__ cleanup: error closing primary",
+                    exc_info=True,
+                )
+            self._all_conns.clear()
+            self._primary_conn = None
             raise
-        self._local.conn = primary
-        self._primary_conn = primary
-        self._all_conns.append(primary)
-
-        # Fail-fast probe: if shared-cache ``:memory:`` translation is in use
-        # but SQLITE_ENABLE_SHARED_CACHE was disabled at build time, a second
-        # connection to the URI will see an empty DB. Surface that immediately
-        # instead of letting per-thread reads fail mysteriously downstream.
-        if self._is_memory:
-            self._probe_shared_cache()
 
     def _connect(self) -> sqlite3.Connection:
         """Open a raw sqlite3 connection to this index's URI."""
@@ -338,6 +353,10 @@ class FTSIndex:
         would then fail with confusing OperationalErrors. Surface that
         condition immediately with an operator-actionable error.
         """
+        # The probe connection intentionally bypasses _all_conns: it is opened
+        # and closed entirely within this method before the FTSIndex instance
+        # is exposed to any caller, so the registry-based close() machinery is
+        # not needed for it.
         probe = self._connect()
         try:
             row = probe.execute(
@@ -350,7 +369,13 @@ class FTSIndex:
                     "path for db_path, or rebuild SQLite with shared-cache support."
                 )
         finally:
-            probe.close()
+            try:
+                probe.close()
+            except sqlite3.Error:
+                logger.debug(
+                    "fts_index._probe_shared_cache: probe.close failed",
+                    exc_info=True,
+                )
 
     def _conn(self) -> sqlite3.Connection:
         """Return this thread's sqlite3 connection, opening one on first touch.
@@ -657,8 +682,9 @@ class FTSIndex:
             Total number of chunks (sections) indexed.
         """
         total_chunks = 0
-        with self._conn():
-            cur = self._conn().cursor()
+        conn = self._conn()
+        with conn:
+            cur = conn.cursor()
             for note in notes:
                 folder = _derive_folder(note.path)
                 self._delete_document(cur, note.path)
@@ -689,8 +715,9 @@ class FTSIndex:
             Number of chunks (sections) indexed for this document.
         """
         folder = _derive_folder(note.path)
-        with self._conn():
-            cur = self._conn().cursor()
+        conn = self._conn()
+        with conn:
+            cur = conn.cursor()
             self._delete_document(cur, note.path)
             doc_id = self._insert_document(cur, note, folder)
             self._insert_sections(cur, doc_id, note)
@@ -711,8 +738,9 @@ class FTSIndex:
         Returns:
             Number of document rows deleted (0 if path was not indexed).
         """
-        with self._conn():
-            cur = self._conn().cursor()
+        conn = self._conn()
+        with conn:
+            cur = conn.cursor()
             deleted = self._delete_document(cur, path)
         if deleted:
             logger.debug("delete_by_path: removed %s", path)
@@ -976,8 +1004,7 @@ class FTSIndex:
         Returns:
             Integer count of all indexed chunks across all documents.
         """
-        row = self._conn().execute("SELECT COUNT(*) FROM sections").fetchone()
-        return row[0] if row else 0
+        return self._conn().execute("SELECT COUNT(*) FROM sections").fetchone()[0]
 
     def get_toc(self, path: str) -> list[dict[str, str | int]]:
         """Return headings for a document, ordered by position.
@@ -1189,10 +1216,9 @@ class FTSIndex:
             if new_path != row["target_path"]:
                 updates.append((new_path, row["id"]))
 
-        with self._conn():
-            self._conn().executemany(
-                "UPDATE links SET target_path = ? WHERE id = ?", updates
-            )
+        conn = self._conn()
+        with conn:
+            conn.executemany("UPDATE links SET target_path = ? WHERE id = ?", updates)
         updated = len(updates)
 
         if updated:
@@ -1608,21 +1634,32 @@ class FTSIndex:
     def close(self) -> None:
         """Close every per-thread connection and mark this index closed.
 
-        Idempotent: second call sees an empty registry and is a no-op. After
-        ``close()``, any thread calling a public method raises
-        ``sqlite3.ProgrammingError`` from ``_conn()``.
+        Idempotent: a second call finds an empty registry and performs no
+        connection closes. After ``close()``, any thread calling a public
+        method raises ``sqlite3.ProgrammingError`` from ``_conn()``.
         """
         with self._reg_lock:
             self._closed = True
-            for conn in self._all_conns:
-                try:
-                    conn.close()
-                except sqlite3.ProgrammingError:
-                    logger.debug("fts_index.close: connection already closed")
-                except sqlite3.Error:
-                    logger.error(
-                        "fts_index.close: error closing connection", exc_info=True
-                    )
-            self._all_conns.clear()
-            self._primary_conn = None
+            try:
+                for conn in self._all_conns:
+                    try:
+                        conn.close()
+                    except sqlite3.ProgrammingError:
+                        logger.debug("fts_index.close: connection already closed")
+                    except Exception:
+                        # Catch non-sqlite3.Error subclasses too (e.g. OSError
+                        # from underlying file handle, RuntimeError from C
+                        # wrappers) so the loop never exits mid-iteration and
+                        # leaves connections un-closed. KeyboardInterrupt /
+                        # SystemExit still propagate.
+                        logger.error(
+                            "fts_index.close: error closing connection",
+                            exc_info=True,
+                        )
+            finally:
+                # Ensure the registry is cleared even if a BaseException
+                # (KeyboardInterrupt / SystemExit) interrupts the loop, so a
+                # subsequent close() retry sees a clean state.
+                self._all_conns.clear()
+                self._primary_conn = None
         logger.debug("FTSIndex closed (db_path=%s)", self._db_path)
