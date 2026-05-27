@@ -552,3 +552,57 @@ def test_conn_slow_path_baseexception_cleanup(
     assert len(errors) == 1
     assert isinstance(errors[0], RuntimeError)
     assert len(closed) >= 1, "new per-thread connection must be closed on failure"
+
+
+def test_close_continues_when_one_connection_raises(fts: FTSIndex) -> None:
+    """If one ``conn.close()`` raises a non-sqlite3 exception (e.g. OSError),
+    ``close()`` must continue iterating and close the remaining connections —
+    otherwise a single bad connection leaks the rest.
+
+    Guards against narrowing the `except Exception:` in `close()` back to
+    `except sqlite3.Error:` (the original spec wording).
+    """
+    # Force a second per-thread connection so the registry has > 1 entry.
+    primary = fts._conn()
+    second_holder: dict[str, sqlite3.Connection] = {}
+
+    def grab() -> None:
+        second_holder["c"] = fts._conn()
+
+    t = threading.Thread(target=grab)
+    t.start()
+    t.join()
+    second = second_holder["c"]
+    assert primary is not second
+    assert len(fts._all_conns) == 2
+
+    # Replace one connection's close with a function that raises OSError.
+    # We can't monkey-patch sqlite3.Connection.close (read-only attr), so we
+    # swap the registry entry for a stand-in object that records close calls.
+    real_close_calls: list[object] = []
+
+    class _BadCloser:
+        def close(self) -> None:
+            raise OSError("simulated close failure")
+
+    class _GoodCloser:
+        def __init__(self, inner: sqlite3.Connection) -> None:
+            self._inner = inner
+
+        def close(self) -> None:
+            real_close_calls.append(self._inner)
+            self._inner.close()
+
+    bad = _BadCloser()
+    good = _GoodCloser(second)
+    # Replace registry contents with [bad, good]. Drop the real primary +
+    # second so they aren't double-closed by close() then by the fixture.
+    fts._all_conns[:] = [bad, good]  # type: ignore[list-item]
+    fts._primary_conn = None
+    primary.close()  # close the original primary out-of-band
+
+    # close() must reach `good` despite `bad` raising.
+    fts.close()
+    assert real_close_calls == [second], (
+        "close() must continue past a connection whose close() raises"
+    )
