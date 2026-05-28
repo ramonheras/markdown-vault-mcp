@@ -848,3 +848,59 @@ def test_synchronous_build_index_clears_prior_background_error(
     # Bucket-3 call no longer surfaces the prior error.
     col.get_backlinks("n.md")  # must not raise
     col.close()
+
+
+def test_synchronous_build_index_warm_path_clears_prior_background_error(
+    tmp_path: Path,
+) -> None:
+    """Recovery path via the warm-restart short-circuit: a prior background
+    failure left _background_build_error populated; the sentinel from a
+    prior successful build is still present; calling build_index()
+    synchronously must clear the captured error and is_index_ready() must
+    return True."""
+    vault = _vault(tmp_path)
+    _seed(vault)
+    index_path = tmp_path / "fts.db"
+
+    # Phase 1: pre-build to set the sentinel and FTS rows.
+    pre = Collection(source_dir=vault, index_path=index_path)
+    pre.build_index()
+    pre.close()
+
+    # Phase 2: fresh Collection sees the warm sentinel; simulate a prior
+    # background failure.
+    col = Collection(source_dir=vault, index_path=index_path)
+    col._background_build_error = RuntimeError("simulated prior background failure")
+    col._background_build_done.set()
+    col._background_started = True
+    assert col.is_index_ready() is False
+
+    # Warm-restart short-circuit recovery.
+    col.build_index()
+
+    assert col._background_build_error is None
+    assert col.is_index_ready() is True
+    col.close()
+
+
+def test_decorator_works_with_positional_collection_arg(tmp_path: Path) -> None:
+    """The decorator must extract `collection` from positional args
+    via inspect.signature.bind_partial, not just from kwargs.
+    Direct call (no FastMCP) with positional collection must work."""
+    import asyncio
+
+    from markdown_vault_mcp._server_readiness import needs_index_ready
+
+    vault = _vault(tmp_path)
+    _seed(vault)
+    col = Collection(source_dir=vault)
+    col.build_index()  # mark ready
+
+    @needs_index_ready()
+    async def handler(path: str, collection: Collection) -> str:  # noqa: ARG001
+        return f"got: {path}"
+
+    # Call positionally (not via kwargs).
+    result = asyncio.run(handler("n.md", col))
+    assert result == "got: n.md"
+    col.close()

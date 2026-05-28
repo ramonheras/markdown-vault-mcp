@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import inspect
 import logging
 import os
 from typing import TYPE_CHECKING, Any, TypeVar
@@ -60,9 +61,15 @@ def needs_index_ready(
     """
 
     def deco(handler: Callable[..., Any]) -> Callable[..., Any]:
+        # Capture the handler's signature once at decoration time so
+        # collection can be looked up regardless of whether it was
+        # passed positionally or by keyword.
+        sig = inspect.signature(handler)
+
         @functools.wraps(handler)
         async def wrapper(*args: Any, **kwargs: Any) -> Any:
-            collection = kwargs.get("collection")
+            bound = sig.bind_partial(*args, **kwargs)
+            collection = bound.arguments.get("collection")
             if collection is None:
                 raise RuntimeError(
                     "needs_index_ready: collection was not injected; "
