@@ -1009,3 +1009,32 @@ class TestCmdReindex:
             main()
 
         mock_collection.build_embeddings.assert_called_once_with(force=True)
+
+    def test_reindex_against_real_collection(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """End-to-end: ``markdown-vault-mcp reindex`` on a real (unbuilt)
+        Collection must succeed. Pre-fix the bucket-4 readiness guard
+        crashed every invocation because the command jumped straight to
+        ``reindex()`` without first building. Mock-based tests above
+        miss this because they replace Collection wholesale.
+        """
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        (vault / "a.md").write_text("# A\n\nhello\n")
+        (vault / "b.md").write_text("# B\n\nworld\n")
+
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", str(vault))
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_INDEX_PATH", str(tmp_path / "fts.db"))
+        monkeypatch.setenv(
+            "MARKDOWN_VAULT_MCP_STATE_PATH", str(tmp_path / "state.json")
+        )
+
+        with patch("sys.argv", ["markdown-vault-mcp", "reindex"]):
+            main()
+
+        captured = capsys.readouterr()
+        assert "Reindex" in captured.out

@@ -264,10 +264,9 @@ class TestBuildIndex:
             index_path=index_path,
             exclude_patterns=[".claude/**"],
         )
-        # Bypass the _ensure_initialized() guard: col2 shares the same
-        # persistent DB as col1, so the index already exists — we want to
-        # test reindex() directly, not build_index().
-        col2._initialized = True
+        # col2 shares the persistent DB; build_index() short-circuits on
+        # populated FTS state alone (issue #525), so this is fast.
+        col2.build_index()
         col2.reindex()
 
         # The stale excluded doc should be purged.
@@ -312,7 +311,7 @@ class TestBuildIndex:
             embedding_provider=mock_provider,
             exclude_patterns=[".claude/**"],
         )
-        col2._initialized = True
+        col2.build_index()
         col2.reindex()
 
         paths2 = [row["path"] for row in col2._fts.list_notes()]
@@ -338,14 +337,16 @@ class TestBuildIndex:
         paths1 = [row["path"] for row in col1._fts.list_notes()]
         assert ".claude/test.md" in paths1
 
-        # Phase 2: new Collection WITH exclude_patterns, build_index() on
-        # the same persistent DB.  The stale doc should be purged.
+        # Phase 2: new Collection WITH exclude_patterns. Per issue #525 the
+        # short-circuit fires on populated FTS state alone, so a plain
+        # build_index() would no-op — config changes (exclude_patterns,
+        # required_frontmatter) need an explicit force=True rebuild.
         col2 = _make_collection(
             vault_path,
             index_path=index_path,
             exclude_patterns=[".claude/**"],
         )
-        col2.build_index()
+        col2.build_index(force=True)
         paths2 = [row["path"] for row in col2._fts.list_notes()]
         assert ".claude/test.md" not in paths2
 
@@ -376,7 +377,10 @@ class TestBuildIndex:
         vec_paths1 = [m["path"] for m in col1._vectors._metadata]
         assert ".claude/test.md" in vec_paths1
 
-        # Phase 2: build_index() WITH exclude_patterns — purges from both.
+        # Phase 2: force=True rebuild applies the new exclude_patterns to
+        # both FTS and embeddings — see the sibling test for the rationale
+        # (issue #525). Vectors need their own force=True because the
+        # short-circuit in build_embeddings is independent.
         col2 = _make_collection(
             vault_path,
             index_path=index_path,
@@ -384,7 +388,8 @@ class TestBuildIndex:
             embedding_provider=mock_provider,
             exclude_patterns=[".claude/**"],
         )
-        col2.build_index()
+        col2.build_index(force=True)
+        col2.build_embeddings(force=True)
 
         paths2 = [row["path"] for row in col2._fts.list_notes()]
         assert ".claude/test.md" not in paths2
@@ -400,24 +405,21 @@ class TestBuildIndex:
 
 
 class TestLazyInitialisation:
-    def test_search_without_build_index(self, vault_path: Path) -> None:
-        """search() triggers lazy initialisation without an explicit build_index()."""
+    def test_search_without_build_index_returns_empty(self, vault_path: Path) -> None:
+        """search() on an unbuilt index returns [] without crashing (bucket 2)."""
         col = _make_collection(vault_path)
 
-        # Do NOT call build_index() — search() should initialise automatically.
         results = col.search("simple")
 
-        # Either finds something or returns [] — the key is it does not crash.
-        assert isinstance(results, list)
+        assert results == []
 
-    def test_list_without_build_index(self, vault_path: Path) -> None:
-        """list() triggers lazy initialisation without an explicit build_index()."""
+    def test_list_without_build_index_returns_empty(self, vault_path: Path) -> None:
+        """list() on an unbuilt index returns [] (bucket 2 — no implicit build)."""
         col = _make_collection(vault_path)
 
         notes = col.list()
 
-        assert isinstance(notes, list)
-        assert len(notes) == 9
+        assert notes == []
 
 
 # ---------------------------------------------------------------------------

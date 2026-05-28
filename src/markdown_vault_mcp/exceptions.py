@@ -64,3 +64,20 @@ class ConcurrentModificationError(MarkdownMCPError):
 
 class ConfigurationError(MarkdownMCPError):
     """Raised for invalid or unsupported configuration at startup."""
+
+
+class IndexNotReadyError(MarkdownMCPError):
+    """Raised when a method requires a built FTS index and none exists.
+
+    Bucket-3 relational / FTS-backed queries (``get_backlinks``,
+    ``get_outlinks``, ``get_similar``, ``get_context``,
+    ``get_connection_path``, ``get_toc``) and bucket-4 coordinators
+    (``reindex``, ``build_embeddings``) cannot produce correct results
+    against an empty / never-built index. They raise this rather than
+    silently return wrong answers.
+
+    Callers must call :meth:`Collection.build_index` before these
+    methods. Once a background indexer lands (issue #513), the
+    :meth:`Collection.wait_for_index_ready` primitive will block on a
+    completion event instead of raising.
+    """

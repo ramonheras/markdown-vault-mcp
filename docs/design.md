@@ -357,18 +357,48 @@ its source document path, enabling bulk deletion when a document is reindexed.
 Two methods manage the index:
 
 - **`build_index(force=False)`**: initial population. Scans `source_dir` and
-  builds the FTS index. If the index already has data and `force=False`, this
-  is a no-op. `force=True` drops and rebuilds from scratch. When a persistent
-  `index_path` contains documents that now match `exclude_patterns`, they are
-  purged from the FTS and vector indexes after the scan.
+  builds the FTS index. Short-circuits as a no-op when the persisted FTS
+  database contains documents **and** carries the completeness sentinel
+  written by a prior clean build (warm restart on the same `index_path`).
+  A database with rows but no sentinel — residue of a process that
+  crashed mid-build, since `IndexManager.build_index` commits per-document
+  in its own transaction — is treated as cold and triggers a full
+  rebuild. The sentinel is the `build_completed_at` row in the FTS
+  `meta` table, cleared by `Collection.build_index` before any
+  destructive rebuild and written only after `_index_mgr.build_index`
+  returns cleanly. `force=True` drops and rebuilds from scratch. When a
+  persistent `index_path` contains documents that now match
+  `exclude_patterns`, they are purged from the FTS and vector indexes
+  after the scan — but only when a scan actually runs (i.e. on a cold
+  index or with `force=True`); a warm-restart short-circuit does not
+  apply config changes.
 - **`reindex()`**: incremental update. Uses `ChangeTracker` to detect
   adds/modifies/deletes since the last scan and applies only the delta.
   Applies `exclude_patterns` filtering and purges stale excluded documents.
 
-**Lazy initialization**: on first call to `search()`, `list()`, or `read()`,
-`Collection` lazily builds the FTS index from `source_dir` if no pre-built
-`index_path` was provided. `build_index()` can be called explicitly to
-pre-warm the index or to force a rebuild.
+**Readiness contract (issue #525)**: `Collection.__init__` does not
+populate the index. Callers must invoke `build_index()` explicitly
+before bucket-3 relational/FTS-backed queries (`get_backlinks`,
+`get_outlinks`, `get_similar`, `get_context`, `get_connection_path`,
+`get_toc`) or the bucket-4 coordinators (`reindex`,
+`build_embeddings`); otherwise `IndexNotReadyError` is raised.
+`start()` must also be called after `build_index()` because its git
+pull loop wires `reindex` as the `on_pull` callback. Bucket-1 file
+operations (`read`, `write`, `edit`, `delete`, `rename`,
+`write_attachment`) and bucket-2 aggregate queries (`search`, `list`,
+`stats`, `list_folders`, `list_tags`, `get_recent`,
+`get_orphan_notes`, `get_most_linked`, `get_broken_links`) work on an
+unbuilt index — bucket-1 hits disk directly; bucket-2 queries
+whatever is currently in the index (empty on cold start).
+`wait_for_index_ready(timeout=None)` is the readiness primitive: it
+raises `IndexNotReadyError` pre-#513; once the background indexer
+(#513) lands it will block on a completion event.
+
+To apply a configuration change (e.g. new `exclude_patterns`,
+`required_frontmatter`) to a pre-existing index, call
+`build_index(force=True)` — and, when embeddings are configured,
+`build_embeddings(force=True)` — because the short-circuit is keyed on
+FTS contents alone and does not detect config drift.
 
 ### Error Handling
 

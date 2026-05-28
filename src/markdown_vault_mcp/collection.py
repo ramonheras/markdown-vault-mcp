@@ -13,6 +13,7 @@ import re
 import threading
 from typing import TYPE_CHECKING, Any, Literal
 
+from markdown_vault_mcp.exceptions import IndexNotReadyError
 from markdown_vault_mcp.fts_index import FTSIndex
 from markdown_vault_mcp.scanner import (
     ChunkStrategy,
@@ -86,8 +87,21 @@ def _resolve_chunk_strategy(strategy: str | ChunkStrategy) -> ChunkStrategy:
 class Collection:
     """Facade over FTS5 index, vector index, and change tracker.
 
-    Instantiate once per collection root.  Call :meth:`build_index` (or let
-    lazy initialisation handle it) before querying.
+    Instantiate once per collection root.  Callers must invoke
+    :meth:`build_index` before bucket-3 relational/FTS-backed queries
+    (:meth:`get_backlinks`, :meth:`get_outlinks`, :meth:`get_similar`,
+    :meth:`get_context`, :meth:`get_connection_path`, :meth:`get_toc`)
+    or the bucket-4 coordinators :meth:`reindex` and
+    :meth:`build_embeddings`; otherwise
+    :exc:`~markdown_vault_mcp.exceptions.IndexNotReadyError` is raised.
+    :meth:`build_index` must also precede :meth:`start` — see
+    :meth:`start` for the rationale.
+    Bucket-1 file operations (:meth:`read`, :meth:`write`, :meth:`edit`,
+    :meth:`delete`, :meth:`rename`, :meth:`write_attachment`) and bucket-2
+    aggregate queries (:meth:`search`, :meth:`list`, :meth:`stats`, …)
+    work on an unbuilt index — bucket-1 hits disk directly; bucket-2
+    returns whatever is currently in the index (empty on cold start).
+    See issue #525.
 
     **Thread safety (issue #519):** every public method on this class is safe
     to call from any thread, concurrently with other reads and writes from
@@ -206,8 +220,10 @@ class Collection:
         )
         self._tracker = ChangeTracker(self._state_path)
 
-        # Lazy initialisation flag.
-        self._initialized = False
+        # True once build_index() has completed successfully; gates
+        # bucket-3 (relational queries) and bucket-4 (reindex /
+        # build_embeddings). See issue #525.
+        self._index_built = False
 
         # Serialise concurrent write operations on this instance.
         # Re-entrant: periodic pull tick blocks writes, then reindex() acquires
@@ -307,7 +323,14 @@ class Collection:
         self._git_strategy.sync_once(self._source_dir)
 
     def start(self) -> None:
-        """Start background tasks for this Collection (e.g. git pull loop)."""
+        """Start background tasks for this Collection (e.g. git pull loop).
+
+        Call :meth:`build_index` **before** :meth:`start`. The git pull
+        loop wires :meth:`reindex` (bucket 4) as its ``on_pull`` callback,
+        and ``reindex`` raises :exc:`IndexNotReadyError` on an unbuilt
+        index — so a pull event firing before the initial build would
+        crash the loop thread.
+        """
         if self._git_strategy is None or self._git_pull_interval_s <= 0:
             return
         self._git_strategy.start(
@@ -360,13 +383,33 @@ class Collection:
         self._fts.close()
 
     # ------------------------------------------------------------------
-    # Lazy initialisation
+    # Indexing readiness (issue #525)
     # ------------------------------------------------------------------
 
-    def _ensure_initialized(self) -> None:
-        """Build the FTS index on first access if it has not been built yet."""
-        if not self._initialized:
-            self.build_index()
+    def _require_index_ready(self) -> None:
+        """Raise :exc:`IndexNotReadyError` if :meth:`build_index` has not run."""
+        if not self._index_built:
+            raise IndexNotReadyError(
+                "Index not built. Call build_index() before this method."
+            )
+
+    def wait_for_index_ready(self, timeout: float | None = None) -> None:
+        """Block until the FTS index is ready, or raise.
+
+        Pre-#513 this is a synchronous readiness check: raises
+        :exc:`IndexNotReadyError` when :meth:`build_index` has not
+        completed. The *timeout* parameter is reserved for the
+        background-indexer variant (#513), which will wait on a
+        completion event with this budget.
+
+        Args:
+            timeout: Maximum seconds to wait. Currently unused.
+
+        Raises:
+            IndexNotReadyError: If the index has not been built.
+        """
+        del timeout  # Reserved for #513 — no background build to wait on.
+        self._require_index_ready()
 
     @property
     def _vectors(self) -> VectorIndex | None:
@@ -417,7 +460,6 @@ class Collection:
             ValueError: If *mode* is ``"semantic"`` or ``"hybrid"`` but no
                 embedding provider or embeddings path is configured.
         """
-        self._ensure_initialized()
         return self._search_mgr.search(
             query,
             limit=limit,
@@ -447,7 +489,6 @@ class Collection:
             A :class:`~markdown_vault_mcp.types.NoteContent` instance, or ``None``
             if the file does not exist.
         """
-        self._ensure_initialized()
         return self._doc_mgr.read(path, section=section)
 
     def list(
@@ -474,7 +515,6 @@ class Collection:
             optionally :class:`~markdown_vault_mcp.types.AttachmentInfo`)
             objects.
         """
-        self._ensure_initialized()
         return self._search_mgr.list(
             folder=folder, pattern=pattern, include_attachments=include_attachments
         )
@@ -486,9 +526,18 @@ class Collection:
     def build_index(self, *, force: bool = False) -> IndexStats:
         """Scan source_dir and build the FTS index.
 
-        If the index already contains documents and *force* is ``False``,
-        this is a no-op.  ``force=True`` drops all existing data and rebuilds
-        from scratch.
+        If the persisted FTS index already contains documents and *force*
+        is ``False``, this is a no-op — the short-circuit is keyed solely
+        on FTS state, so warm restarts (new process, same database file)
+        return immediately rather than re-scanning the vault.
+        ``force=True`` drops all existing data and rebuilds from scratch.
+
+        .. note::
+           Config changes (``exclude_patterns``, ``required_frontmatter``)
+           do not re-trigger a scan on warm restart because they are not
+           part of the short-circuit key. To apply a config change to a
+           pre-existing index, call ``build_index(force=True)``. See
+           issue #525.
 
         Args:
             force: When ``True``, drop and rebuild the index unconditionally.
@@ -496,22 +545,29 @@ class Collection:
         Returns:
             :class:`~markdown_vault_mcp.types.IndexStats` describing what was indexed.
         """
-        # Check if index already has data and we are not forcing.
-        if not force and self._initialized:
+        if not force and self._fts.is_build_completed():
             existing = self._fts.list_notes()
             if existing:
                 logger.debug(
                     "build_index: index already populated (%d docs), skipping",
                     len(existing),
                 )
+                self._index_built = True
                 return IndexStats(
                     documents_indexed=len(existing),
                     chunks_indexed=0,
                     skipped=0,
                 )
 
+        # Reset before the (potentially destructive) rebuild so a mid-build
+        # exception leaves the Collection visibly not-ready. The sentinel
+        # is cleared too so a crash mid-loop is detectable by the next
+        # process (rows without sentinel = partial — see issue #525).
+        self._index_built = False
+        self._fts.clear_build_completed()
         result = self._index_mgr.build_index(force=force)
-        self._initialized = True
+        self._fts.set_build_completed()
+        self._index_built = True
         return result
 
     def reindex(self) -> ReindexResult:
@@ -520,8 +576,11 @@ class Collection:
         Returns:
             :class:`~markdown_vault_mcp.types.ReindexResult` with counts of changes
             applied.
+
+        Raises:
+            IndexNotReadyError: If :meth:`build_index` has not been called.
         """
-        self._ensure_initialized()
+        self._require_index_ready()
         return self._index_mgr.reindex()
 
     def build_embeddings(self, *, force: bool = False) -> int:
@@ -535,10 +594,11 @@ class Collection:
             Total number of chunks embedded.
 
         Raises:
+            IndexNotReadyError: If :meth:`build_index` has not been called.
             ValueError: If ``embedding_provider`` or ``embeddings_path`` is
                 not configured.
         """
-        self._ensure_initialized()
+        self._require_index_ready()
         return self._index_mgr.build_embeddings(force=force)
 
     def embeddings_status(self) -> dict:
@@ -560,7 +620,6 @@ class Collection:
         Returns:
             Sorted list of folder strings (``""`` for the collection root).
         """
-        self._ensure_initialized()
         return self._search_mgr.list_folders()
 
     def list_tags(self, field: str = "tags") -> list[str]:
@@ -574,14 +633,14 @@ class Collection:
         Returns:
             Sorted list of distinct value strings.
         """
-        self._ensure_initialized()
         return self._search_mgr.list_tags(field)
 
     def get_toc(self, path: str) -> list[dict[str, Any]]:
         """Return table of contents for a document.
 
         Queries the FTS sections table for headings and prepends the document
-        title as a synthetic H1 entry.
+        title as a synthetic H1 entry. The result depends on the FTS index, so
+        cold-start callers must build the index first (bucket 3).
 
         Args:
             path: Relative path to the document (e.g. ``"notes/intro.md"``).
@@ -591,9 +650,10 @@ class Collection:
             position, with the document title prepended as level 1.
 
         Raises:
+            IndexNotReadyError: If :meth:`build_index` has not been called.
             ValueError: If no document exists at the given path.
         """
-        self._ensure_initialized()
+        self._require_index_ready()
         return self._doc_mgr.get_toc(path)
 
     def get_backlinks(self, path: str) -> list[BacklinkInfo]:
@@ -608,9 +668,10 @@ class Collection:
             for each document that contains a link pointing to ``path``.
 
         Raises:
+            IndexNotReadyError: If :meth:`build_index` has not been called.
             ValueError: If no document exists at the given path.
         """
-        self._ensure_initialized()
+        self._require_index_ready()
         return self._link_mgr.get_backlinks(path)
 
     def get_outlinks(self, path: str) -> list[OutlinkInfo]:
@@ -628,9 +689,10 @@ class Collection:
             each link originating from ``path``.
 
         Raises:
+            IndexNotReadyError: If :meth:`build_index` has not been called.
             ValueError: If no document exists at the given path.
         """
-        self._ensure_initialized()
+        self._require_index_ready()
         return self._link_mgr.get_outlinks(path)
 
     def get_broken_links(self, *, folder: str | None = None) -> list[BrokenLinkInfo]:
@@ -643,7 +705,6 @@ class Collection:
         Returns:
             List of :class:`~markdown_vault_mcp.types.BrokenLinkInfo` objects.
         """
-        self._ensure_initialized()
         return self._link_mgr.get_broken_links(folder=folder)
 
     def get_similar(
@@ -667,8 +728,11 @@ class Collection:
 
         Returns:
             List of grouped results.
+
+        Raises:
+            IndexNotReadyError: If :meth:`build_index` has not been called.
         """
-        self._ensure_initialized()
+        self._require_index_ready()
         return self._search_mgr.get_similar(
             path, limit=limit, chunks_per_file=chunks_per_file
         )
@@ -687,7 +751,6 @@ class Collection:
             List of :class:`~markdown_vault_mcp.types.NoteInfo` objects
             ordered by modification time (most recent first).
         """
-        self._ensure_initialized()
         return self._search_mgr.get_recent(limit=limit, folder=folder)
 
     def get_context(
@@ -716,9 +779,10 @@ class Collection:
             stays compact.
 
         Raises:
+            IndexNotReadyError: If :meth:`build_index` has not been called.
             ValueError: If no document exists at the given path.
         """
-        self._ensure_initialized()
+        self._require_index_ready()
         return self._search_mgr.get_context(
             path, similar_limit=similar_limit, link_limit=link_limit
         )
@@ -733,7 +797,6 @@ class Collection:
             List of :class:`~markdown_vault_mcp.types.NoteInfo` objects,
             ordered by path.
         """
-        self._ensure_initialized()
         return self._link_mgr.get_orphan_notes()
 
     def get_most_linked(self, *, limit: int = 10) -> list[MostLinkedNote]:
@@ -746,7 +809,6 @@ class Collection:
             List of :class:`~markdown_vault_mcp.types.MostLinkedNote` ordered
             by backlink_count descending.
         """
-        self._ensure_initialized()
         return self._link_mgr.get_most_linked(limit=limit)
 
     def get_connection_path(
@@ -768,9 +830,10 @@ class Collection:
             (inclusive), or ``None`` if unreachable within *max_depth* hops.
 
         Raises:
+            IndexNotReadyError: If :meth:`build_index` has not been called.
             ValueError: If *source* or *target* is not found in the index.
         """
-        self._ensure_initialized()
+        self._require_index_ready()
         return self._link_mgr.get_connection_path(source, target, max_depth=max_depth)
 
     # ------------------------------------------------------------------
@@ -902,7 +965,6 @@ class Collection:
         Returns:
             :class:`~markdown_vault_mcp.types.CollectionStats` snapshot.
         """
-        self._ensure_initialized()
 
         rows = self._fts.list_notes()
         doc_count = len(rows)
@@ -1023,7 +1085,6 @@ class Collection:
         already validated against ``MARKDOWN_VAULT_MCP_UPLOAD_MAX_BYTES``);
         leave ``False`` for base64 callers of the MCP ``write`` tool.
         """
-        self._ensure_initialized()
         return self._doc_mgr.write_attachment(
             path, content, if_match=if_match, skip_size_cap=skip_size_cap
         )
@@ -1058,7 +1119,6 @@ class Collection:
                 not match the current file hash.
             ValueError: If *path* escapes the source directory.
         """
-        self._ensure_initialized()
         return self._doc_mgr.write(
             path, content, frontmatter=frontmatter, if_match=if_match
         )
@@ -1099,7 +1159,6 @@ class Collection:
                 not match.
             ValueError: If *path* escapes the source directory.
         """
-        self._ensure_initialized()
         return self._doc_mgr.edit(
             path,
             old_text=old_text,
@@ -1129,7 +1188,6 @@ class Collection:
                 not match.
             DocumentNotFoundError: If *path* does not exist.
         """
-        self._ensure_initialized()
         return self._doc_mgr.delete(path, if_match=if_match)
 
     def rename(
@@ -1165,7 +1223,6 @@ class Collection:
             ValueError: If *old_path* or *new_path* escapes the source
                 directory.
         """
-        self._ensure_initialized()
         return self._doc_mgr.rename(
             old_path, new_path, if_match=if_match, update_links=update_links
         )

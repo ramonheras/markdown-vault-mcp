@@ -164,6 +164,10 @@ def _cmd_search(args: argparse.Namespace) -> None:
 def _cmd_reindex(args: argparse.Namespace) -> None:
     """Incrementally reindex the collection."""
     collection = _build_collection(args)
+    # reindex() requires a built index (bucket 4 readiness contract,
+    # issue #525). build_index() short-circuits in O(1) on a coherent
+    # persisted DB, so this is free on the warm path and correct on cold.
+    collection.build_index()
     result = collection.reindex()
     logger.info(
         "Reindex complete: %d added, %d modified, %d deleted, %d unchanged",

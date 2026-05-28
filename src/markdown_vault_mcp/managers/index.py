@@ -178,7 +178,7 @@ class IndexManager:
         this is a no-op.  ``force=True`` drops all existing data and rebuilds
         from scratch.
 
-        Note: the caller is responsible for setting any ``_initialized``
+        Note: the caller is responsible for setting any ``_index_built``
         flag after this method returns.
 
         Args:
