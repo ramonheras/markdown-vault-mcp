@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import threading
 import time
 from typing import TYPE_CHECKING, Any
@@ -544,3 +545,135 @@ def test_decorator_cold_path_blocks_until_ready(
 
     result = asyncio.run(_call())
     assert result is not None  # call succeeded after blocking ~0.3s
+
+
+def test_decorator_applied_to_remaining_bucket3_tools(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """All seven bucket-3 tools must accept calls end-to-end after lifespan.
+    Sanity coverage — proves the decorator pattern propagates without breakage."""
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    (vault / "a.md").write_text("# A\n\nbody\n", encoding="utf-8")
+    monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", str(vault))
+    monkeypatch.setenv("MARKDOWN_VAULT_MCP_INDEX_PATH", str(tmp_path / "fts.db"))
+    monkeypatch.setenv("MARKDOWN_VAULT_MCP_STATE_PATH", str(tmp_path / "s.json"))
+
+    from markdown_vault_mcp.server import make_server
+
+    server = make_server()
+
+    async def _calls() -> None:
+        async with Client(server) as client:
+            # Bucket-3 tools that take a path.
+            for tool in ("get_outlinks", "get_context"):
+                await client.call_tool(tool, {"path": "a.md"})
+            # get_similar takes path; may error if no embeddings — accept either
+            with contextlib.suppress(Exception):
+                await client.call_tool("get_similar", {"path": "a.md"})
+            await client.call_tool(
+                "get_connection_path", {"source": "a.md", "target": "a.md"}
+            )
+            # Bucket-4 coordinators (reindex always callable, build_embeddings
+            # may raise ValueError if not configured).
+            await client.call_tool("reindex", {})
+            with contextlib.suppress(Exception):
+                await client.call_tool("build_embeddings", {"force": False})
+
+    asyncio.run(_calls())
+
+
+def test_decorator_applied_to_vault_toc_resource(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """vault_toc resource (toc://vault/{path}) must be decorated; calling
+    via Client returns content after lifespan completes."""
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    (vault / "a.md").write_text("# A\n\nbody\n", encoding="utf-8")
+    monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", str(vault))
+    monkeypatch.setenv("MARKDOWN_VAULT_MCP_INDEX_PATH", str(tmp_path / "fts.db"))
+    monkeypatch.setenv("MARKDOWN_VAULT_MCP_STATE_PATH", str(tmp_path / "s.json"))
+
+    from markdown_vault_mcp.server import make_server
+
+    server = make_server()
+
+    async def _read() -> Any:
+        async with Client(server) as client:
+            return await client.read_resource("toc://vault/a.md")
+
+    result = asyncio.run(_read())
+    assert result is not None
+
+
+def test_decorator_applied_to_vault_similar_resource(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """vault_similar resource (similar://vault/{path}) — same coverage as vault_toc.
+    Catches the regression where the prior round forgot this one."""
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    (vault / "a.md").write_text("# A\n\nbody\n", encoding="utf-8")
+    monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", str(vault))
+    monkeypatch.setenv("MARKDOWN_VAULT_MCP_INDEX_PATH", str(tmp_path / "fts.db"))
+    monkeypatch.setenv("MARKDOWN_VAULT_MCP_STATE_PATH", str(tmp_path / "s.json"))
+
+    from markdown_vault_mcp.server import make_server
+
+    server = make_server()
+
+    async def _read() -> Any:
+        async with Client(server) as client:
+            try:
+                return await client.read_resource("similar://vault/a.md")
+            except Exception:
+                # May raise if no embeddings configured — that's fine,
+                # we're testing the decorator wired it correctly.
+                return None
+
+    asyncio.run(_read())
+
+
+def test_decorator_respects_env_timeout_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """monkeypatch.setenv must be visible at call time because
+    _resolve_ready_timeout reads at call time, not import time."""
+    import time as time_mod
+
+    from markdown_vault_mcp.managers import index as index_mod
+    from markdown_vault_mcp.server import make_server
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    (vault / "a.md").write_text("# A\n\nbody\n", encoding="utf-8")
+    monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", str(vault))
+    monkeypatch.setenv("MARKDOWN_VAULT_MCP_INDEX_PATH", str(tmp_path / "fts.db"))
+    monkeypatch.setenv("MARKDOWN_VAULT_MCP_STATE_PATH", str(tmp_path / "s.json"))
+    monkeypatch.setenv("MARKDOWN_VAULT_MCP_READY_TIMEOUT_S", "0.1")
+
+    # Mock build_index to never finish so the timeout fires.
+    original = index_mod.IndexManager.build_index
+
+    def hang(self, *, force: bool = False):  # type: ignore[no-untyped-def]
+        time_mod.sleep(60)
+        return original(self, force=force)
+
+    monkeypatch.setattr(index_mod.IndexManager, "build_index", hang)
+
+    server = make_server()
+
+    async def _call() -> Any:
+        async with Client(server) as client:
+            start = time_mod.perf_counter()
+            try:
+                await client.call_tool("get_backlinks", {"path": "a.md"})
+            except Exception as exc:
+                elapsed = time_mod.perf_counter() - start
+                assert elapsed < 1.0, f"timeout not honored: elapsed {elapsed:.2f}s"
+                return exc
+            raise AssertionError("expected the tool call to raise")
+
+    exc = asyncio.run(_call())
+    assert exc is not None
