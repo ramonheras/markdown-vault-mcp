@@ -16,14 +16,12 @@ import functools
 import inspect
 import logging
 import os
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
-
-T = TypeVar("T")
 
 
 def _resolve_ready_timeout() -> float:
