@@ -332,3 +332,151 @@ def test_close_twice_is_safe(tmp_path: Path) -> None:
     col.build_index()
     col.close()
     col.close()  # idempotent
+
+
+# ---------------------------------------------------------------------------
+# Task 8: Lifespan rewire tests
+# ---------------------------------------------------------------------------
+
+
+def test_lifespan_cold_start_handshake_under_1s(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import time as time_mod
+
+    from markdown_vault_mcp.server import make_server
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    for i in range(20):
+        (vault / f"n_{i}.md").write_text(
+            f"# N{i}\n\n" + ("body " * 200) + "\n", encoding="utf-8"
+        )
+
+    monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", str(vault))
+    monkeypatch.setenv("MARKDOWN_VAULT_MCP_INDEX_PATH", str(tmp_path / "fts.db"))
+    monkeypatch.setenv("MARKDOWN_VAULT_MCP_STATE_PATH", str(tmp_path / "s.json"))
+
+    server = make_server()
+
+    async def _run() -> tuple[float, dict[str, Any]]:
+        start = time_mod.perf_counter()
+        async with Client(server) as client:
+            handshake_elapsed = time_mod.perf_counter() - start
+            res: Any = None
+            for _ in range(50):
+                res = await client.call_tool("get_index_status", {})
+                if (res.structured_content or {}).get("status") == "ready":
+                    break
+                await asyncio.sleep(0.1)
+            final = res.structured_content or {}
+        return handshake_elapsed, final
+
+    handshake_elapsed, final = asyncio.run(_run())
+    assert handshake_elapsed < 1.0, (
+        f"cold-start handshake took {handshake_elapsed:.3f}s, expected < 1.0s"
+    )
+    assert final["status"] == "ready"
+    assert final["documents_indexed"] == 20
+
+
+def test_lifespan_warm_start_skips_background(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from markdown_vault_mcp.server import make_server
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    (vault / "n.md").write_text("# N\n\nbody\n", encoding="utf-8")
+    index_path = tmp_path / "fts.db"
+
+    pre = Collection(source_dir=vault, index_path=index_path)
+    pre.build_index()
+    pre.close()
+
+    monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", str(vault))
+    monkeypatch.setenv("MARKDOWN_VAULT_MCP_INDEX_PATH", str(index_path))
+    monkeypatch.setenv("MARKDOWN_VAULT_MCP_STATE_PATH", str(tmp_path / "s.json"))
+
+    server = make_server()
+
+    async def _run() -> dict[str, Any]:
+        async with Client(server) as client:
+            res = await client.call_tool("get_index_status", {})
+            return res.structured_content or {}
+
+    status = asyncio.run(_run())
+    assert status["status"] == "ready"
+    assert status["documents_indexed"] == 1
+
+
+def test_lifespan_cold_start_with_embeddings_skips_embeddings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Provider configured + cold start: lifespan must log the skip and not block.
+
+    Must inject a slow _index_mgr.build_index mock so the background thread is
+    reliably still running when the lifespan checks is_index_ready() — otherwise
+    on a tiny vault the background completes between spawn and check, embeddings
+    runs, and the test asserts the wrong thing.
+    """
+    import logging
+    import time as time_mod
+
+    from markdown_vault_mcp.server import make_server
+    from tests.conftest import MockEmbeddingProvider
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    (vault / "n.md").write_text("# N\n\nbody\n", encoding="utf-8")
+
+    monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", str(vault))
+    monkeypatch.setenv("MARKDOWN_VAULT_MCP_INDEX_PATH", str(tmp_path / "fts.db"))
+    monkeypatch.setenv("MARKDOWN_VAULT_MCP_STATE_PATH", str(tmp_path / "s.json"))
+
+    # Patch IndexManager.build_index globally to sleep before returning,
+    # ensuring the background thread is still running when the lifespan
+    # makes the is_index_ready() decision.
+    from markdown_vault_mcp.managers import index as index_mod
+
+    original_build_index = index_mod.IndexManager.build_index
+
+    def slow_build_index(self, *, force: bool = False):  # type: ignore[no-untyped-def]
+        time_mod.sleep(0.5)
+        return original_build_index(self, force=force)
+
+    monkeypatch.setattr(index_mod.IndexManager, "build_index", slow_build_index)
+
+    # Inject a MockEmbeddingProvider into to_collection_kwargs so that
+    # kwargs["embedding_provider"] is non-None without needing a real provider.
+    # "mock" is not a registered provider name in get_embedding_provider(), so
+    # we patch at the config level instead.
+    from markdown_vault_mcp import config as config_mod
+
+    original_to_kwargs = config_mod.CollectionConfig.to_collection_kwargs
+
+    def patched_to_kwargs(self):  # type: ignore[no-untyped-def]
+        kw = original_to_kwargs(self)
+        kw["embedding_provider"] = MockEmbeddingProvider()
+        # embeddings_path is required when embedding_provider is set.
+        if kw.get("embeddings_path") is None:
+            kw["embeddings_path"] = tmp_path / "vectors"
+        return kw
+
+    monkeypatch.setattr(
+        config_mod.CollectionConfig, "to_collection_kwargs", patched_to_kwargs
+    )
+
+    server = make_server()
+    caplog.set_level(logging.INFO)
+
+    async def _run() -> None:
+        async with Client(server):
+            pass  # lifespan runs
+
+    asyncio.run(_run())
+    assert any(
+        "embeddings deferred" in record.message.lower()
+        or "skipping embeddings" in record.message.lower()
+        for record in caplog.records
+    ), f"expected 'embeddings deferred' log; got: {[r.message for r in caplog.records]}"

@@ -100,20 +100,33 @@ def make_collection_lifespan(config: CollectionConfig) -> Any:
         # build_index() scans the freshest working tree.
         await asyncio.to_thread(collection.sync_from_remote_before_index)
 
-        # Build index eagerly so first tool call is fast.
-        stats = await asyncio.to_thread(collection.build_index)
-        logger.info(
-            "Index built: %d documents, %d chunks",
-            stats.documents_indexed,
-            stats.chunks_indexed,
-        )
+        # PR #526 sentinel: warm on-disk DBs short-circuit in O(1) via
+        # synchronous build_index(); cold on-disk routes to background;
+        # in-memory always synchronous (test scenarios only). See #513 PR1.
+        if collection.should_use_background_build():
+            collection.start_background_build_index()
+            logger.info("Cold start: scheduled background FTS build")
+        else:
+            stats = await asyncio.to_thread(collection.build_index)
+            logger.info(
+                "Index ready: %d documents (synchronous build)",
+                stats.documents_indexed,
+            )
 
-        # Build embeddings eagerly when an embedding provider is configured.
-        # build_embeddings() skips work if the vector index already exists on disk,
-        # so this is safe to call on every startup.
+        # Embeddings stay on the synchronous lifespan path for PR1. On
+        # cold start the FTS is still being built so we skip + log;
+        # PR2 follow-up backgrounds embeddings so semantic search
+        # becomes available without operator-initiated rebuild.
         if kwargs.get("embedding_provider") is not None:
-            chunks_embedded = await asyncio.to_thread(collection.build_embeddings)
-            logger.info("Embeddings ready: %d chunks", chunks_embedded)
+            if collection.is_index_ready():
+                chunks_embedded = await asyncio.to_thread(collection.build_embeddings)
+                logger.info("Embeddings ready: %d chunks", chunks_embedded)
+            else:
+                logger.info(
+                    "Cold start: embeddings deferred; semantic search "
+                    "returns empty until PR2 backgrounds embeddings or "
+                    "operator runs CLI 'index'"
+                )
 
         # Start background tasks (e.g. git pull loop) after index is built.
         collection.start()
