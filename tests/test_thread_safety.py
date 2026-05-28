@@ -480,6 +480,37 @@ def test_init_baseexception_cleanup_closes_primary(
     )
 
 
+def test_init_baseexception_cleanup_clears_tls_slot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If __init__ raises AFTER the primary's TLS assignment (e.g. during
+    `_probe_shared_cache`), the cleanup must clear ``self._local.conn`` —
+    otherwise a caller holding the partially-built instance would fast-path
+    a closed connection instead of seeing ProgrammingError.
+
+    Uses the :memory: path so the probe runs; captures the partial instance
+    via the patched method since __init__ never returns one to the caller.
+    """
+    captured: list[FTSIndex] = []
+
+    def boom_probe(self: FTSIndex) -> None:
+        captured.append(self)
+        raise RuntimeError("simulated probe failure")
+
+    monkeypatch.setattr(FTSIndex, "_probe_shared_cache", boom_probe)
+
+    with pytest.raises(RuntimeError, match="simulated probe failure"):
+        FTSIndex(db_path=":memory:")
+
+    assert len(captured) == 1
+    assert getattr(captured[0]._local, "conn", None) is None, (
+        "__init__ cleanup must clear self._local.conn after post-TLS failure"
+    )
+    # _all_conns must also be cleared by the cleanup.
+    assert captured[0]._all_conns == []
+    assert captured[0]._primary_conn is None
+
+
 def test_probe_shared_cache_raises_when_documents_invisible(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
