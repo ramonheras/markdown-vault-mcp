@@ -13,7 +13,7 @@ import re
 import threading
 from typing import TYPE_CHECKING, Any, Literal
 
-from markdown_vault_mcp.exceptions import IndexNotReadyError
+from markdown_vault_mcp.exceptions import IndexBuildFailedError, IndexNotReadyError
 from markdown_vault_mcp.fts_index import FTSIndex
 from markdown_vault_mcp.scanner import (
     ChunkStrategy,
@@ -102,6 +102,21 @@ class Collection:
     work on an unbuilt index — bucket-1 hits disk directly; bucket-2
     returns whatever is currently in the index (empty on cold start).
     See issue #525.
+
+    **Background build (issue #513 PR1).** When the persisted FTS DB
+    is cold (sentinel absent), the MCP server lifespan calls
+    :meth:`start_background_build_index` to spawn a daemon thread
+    that runs :meth:`build_index` to completion. Bucket-3/4 MCP tool
+    *clients* block on the new
+    :class:`markdown_vault_mcp._server_readiness.needs_index_ready`
+    decorator, which calls :meth:`wait_for_index_ready` with a
+    bounded default timeout
+    (``MARKDOWN_VAULT_MCP_READY_TIMEOUT_S``, default 60s). The
+    library stays honest: bucket-3/4 *methods* keep the PR #525
+    raise-immediately contract via :meth:`_require_index_ready`.
+    Internal callers (lifespan, git pull loop, CLI, direct library
+    users) get the raise contract and handle "not ready" with
+    caller-appropriate logic — never block.
 
     **Thread safety (issue #519):** every public method on this class is safe
     to call from any thread, concurrently with other reads and writes from
@@ -224,6 +239,18 @@ class Collection:
         # bucket-3 (relational queries) and bucket-4 (reindex /
         # build_embeddings). See issue #525.
         self._index_built = False
+
+        # Background-build coordination (issue #513 PR1 attempt 7). The
+        # event is the blocking primitive `wait_for_index_ready()` waits
+        # on; it is pre-set so a freshly constructed Collection that never
+        # called build_index() does not silently look "ready". The
+        # background path clears the event before spawning the thread
+        # and the worker sets it in its finally clause.
+        self._background_build_thread: threading.Thread | None = None
+        self._background_build_done: threading.Event = threading.Event()
+        self._background_build_done.set()
+        self._background_build_error: BaseException | None = None
+        self._background_started: bool = False
 
         # Serialise concurrent write operations on this instance.
         # Re-entrant: periodic pull tick blocks writes, then reindex() acquires
@@ -356,6 +383,23 @@ class Collection:
         Flushes deferred embeddings and pending write callbacks, then
         closes the SQLite connection and git strategy.
         """
+        # 0. Join background-build thread before any resource teardown.
+        # Read the thread reference under _write_lock (matches the lock
+        # held when start_background_build_index assigns it).
+        # join() must complete before _fts.close() (step 4) so the
+        # worker isn't writing to a closed FTS. daemon=True keeps a
+        # stuck thread from holding the process; cooperative
+        # cancellation inside _index_mgr.build_index is a follow-up.
+        with self._write_lock:
+            thread = self._background_build_thread
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=30.0)
+            if thread.is_alive():
+                logger.warning(
+                    "close: background build thread did not exit within "
+                    "30s; abandoning (daemon thread does not block process)"
+                )
+
         # 1. Flush any deferred embedding updates.
         self._index_mgr.flush_dirty_embeddings()
 
@@ -393,23 +437,191 @@ class Collection:
                 "Index not built. Call build_index() before this method."
             )
 
+    def is_index_ready(self) -> bool:
+        """Return ``True`` iff the FTS index is in a clean ready state.
+
+        Non-blocking. Returns ``True`` only when all three conditions
+        hold simultaneously: ``_index_built`` is True (a build returned
+        cleanly), ``_background_build_error`` is None (no captured
+        background failure), and ``_background_build_done`` is set (no
+        in-flight background). A freshly-constructed Collection
+        (event pre-set, no error, ``_index_built`` False) returns False
+        — the attempt-6 status lie is impossible by construction.
+
+        Lock-free by design: reads ``_index_built`` (plain bool
+        attribute), checks ``_background_build_error is None`` (plain
+        attribute), and calls ``_background_build_done.is_set()``
+        (Event method, no lock). Safe to call on hot tool paths.
+
+        Assumes CPython GIL semantics for cross-thread visibility of
+        the plain attribute reads. Not analyzed for Free-Threaded
+        Python 3.13+ (``python -X gil=0``); revisit if the project
+        moves off CPython GIL.
+        """
+        if not self._index_built:
+            return False
+        if self._background_build_error is not None:
+            return False
+        return self._background_build_done.is_set()
+
+    def start_background_build_index(self) -> None:
+        """Spawn a daemon thread that runs :meth:`build_index` to completion.
+
+        Idempotent: second call after a successful start, after a
+        clean completion, OR after a failed ``thread.start()`` is a
+        no-op. The method is one-shot per Collection lifetime;
+        operator recovery from a failed start is via CLI
+        ``markdown-vault-mcp index`` or process restart, NOT by
+        calling this method again.
+
+        The worker thread catches ``BaseException`` → captures into
+        ``_background_build_error`` → always sets
+        ``_background_build_done`` in its finally clause.
+
+        If ``thread.start()`` itself raises (system thread exhaustion
+        is the realistic case), the same capture-and-set happens
+        synchronously so callers waiting on the event never hang.
+        """
+
+        def _worker() -> None:
+            try:
+                self.build_index()
+            except BaseException as exc:
+                self._background_build_error = exc
+                logger.exception("Background index build failed")
+            finally:
+                self._background_build_done.set()
+
+        with self._write_lock:
+            if self._background_started:
+                return
+            self._background_started = True
+            self._background_build_error = None
+            self._background_build_done.clear()
+            thread = threading.Thread(
+                target=_worker,
+                name="markdown-vault-mcp.background-build",
+                daemon=True,
+            )
+            self._background_build_thread = thread
+            try:
+                thread.start()
+            except Exception as exc:
+                # Synchronously surface the failure so waiters unblock.
+                self._background_build_error = exc
+                self._background_build_done.set()
+                raise
+
+    def should_use_background_build(self) -> bool:
+        """Return True iff the lifespan should route to the background
+        FTS build path.
+
+        Returns True only for cold on-disk DBs (index_path is a real
+        file path AND the FTS completeness sentinel from PR #526 is
+        absent). Returns False for:
+        - warm on-disk DBs (sentinel present — synchronous
+          build_index() short-circuits in O(1));
+        - in-memory DBs (no index_path or ":memory:" — no sentinel
+          possible; full sync scan, acceptable for test scenarios).
+        """
+        # In-memory has no persistent state, so a "warm vs cold" notion
+        # doesn't apply; always synchronous.
+        if self._index_path is None or str(self._index_path) == ":memory:":
+            return False
+        return not self._fts.is_build_completed()
+
+    def get_index_status(self) -> dict[str, Any]:
+        """Return a non-blocking snapshot of background-build state.
+
+        Shape: ``{"status": "ready" | "building" | "failed",
+        "documents_indexed": int, "error": str | None}``.
+
+        - ``"ready"``: ``is_index_ready()`` is True (synchronous build
+          returned cleanly or background build completed cleanly);
+          ``error`` is None.
+        - ``"failed"``: ``_background_build_error`` is non-None;
+          ``error`` carries its message.
+        - ``"building"``: anything else — event cleared (in-flight)
+          OR event set but ``_index_built`` is False (never scheduled).
+          From the operator's perspective both mean "wait or poll."
+
+        ``documents_indexed`` is taken from
+        :meth:`FTSIndex.list_notes` and so reflects whatever rows are
+        currently committed — progress is observable in the
+        ``"building"`` state as the count rises.
+        """
+        if self._background_build_error is not None:
+            status = "failed"
+            error: str | None = str(self._background_build_error)
+        elif self.is_index_ready():
+            status = "ready"
+            error = None
+        else:
+            status = "building"
+            error = None
+        try:
+            documents_indexed = len(self._fts.list_notes())
+        except Exception:
+            logger.debug(
+                "get_index_status: list_notes failed; reporting 0",
+                exc_info=True,
+            )
+            documents_indexed = 0
+        return {
+            "status": status,
+            "documents_indexed": documents_indexed,
+            "error": error,
+        }
+
     def wait_for_index_ready(self, timeout: float | None = None) -> None:
         """Block until the FTS index is ready, or raise.
 
-        Pre-#513 this is a synchronous readiness check: raises
-        :exc:`IndexNotReadyError` when :meth:`build_index` has not
-        completed. The *timeout* parameter is reserved for the
-        background-indexer variant (#513), which will wait on a
-        completion event with this budget.
+        Control flow (each step in order):
+
+        1. ``_background_build_done.wait(timeout)`` — if False
+           (timed out), raise
+           :exc:`IndexNotReadyError("…timed out…")`.
+        2. If ``_background_build_error`` is not None, raise
+           :exc:`IndexBuildFailedError` with the original as
+           ``__cause__``.
+        3. If ``_index_built`` is False, raise
+           :exc:`IndexNotReadyError("…never scheduled…")` — guards
+           the never-scheduled case (event pre-set, no error, no
+           build, no thread). Without it, callers on a fresh
+           Collection would silently return success.
+        4. Otherwise return.
+
+        This method is opt-in for the MCP-layer `needs_index_ready`
+        decorator and for external callers that explicitly want to
+        wait. Library bucket-3/4 methods do NOT call this — they call
+        :meth:`_require_index_ready` which raises immediately. That
+        separation is the boundary that closed attempt 6's hole.
 
         Args:
-            timeout: Maximum seconds to wait. Currently unused.
+            timeout: Maximum seconds to wait on the completion event.
+                ``None`` (default) blocks indefinitely. MCP tool
+                callers are protected from infinite hangs by the
+                bounded default in the decorator (60s) and by
+                client-side deadlines.
 
         Raises:
-            IndexNotReadyError: If the index has not been built.
+            IndexBuildFailedError: A prior background build raised.
+            IndexNotReadyError: Index not built and either no build
+                was ever scheduled, or the timeout expired.
         """
-        del timeout  # Reserved for #513 — no background build to wait on.
-        self._require_index_ready()
+        if not self._background_build_done.wait(timeout=timeout):
+            raise IndexNotReadyError(
+                f"Index build still in progress; timed out after {timeout}s."
+            )
+        if self._background_build_error is not None:
+            raise IndexBuildFailedError(
+                "Background index build raised; see __cause__ for details."
+            ) from self._background_build_error
+        if not self._index_built:
+            raise IndexNotReadyError(
+                "Index not built; background build was never scheduled. "
+                "Call build_index() or start_background_build_index() first."
+            )
 
     @property
     def _vectors(self) -> VectorIndex | None:
@@ -553,6 +765,9 @@ class Collection:
                     len(existing),
                 )
                 self._index_built = True
+                # Recovery: clear any captured background error + signal ready.
+                self._background_build_error = None
+                self._background_build_done.set()
                 return IndexStats(
                     documents_indexed=len(existing),
                     chunks_indexed=0,
@@ -568,6 +783,9 @@ class Collection:
         result = self._index_mgr.build_index(force=force)
         self._fts.set_build_completed()
         self._index_built = True
+        # Recovery: clear any captured background error + signal ready.
+        self._background_build_error = None
+        self._background_build_done.set()
         return result
 
     def reindex(self) -> ReindexResult:

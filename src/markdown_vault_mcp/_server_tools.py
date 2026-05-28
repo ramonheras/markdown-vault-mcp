@@ -28,6 +28,7 @@ if TYPE_CHECKING:
 
 from ._icons import _TOOL_ICONS
 from ._server_deps import get_collection
+from ._server_readiness import needs_index_ready
 
 logger = logging.getLogger(__name__)
 
@@ -582,6 +583,36 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
         """
         return await asyncio.to_thread(collection.embeddings_status)
 
+    @mcp.tool(
+        annotations={
+            "readOnlyHint": True,
+            "openWorldHint": False,
+        },
+        icons=_TOOL_ICONS["get_index_status"],
+    )
+    async def get_index_status(
+        collection: Collection = Depends(get_collection),
+    ) -> dict[str, Any]:
+        """Return background-build state of the FTS index.
+
+        Use this when ``initialize`` returned but bucket-3/4 calls
+        block longer than expected or surface
+        ``IndexNotReadyError``/``IndexBuildFailedError`` — the
+        ``status`` field distinguishes "still building" from "build
+        failed."
+
+        Returns:
+            Dict with the following fields:
+
+            - status (str): ``"ready"``, ``"building"``, or
+              ``"failed"``.
+            - documents_indexed (int): Count of documents committed to
+              the FTS index right now (rises during ``"building"``).
+            - error (str | None): ``None`` unless the background build
+              raised.
+        """
+        return await asyncio.to_thread(collection.get_index_status)
+
     # --- Link tools (read-only) ---
 
     @mcp.tool(
@@ -592,6 +623,7 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
             "idempotentHint": True,
         },
     )
+    @needs_index_ready()
     async def get_backlinks(
         path: str,
         collection: Collection = Depends(get_collection),
@@ -638,6 +670,7 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
             "idempotentHint": True,
         },
     )
+    @needs_index_ready()
     async def get_outlinks(
         path: str,
         collection: Collection = Depends(get_collection),
@@ -724,6 +757,7 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
             "idempotentHint": True,
         },
     )
+    @needs_index_ready()
     async def get_similar(
         path: str,
         limit: int = 10,
@@ -824,6 +858,7 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
             "idempotentHint": True,
         },
     )
+    @needs_index_ready()
     async def get_context(
         path: str,
         similar_limit: int = 5,
@@ -985,6 +1020,7 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
             "idempotentHint": True,
         },
     )
+    @needs_index_ready()
     async def get_connection_path(
         source: str,
         target: str,
@@ -1185,6 +1221,7 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
             "idempotentHint": True,
         },
     )
+    @needs_index_ready()
     async def reindex(
         collection: Collection = Depends(get_collection),
     ) -> dict[str, Any]:
@@ -1214,6 +1251,7 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
             "idempotentHint": True,
         },
     )
+    @needs_index_ready()
     async def build_embeddings(
         force: bool = False,
         collection: Collection = Depends(get_collection),
