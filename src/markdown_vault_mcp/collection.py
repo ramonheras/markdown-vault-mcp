@@ -225,6 +225,18 @@ class Collection:
         # build_embeddings). See issue #525.
         self._index_built = False
 
+        # Background-build coordination (issue #513 PR1 attempt 7). The
+        # event is the blocking primitive `wait_for_index_ready()` waits
+        # on; it is pre-set so a freshly constructed Collection that never
+        # called build_index() does not silently look "ready". The
+        # background path clears the event before spawning the thread
+        # and the worker sets it in its finally clause.
+        self._background_build_thread: threading.Thread | None = None
+        self._background_build_done: threading.Event = threading.Event()
+        self._background_build_done.set()
+        self._background_build_error: BaseException | None = None
+        self._background_started: bool = False
+
         # Serialise concurrent write operations on this instance.
         # Re-entrant: periodic pull tick blocks writes, then reindex() acquires
         # this lock again for its mutation phase.
@@ -392,6 +404,33 @@ class Collection:
             raise IndexNotReadyError(
                 "Index not built. Call build_index() before this method."
             )
+
+    def is_index_ready(self) -> bool:
+        """Return ``True`` iff the FTS index is in a clean ready state.
+
+        Non-blocking. Returns ``True`` only when all three conditions
+        hold simultaneously: ``_index_built`` is True (a build returned
+        cleanly), ``_background_build_error`` is None (no captured
+        background failure), and ``_background_build_done`` is set (no
+        in-flight background). A freshly-constructed Collection
+        (event pre-set, no error, ``_index_built`` False) returns False
+        — the attempt-6 status lie is impossible by construction.
+
+        Lock-free by design: reads ``_index_built`` (plain bool
+        attribute), checks ``_background_build_error is None`` (plain
+        attribute), and calls ``_background_build_done.is_set()``
+        (Event method, no lock). Safe to call on hot tool paths.
+
+        Assumes CPython GIL semantics for cross-thread visibility of
+        the plain attribute reads. Not analyzed for Free-Threaded
+        Python 3.13+ (``python -X gil=0``); revisit if the project
+        moves off CPython GIL.
+        """
+        if not self._index_built:
+            return False
+        if self._background_build_error is not None:
+            return False
+        return self._background_build_done.is_set()
 
     def wait_for_index_ready(self, timeout: float | None = None) -> None:
         """Block until the FTS index is ready, or raise.
