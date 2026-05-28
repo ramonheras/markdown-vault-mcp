@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import contextlib
 import datetime
 import json
 import logging
 import sqlite3
+import threading
+import uuid
 from collections import deque
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -32,10 +35,10 @@ def _json_default(obj: Any) -> str:
     raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
 
 
-# DDL executed once on connection open.
+# DDL executed once on connection open. `foreign_keys` is intentionally NOT
+# set here — `_apply_pragmas` sets it on every connection (primary and
+# per-thread) before `_init_schema` runs.
 _SCHEMA_SQL = """
-PRAGMA foreign_keys = ON;
-
 CREATE TABLE IF NOT EXISTS documents (
     id INTEGER PRIMARY KEY,
     path TEXT UNIQUE NOT NULL,
@@ -155,97 +158,39 @@ def _normalize_heading(heading: str) -> str:
     return " ".join(heading.split())
 
 
-def _open_connection(db_path: Path | str) -> sqlite3.Connection:
-    """Open an SQLite connection with required pragmas and schema applied.
+def _resolve_connect_uri(db_path: Path | str) -> tuple[str, bool, bool]:
+    """Resolve a db_path into (connect_string, uses_uri, is_memory).
 
-    Args:
-        db_path: Filesystem path or ``":memory:"`` for an in-memory database.
+    For ``":memory:"`` returns a shared-cache URI unique to this call so that
+    every per-thread ``sqlite3.connect()`` joins the same in-memory database
+    (required for the per-thread connection model — see #519). For file paths
+    returns the path string directly.
 
-    Returns:
-        An open :class:`sqlite3.Connection` with the schema applied and
-        ``foreign_keys`` enforcement active.
+    The shared-cache URI is unique per ``FTSIndex`` instance (uuid4 token) so
+    distinct in-process collections do not collide.
     """
-    conn = sqlite3.connect(str(db_path), check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    # Apply schema; executescript commits implicitly.
-    conn.executescript(_SCHEMA_SQL)
-    # Migrate existing databases: add columns introduced after initial schema.
-    # ALTER TABLE ADD COLUMN is idempotent-guarded via try/except because
-    # SQLite only supports ADD COLUMN IF NOT EXISTS from version 3.35 onwards.
-    try:
-        conn.execute("ALTER TABLE links ADD COLUMN raw_target TEXT NOT NULL DEFAULT ''")
-        conn.commit()
-    except sqlite3.OperationalError as e:
-        if "duplicate column name" not in str(e).lower():
-            raise  # Unexpected error — re-raise.
-    # Migrate: create document_aliases table if it does not exist (added for
-    # Obsidian-style alias resolution in wikilinks).
-    conn.executescript(
-        """
-        CREATE TABLE IF NOT EXISTS document_aliases (
-            id INTEGER PRIMARY KEY,
-            document_id INTEGER NOT NULL,
-            alias TEXT NOT NULL,
-            UNIQUE(document_id, alias),
-            FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE
-        );
-        CREATE INDEX IF NOT EXISTS idx_aliases_alias ON document_aliases(alias);
-        CREATE INDEX IF NOT EXISTS idx_aliases_docid ON document_aliases(document_id);
-        """
-    )
-    # Migration: chunk_count was added 2026-04-30. ALTER TABLE is a no-op
-    # if the column already exists, but SQLite has no IF NOT EXISTS for
-    # columns, so we probe PRAGMA first.
-    cols = {r["name"] for r in conn.execute("PRAGMA table_info(documents)").fetchall()}
-    if "chunk_count" not in cols:
-        try:
-            conn.execute(
-                "ALTER TABLE documents ADD COLUMN chunk_count INTEGER NOT NULL DEFAULT 1"
-            )
-            conn.commit()
-            logger.info(
-                "fts_index: migrated documents table — added chunk_count column"
-            )
-        except sqlite3.OperationalError as exc:
-            if "duplicate column name" not in str(exc).lower():
-                raise
-            # Another process beat us to it; column now exists.
-            logger.debug(
-                "fts_index: chunk_count column already added by concurrent process"
-            )
-    # Migration: idx_sections_docid was added 2026-05-12 to back the
-    # correlated subquery on sections(document_id) used in keyword search
-    # for start_line propagation. CREATE INDEX IF NOT EXISTS is idempotent.
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_sections_docid ON sections(document_id)"
-    )
-    conn.commit()
-    # Ensure foreign_keys stays ON for subsequent statements (executescript
-    # does not guarantee this survives across statement boundaries in all
-    # SQLite versions).
-    conn.execute("PRAGMA foreign_keys = ON")
-    # WAL mode allows concurrent readers during writes — essential for
-    # search queries running while reindex or write operations update the DB.
-    # In-memory databases do not support WAL; skip the pragma to avoid a
-    # spurious warning (SQLite silently uses 'memory' journal mode).
-    if str(db_path) != ":memory:":
-        result = conn.execute("PRAGMA journal_mode = WAL").fetchone()
-        if result is None or result[0].lower() != "wal":
-            logger.warning(
-                "Could not enable WAL journal mode (got %s); "
-                "concurrent reads during writes may block",
-                result[0] if result else "no result",
-            )
-    conn.commit()
-    return conn
+    if str(db_path) == ":memory:":
+        token = uuid.uuid4().hex
+        return f"file:fts_{token}?mode=memory&cache=shared", True, True
+    return str(db_path), False, False
 
 
 class FTSIndex:
     """SQLite FTS5 index providing BM25 search and tag filtering.
 
-    Wraps a single SQLite database file (or in-memory database) and exposes
-    CRUD operations and full-text search over a collection of markdown
-    documents.
+    Wraps a SQLite database file (or in-memory database) and exposes CRUD
+    operations and full-text search over a collection of markdown documents.
+
+    **Thread safety (issue #519):** every public method is safe to call from
+    any thread. Each thread that touches the index opens its own
+    ``sqlite3.Connection`` on first use via :meth:`_conn`; a side registry
+    (``_all_conns``, guarded by ``_reg_lock``) holds strong refs so
+    :meth:`close` can close every connection — including those opened by
+    threads that have since exited. Concurrent writers are serialised by
+    ``Collection._write_lock``, not by this class. After :meth:`close`,
+    every public method raises ``sqlite3.ProgrammingError``. See
+    ``docs/design.md`` "Collection thread-safety contract" for the full
+    contract.
 
     Tag indexing behaviour is controlled by ``indexed_frontmatter_fields``:
     only the listed frontmatter keys are promoted into the ``document_tags``
@@ -269,7 +214,223 @@ class FTSIndex:
     ) -> None:
         self._db_path = db_path
         self._indexed_fields: list[str] = indexed_frontmatter_fields or []
-        self._conn = _open_connection(db_path)
+        # Resolve URI (translates ``:memory:`` to a shared-cache URI so that
+        # per-thread opens see the same in-memory DB).
+        self._connect_uri, self._uses_uri, self._is_memory = _resolve_connect_uri(
+            db_path
+        )
+        # Thread-safety state — see #519 and docs/design.md.
+        self._local = threading.local()
+        self._all_conns: list[sqlite3.Connection] = []
+        self._reg_lock = threading.Lock()
+        self._closed = False
+        self._primary_conn: sqlite3.Connection | None = None
+
+        # Open primary connection on the constructing thread. The whole
+        # init-schema + probe sequence runs under one BaseException cleanup
+        # block so any failure (pragma, ALTER TABLE, or the shared-cache
+        # probe) closes the primary connection — symmetric with the
+        # slow-path cleanup in _conn().
+        primary = self._connect()
+        try:
+            # PRAGMAS FIRST — busy_timeout must be active for ALTER TABLE migrations
+            # in _init_schema (per #519 carryover).
+            self._apply_pragmas(primary)
+            self._init_schema(primary)
+            self._local.conn = primary
+            self._primary_conn = primary
+            self._all_conns.append(primary)
+            # Fail-fast probe: if shared-cache ``:memory:`` translation is in
+            # use but SQLITE_ENABLE_SHARED_CACHE was disabled at build time, a
+            # second connection to the URI will see an empty DB. Surface that
+            # immediately instead of letting per-thread reads fail mysteriously
+            # downstream.
+            if self._is_memory:
+                self._probe_shared_cache()
+        except BaseException:
+            # Close the primary regardless of how far init progressed (the
+            # probe call may fail after append, leaving primary in
+            # _all_conns; reset both paths to a clean state).
+            try:
+                primary.close()
+            except Exception:
+                logger.debug(
+                    "fts_index.__init__ cleanup: error closing primary",
+                    exc_info=True,
+                )
+            # Mirror the _conn() slow-path TLS clear: if a partially-built
+            # FTSIndex's _local.conn still pointed at the now-closed primary,
+            # a caller holding the instance after __init__ raised would
+            # fast-path the closed conn instead of getting ProgrammingError.
+            self._local.conn = None
+            self._all_conns.clear()
+            self._primary_conn = None
+            raise
+
+    def _connect(self) -> sqlite3.Connection:
+        """Open a raw sqlite3 connection to this index's URI."""
+        conn = sqlite3.connect(
+            self._connect_uri,
+            check_same_thread=False,
+            uri=self._uses_uri,
+        )
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    def _apply_pragmas(self, conn: sqlite3.Connection) -> None:
+        """Apply per-connection pragmas (foreign_keys, busy_timeout, synchronous).
+
+        Called on every ``sqlite3.connect()`` — the primary connection and
+        every per-thread open. These are per-connection settings that do NOT
+        persist across opens.
+        """
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA busy_timeout = 5000")
+        conn.execute("PRAGMA synchronous = NORMAL")
+
+    def _init_schema(self, conn: sqlite3.Connection) -> None:
+        """Run DDL, migrations, and WAL on the primary connection.
+
+        Called exactly once per ``FTSIndex`` instance, on the constructing
+        thread. Per-thread opens do NOT call this method — they only apply
+        pragmas, since DDL and WAL are persisted in the DB header.
+        """
+        conn.executescript(_SCHEMA_SQL)
+        try:
+            conn.execute(
+                "ALTER TABLE links ADD COLUMN raw_target TEXT NOT NULL DEFAULT ''"
+            )
+            conn.commit()
+        except sqlite3.OperationalError as e:
+            if "duplicate column name" not in str(e).lower():
+                raise
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS document_aliases (
+                id INTEGER PRIMARY KEY,
+                document_id INTEGER NOT NULL,
+                alias TEXT NOT NULL,
+                UNIQUE(document_id, alias),
+                FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_aliases_alias ON document_aliases(alias);
+            CREATE INDEX IF NOT EXISTS idx_aliases_docid ON document_aliases(document_id);
+            """
+        )
+        cols = {
+            r["name"] for r in conn.execute("PRAGMA table_info(documents)").fetchall()
+        }
+        if "chunk_count" not in cols:
+            try:
+                conn.execute(
+                    "ALTER TABLE documents ADD COLUMN chunk_count INTEGER NOT NULL DEFAULT 1"
+                )
+                conn.commit()
+                logger.info(
+                    "fts_index: migrated documents table — added chunk_count column"
+                )
+            except sqlite3.OperationalError as exc:
+                if "duplicate column name" not in str(exc).lower():
+                    raise
+                logger.debug(
+                    "fts_index: chunk_count column already added by concurrent process"
+                )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_sections_docid ON sections(document_id)"
+        )
+        conn.commit()
+        # WAL is a DB-header pragma — persists across opens. Skip for in-memory
+        # databases (SQLite silently falls back to 'memory' journal mode there).
+        if not self._is_memory:
+            result = conn.execute("PRAGMA journal_mode = WAL").fetchone()
+            if result is None or str(result[0]).lower() != "wal":
+                logger.warning(
+                    "Could not enable WAL journal mode (got %s); "
+                    "concurrent reads during writes may block",
+                    result[0] if result else "no result",
+                )
+        conn.commit()
+
+    def _probe_shared_cache(self) -> None:
+        """Verify that a second connection to the same in-memory URI sees the schema.
+
+        If ``SQLITE_ENABLE_SHARED_CACHE`` is unavailable in this SQLite build,
+        the second connection will see an empty database — per-thread reads
+        would then fail with confusing OperationalErrors. Surface that
+        condition immediately with an operator-actionable error.
+        """
+        # The probe connection intentionally bypasses _all_conns: it is opened
+        # and closed entirely within this method before the FTSIndex instance
+        # is exposed to any caller, so the registry-based close() machinery is
+        # not needed for it.
+        probe = self._connect()
+        try:
+            row = probe.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='documents'"
+            ).fetchone()
+            if row is None:
+                raise RuntimeError(
+                    "FTSIndex: in-memory shared-cache probe failed — this SQLite "
+                    "build appears to lack SQLITE_ENABLE_SHARED_CACHE. Use a file "
+                    "path for db_path, or rebuild SQLite with shared-cache support."
+                )
+        finally:
+            try:
+                probe.close()
+            except sqlite3.Error:
+                logger.debug(
+                    "fts_index._probe_shared_cache: probe.close failed",
+                    exc_info=True,
+                )
+
+    def _conn(self) -> sqlite3.Connection:
+        """Return this thread's sqlite3 connection, opening one on first touch.
+
+        Uses double-checked locking: the fast path is lock-free; the slow path
+        re-checks ``_closed`` under ``_reg_lock`` so a concurrent ``close()``
+        cannot race with a new-thread open.
+
+        Raises:
+            sqlite3.ProgrammingError: If ``close()`` has been called.
+
+        Note on connection accumulation: dead-thread connections remain in
+        ``_all_conns`` (strong refs) until ``close()``. This is bounded for
+        the MCP server's workload (long-lived lifespan thread + bounded
+        ``asyncio.to_thread`` pool) and is preferred over weakrefs (see
+        ``feedback_519_weakref_whackamole.md``).
+        """
+        if self._closed:
+            raise sqlite3.ProgrammingError("Cannot operate on a closed FTSIndex")
+        existing = getattr(self._local, "conn", None)
+        if existing is not None:
+            return existing
+        new_conn = self._connect()
+        try:
+            self._apply_pragmas(new_conn)
+            with self._reg_lock:
+                if self._closed:
+                    raise sqlite3.ProgrammingError(
+                        "Cannot operate on a closed FTSIndex"
+                    )
+                self._local.conn = new_conn
+                self._all_conns.append(new_conn)
+        except BaseException:
+            # Cover KeyboardInterrupt / SystemExit / asyncio.CancelledError —
+            # sqlite3.Error alone would leak the open connection on teardown.
+            # Clear the TLS slot first: CPython delivers signals at bytecode
+            # boundaries, so an interrupt between the _local.conn assignment
+            # and the registry append would otherwise leave a closed conn in
+            # TLS for the next fast-path call to silently return.
+            self._local.conn = None
+            # Re-acquire _reg_lock for the registry mutation: a concurrent
+            # close() iterates _all_conns under the lock, so an unguarded
+            # remove() here could trigger "list changed size during iteration"
+            # in close().
+            with self._reg_lock, contextlib.suppress(ValueError):
+                self._all_conns.remove(new_conn)
+            new_conn.close()
+            raise
+        return new_conn
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -538,8 +699,9 @@ class FTSIndex:
             Total number of chunks (sections) indexed.
         """
         total_chunks = 0
-        with self._conn:
-            cur = self._conn.cursor()
+        conn = self._conn()
+        with conn:
+            cur = conn.cursor()
             for note in notes:
                 folder = _derive_folder(note.path)
                 self._delete_document(cur, note.path)
@@ -570,8 +732,9 @@ class FTSIndex:
             Number of chunks (sections) indexed for this document.
         """
         folder = _derive_folder(note.path)
-        with self._conn:
-            cur = self._conn.cursor()
+        conn = self._conn()
+        with conn:
+            cur = conn.cursor()
             self._delete_document(cur, note.path)
             doc_id = self._insert_document(cur, note, folder)
             self._insert_sections(cur, doc_id, note)
@@ -592,8 +755,9 @@ class FTSIndex:
         Returns:
             Number of document rows deleted (0 if path was not indexed).
         """
-        with self._conn:
-            cur = self._conn.cursor()
+        conn = self._conn()
+        with conn:
+            cur = conn.cursor()
             deleted = self._delete_document(cur, path)
         if deleted:
             logger.debug("delete_by_path: removed %s", path)
@@ -725,7 +889,7 @@ class FTSIndex:
             snippet_words,
         )
         try:
-            cur = self._conn.execute(sql, params)
+            cur = self._conn().execute(sql, params)
         except sqlite3.OperationalError as exc:
             msg = str(exc).lower()
             if (
@@ -768,7 +932,7 @@ class FTSIndex:
             ``frontmatter_json``, ``content_hash``, ``modified_at``, or
             ``None`` if the document is not indexed.
         """
-        cur = self._conn.execute(
+        cur = self._conn().execute(
             """
             SELECT path, title, folder, frontmatter_json,
                    content_hash, modified_at
@@ -796,7 +960,7 @@ class FTSIndex:
             # Escape LIKE wildcards in the user-supplied folder value so that
             # literal '%' and '_' characters are matched as-is.
             escaped = _escape_like(folder)
-            cur = self._conn.execute(
+            cur = self._conn().execute(
                 """
                 SELECT path, title, folder, frontmatter_json,
                        content_hash, modified_at
@@ -807,7 +971,7 @@ class FTSIndex:
                 (folder, escaped + "/%"),
             )
         else:
-            cur = self._conn.execute(
+            cur = self._conn().execute(
                 """
                 SELECT path, title, folder, frontmatter_json,
                        content_hash, modified_at
@@ -823,7 +987,7 @@ class FTSIndex:
         Returns:
             Sorted list of folder strings (including ``""`` for the root).
         """
-        cur = self._conn.execute(
+        cur = self._conn().execute(
             "SELECT DISTINCT folder FROM documents ORDER BY folder"
         )
         return [row[0] for row in cur.fetchall()]
@@ -840,7 +1004,7 @@ class FTSIndex:
         Returns:
             Sorted list of distinct value strings.
         """
-        cur = self._conn.execute(
+        cur = self._conn().execute(
             """
             SELECT DISTINCT tag_value
             FROM document_tags
@@ -857,8 +1021,7 @@ class FTSIndex:
         Returns:
             Integer count of all indexed chunks across all documents.
         """
-        row = self._conn.execute("SELECT COUNT(*) FROM sections").fetchone()
-        return row[0] if row else 0
+        return self._conn().execute("SELECT COUNT(*) FROM sections").fetchone()[0]
 
     def get_toc(self, path: str) -> list[dict[str, str | int]]:
         """Return headings for a document, ordered by position.
@@ -874,7 +1037,7 @@ class FTSIndex:
             first appearance.  Empty list if the document is not found or
             has no headings.
         """
-        cur = self._conn.execute(
+        cur = self._conn().execute(
             """
             SELECT heading, heading_level
             FROM sections
@@ -904,7 +1067,7 @@ class FTSIndex:
         """
         limit_clause = "" if limit is None else "LIMIT ?"
         params: tuple = (path,) if limit is None else (path, limit)
-        cur = self._conn.execute(
+        cur = self._conn().execute(
             f"""
             SELECT d.path AS source_path,
                    d.title AS source_title,
@@ -939,7 +1102,7 @@ class FTSIndex:
         """
         limit_clause = "" if limit is None else "LIMIT ?"
         params: tuple = (path,) if limit is None else (path, limit)
-        cur = self._conn.execute(
+        cur = self._conn().execute(
             f"""
             SELECT l.target_path,
                    l.link_text,
@@ -996,16 +1159,16 @@ class FTSIndex:
         Returns:
             Number of link rows whose ``target_path`` was updated.
         """
+        conn = self._conn()
         # Load all document paths once into a Python set/list for in-memory
         # matching — avoids O(N) SQL round-trips (one SELECT per wikilink row).
         doc_paths: list[str] = [
-            r["path"]
-            for r in self._conn.execute("SELECT path FROM documents").fetchall()
+            r["path"] for r in conn.execute("SELECT path FROM documents").fetchall()
         ]
 
         # Build alias → document path mapping for fallback resolution.
         # Case-insensitive: Obsidian alias matching is case-insensitive.
-        alias_rows = self._conn.execute(
+        alias_rows = conn.execute(
             """
             SELECT da.alias, d.path
             FROM document_aliases da
@@ -1021,7 +1184,7 @@ class FTSIndex:
         # Fetch all wikilinks eligible for vault-wide resolution.
         # Explicit relative prefixes (./  ../) are excluded — those were
         # resolved at scan time and must not be overwritten.
-        rows = self._conn.execute(
+        rows = conn.execute(
             """
             SELECT id, raw_target, target_path
             FROM links
@@ -1062,10 +1225,8 @@ class FTSIndex:
             if new_path != row["target_path"]:
                 updates.append((new_path, row["id"]))
 
-        with self._conn:
-            self._conn.executemany(
-                "UPDATE links SET target_path = ? WHERE id = ?", updates
-            )
+        with conn:
+            conn.executemany("UPDATE links SET target_path = ? WHERE id = ?", updates)
         updated = len(updates)
 
         if updated:
@@ -1107,7 +1268,7 @@ class FTSIndex:
               {folder_clause}
             ORDER BY d.path, l.rowid
         """
-        cur = self._conn.execute(sql, params)
+        cur = self._conn().execute(sql, params)
         return [dict(row) for row in cur.fetchall()]
 
     def get_recent(self, *, limit: int = 20, folder: str | None = None) -> list[dict]:
@@ -1124,7 +1285,7 @@ class FTSIndex:
         """
         if folder is not None:
             escaped = _escape_like(folder)
-            cur = self._conn.execute(
+            cur = self._conn().execute(
                 """
                 SELECT path, title, folder, frontmatter_json,
                        modified_at
@@ -1136,7 +1297,7 @@ class FTSIndex:
                 (folder, escaped + "/%", limit),
             )
         else:
-            cur = self._conn.execute(
+            cur = self._conn().execute(
                 """
                 SELECT path, title, folder, frontmatter_json,
                        modified_at
@@ -1159,7 +1320,7 @@ class FTSIndex:
             List of dicts with keys ``path``, ``title``, ``folder``,
             ``frontmatter_json``, and ``modified_at``, ordered by path.
         """
-        cur = self._conn.execute(
+        cur = self._conn().execute(
             """
             SELECT path, title, folder, frontmatter_json, modified_at
             FROM documents d
@@ -1180,7 +1341,7 @@ class FTSIndex:
             List of dicts with keys ``path``, ``title``, ``folder``,
             ``backlink_count``, ordered by backlink_count descending.
         """
-        cur = self._conn.execute(
+        cur = self._conn().execute(
             """
             SELECT d.path,
                    d.title,
@@ -1224,9 +1385,11 @@ class FTSIndex:
 
         # Validate both endpoints exist.
         for path in (source_path, target_path):
-            row = self._conn.execute(
-                "SELECT 1 FROM documents WHERE path = ?", (path,)
-            ).fetchone()
+            row = (
+                self._conn()
+                .execute("SELECT 1 FROM documents WHERE path = ?", (path,))
+                .fetchone()
+            )
             if row is None:
                 raise ValueError(f"Path not found in index: {path!r}")
 
@@ -1236,7 +1399,7 @@ class FTSIndex:
 
         # Load all edges into an undirected adjacency dict.
         adj: dict[str, set[str]] = {}
-        cur = self._conn.execute(
+        cur = self._conn().execute(
             "SELECT d1.path, d2.path FROM links l"
             " JOIN documents d1 ON d1.id = l.source_id"
             " JOIN documents d2 ON d2.path = l.target_path"
@@ -1292,7 +1455,7 @@ class FTSIndex:
                 missing links table.
         """
         try:
-            row = self._conn.execute(sql).fetchone()
+            row = self._conn().execute(sql).fetchone()
             return int(row[0])
         except sqlite3.OperationalError as e:
             if "no such table: links" in str(e).lower():
@@ -1348,9 +1511,11 @@ class FTSIndex:
             The ``chunk_count`` stored in the documents table, or ``1`` if
             the document is not found.
         """
-        row = self._conn.execute(
-            "SELECT chunk_count FROM documents WHERE path = ?", (path,)
-        ).fetchone()
+        row = (
+            self._conn()
+            .execute("SELECT chunk_count FROM documents WHERE path = ?", (path,))
+            .fetchone()
+        )
         return int(row["chunk_count"]) if row else 1
 
     def get_chunk_counts(self, paths: Iterable[str]) -> dict[str, int]:
@@ -1368,10 +1533,14 @@ class FTSIndex:
         if not paths_list:
             return {}
         placeholders = ",".join("?" * len(paths_list))
-        rows = self._conn.execute(
-            f"SELECT path, chunk_count FROM documents WHERE path IN ({placeholders})",
-            paths_list,
-        ).fetchall()
+        rows = (
+            self._conn()
+            .execute(
+                f"SELECT path, chunk_count FROM documents WHERE path IN ({placeholders})",
+                paths_list,
+            )
+            .fetchall()
+        )
         return {r["path"]: int(r["chunk_count"]) for r in rows}
 
     def get_section(self, path: str, heading: str) -> dict[str, Any] | None:
@@ -1413,16 +1582,20 @@ class FTSIndex:
         norm_query = _normalize_heading(heading)
         if not norm_query:
             return None
-        rows = self._conn.execute(
-            """
+        rows = (
+            self._conn()
+            .execute(
+                """
             SELECT s.content, s.heading, s.heading_level
             FROM sections s
             JOIN documents d ON d.id = s.document_id
             WHERE d.path = ? AND s.heading IS NOT NULL
             ORDER BY s.start_line ASC
             """,
-            (path,),
-        ).fetchall()
+                (path,),
+            )
+            .fetchall()
+        )
         for row in rows:
             if _normalize_heading(row["heading"]) == norm_query:
                 return {
@@ -1448,8 +1621,10 @@ class FTSIndex:
             List of heading strings in document order, deduplicated while
             preserving the first-occurrence order.
         """
-        rows = self._conn.execute(
-            """
+        rows = (
+            self._conn()
+            .execute(
+                """
             SELECT s.heading
             FROM sections s
             JOIN documents d ON d.id = s.document_id
@@ -1458,14 +1633,41 @@ class FTSIndex:
             ORDER BY MIN(s.start_line) ASC
             LIMIT ?
             """,
-            (path, limit),
-        ).fetchall()
+                (path, limit),
+            )
+            .fetchall()
+        )
         return [row["heading"] for row in rows]
 
     def close(self) -> None:
-        """Close the underlying database connection.
+        """Close every per-thread connection and mark this index closed.
 
-        After calling this method, the index must not be used.
+        Idempotent: a second call finds an empty registry and performs no
+        connection closes. After ``close()``, any thread calling a public
+        method raises ``sqlite3.ProgrammingError`` from ``_conn()``.
         """
-        self._conn.close()
+        with self._reg_lock:
+            self._closed = True
+            try:
+                for conn in self._all_conns:
+                    try:
+                        conn.close()
+                    except sqlite3.ProgrammingError:
+                        logger.debug("fts_index.close: connection already closed")
+                    except Exception:
+                        # Catch non-sqlite3.Error subclasses too (e.g. OSError
+                        # from underlying file handle, RuntimeError from C
+                        # wrappers) so the loop never exits mid-iteration and
+                        # leaves connections un-closed. KeyboardInterrupt /
+                        # SystemExit still propagate.
+                        logger.error(
+                            "fts_index.close: error closing connection",
+                            exc_info=True,
+                        )
+            finally:
+                # Ensure the registry is cleared even if a BaseException
+                # (KeyboardInterrupt / SystemExit) interrupts the loop, so a
+                # subsequent close() retry sees a clean state.
+                self._all_conns.clear()
+                self._primary_conn = None
         logger.debug("FTSIndex closed (db_path=%s)", self._db_path)

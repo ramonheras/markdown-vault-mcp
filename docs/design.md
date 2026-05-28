@@ -434,6 +434,64 @@ The contract is:
   itself call write methods on the same Collection instance (deadlock).
 - Callbacks must not raise; exceptions are logged and swallowed.
 
+#### Collection thread-safety contract (issue #519)
+
+Every public method on `Collection`, `FTSIndex`, and the managers is safe
+to call from any thread, concurrently with calls on any other thread.
+This is the contract that issue #513 (non-blocking MCP initialize via
+background indexing) depends on; PRs #510, #515, #516, #518 all failed
+because the single-connection model violated it on Python 3.12+.
+
+The mechanism is **per-thread `sqlite3.Connection` instances** managed by
+`FTSIndex`:
+
+- Each thread that touches the index opens its own connection on first
+  call, via `_conn()` (which routes through `threading.local`).
+- A side registry (`_all_conns: list[sqlite3.Connection]`, guarded by
+  `_reg_lock`) holds strong references to every opened connection so
+  `close()` can close all of them — including those opened by threads
+  that have since exited. `check_same_thread=False` is set on every
+  connection so `close()` can iterate cross-thread.
+- The constructing thread is special only in that it runs schema/migrations
+  exactly once and applies WAL (a DB-header pragma) for file-backed DBs.
+  Per-thread opens apply only per-connection pragmas (`foreign_keys=ON`,
+  `busy_timeout=5000`, `synchronous=NORMAL`) — **pragmas apply BEFORE
+  schema/migrations** so `busy_timeout` is active during `ALTER TABLE`.
+- `_closed: bool` uses double-checked locking: the fast path is lock-free;
+  the slow path re-checks under `_reg_lock` so a concurrent `close()`
+  cannot race with a new-thread connection open.
+- Slow-path open + pragma + register is wrapped in `except BaseException`
+  so `KeyboardInterrupt` / `SystemExit` / `asyncio.CancelledError` during
+  interpreter teardown cannot leak the half-initialized connection.
+- `_primary_conn` is a strong instance attribute (alongside
+  `self._local.conn`) so the primary connection survives the constructing
+  thread's exit; the registry-based `close()` then still closes it.
+- `:memory:` databases are translated to a unique-per-instance shared-cache
+  URI (`file:fts_<uuid4hex>?mode=memory&cache=shared`) so every per-thread
+  open joins the same in-memory DB. A startup probe opens a second
+  connection to the URI and raises `RuntimeError` with an operator-actionable
+  message if `SQLITE_ENABLE_SHARED_CACHE` is unavailable.
+
+Dead-thread connections accumulate in `_all_conns` until `close()`. This
+is bounded for the MCP server's threading model (long-lived lifespan
+thread + bounded `asyncio.to_thread` pool of ~30 recycled workers) and
+is preferred over the `weakref` approach that introduced a 3-finding
+cascade in PR #520 (see project-memory file
+`feedback_519_weakref_whackamole.md`).
+
+Cursors never escape the method that created them — verified by audit
+during the #519 design. Each `with self._conn():` block emits one
+BEGIN/COMMIT pair; no nested `with conn:` exists in the current code, so
+Python 3.12's implicit-transaction wrapper is never re-entered.
+
+Acceptance evidence: `tests/test_thread_safety.py` exercises per-thread
+identity, pragma application, pragmas-before-schema ordering, single
+schema run, close-closes-all, idempotent close, post-close rejection,
+close/open race safety, strong-ref retention across thread+gc, shared-cache
+`:memory:`, concurrent writers via `_write_lock`, and the PR #518 failure
+pattern (background `build_index(force=True)` interleaved with main-thread
+`read/search/write/edit`).
+
 #### Optimistic Concurrency (`if_match`)
 
 All five write methods (`write()`, `edit()`, `delete()`, `rename()`,
