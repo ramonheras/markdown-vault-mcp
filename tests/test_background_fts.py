@@ -193,3 +193,32 @@ def test_start_background_build_index_one_shot_after_thread_start_failure(
     monkeypatch.undo()
     col.start_background_build_index()  # no-op; does NOT spawn a new thread
     col.close()
+
+
+def test_should_use_background_build_in_memory_false(tmp_path: Path) -> None:
+    col = Collection(source_dir=_vault(tmp_path))  # no index_path → in-memory
+    assert col.should_use_background_build() is False
+    col.close()
+
+
+def test_should_use_background_build_cold_on_disk_true(tmp_path: Path) -> None:
+    vault = _vault(tmp_path)
+    _seed(vault)
+    col = Collection(source_dir=vault, index_path=tmp_path / "fts.db")
+    # No prior build → sentinel absent → background build required.
+    assert col.should_use_background_build() is True
+    col.close()
+
+
+def test_should_use_background_build_warm_on_disk_false(tmp_path: Path) -> None:
+    vault = _vault(tmp_path)
+    _seed(vault)
+    index_path = tmp_path / "fts.db"
+    # Phase 1: pre-build sets the sentinel.
+    pre = Collection(source_dir=vault, index_path=index_path)
+    pre.build_index()
+    pre.close()
+    # Phase 2: fresh Collection sees the warm sentinel.
+    col = Collection(source_dir=vault, index_path=index_path)
+    assert col.should_use_background_build() is False
+    col.close()

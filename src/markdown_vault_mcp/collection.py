@@ -480,6 +480,24 @@ class Collection:
                 self._background_build_done.set()
                 raise
 
+    def should_use_background_build(self) -> bool:
+        """Return True iff the lifespan should route to the background
+        FTS build path.
+
+        Returns True only for cold on-disk DBs (index_path is a real
+        file path AND the FTS completeness sentinel from PR #526 is
+        absent). Returns False for:
+        - warm on-disk DBs (sentinel present — synchronous
+          build_index() short-circuits in O(1));
+        - in-memory DBs (no index_path or ":memory:" — no sentinel
+          possible; full sync scan, acceptable for test scenarios).
+        """
+        # In-memory has no persistent state, so a "warm vs cold" notion
+        # doesn't apply; always synchronous.
+        if self._index_path is None or str(self._index_path) == ":memory:":
+            return False
+        return not self._fts.is_build_completed()
+
     def wait_for_index_ready(self, timeout: float | None = None) -> None:
         """Block until the FTS index is ready, or raise.
 
