@@ -106,7 +106,19 @@ CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
     path, title, folder, heading, content,
     tokenize='porter unicode61'
 );
+
+CREATE TABLE IF NOT EXISTS meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 """
+
+# Key written into ``meta`` after :meth:`Collection.build_index` completes
+# a full scan successfully. Warm-restart short-circuits keyed solely on
+# ``documents`` row presence would otherwise treat a partial index (left
+# by a crash mid-build, since per-document upserts each commit in their
+# own transaction) as ready — see issue #525.
+_META_BUILD_COMPLETED_KEY = "build_completed_at"
 
 
 def _escape_like(value: str) -> str:
@@ -762,6 +774,42 @@ class FTSIndex:
         if deleted:
             logger.debug("delete_by_path: removed %s", path)
         return deleted
+
+    # ------------------------------------------------------------------
+    # Build completeness sentinel (issue #525)
+    # ------------------------------------------------------------------
+
+    def is_build_completed(self) -> bool:
+        """Return ``True`` iff a prior ``build_index`` run committed the
+        completeness sentinel into the ``meta`` table.
+
+        Absence of the sentinel — paired with non-empty ``documents`` —
+        signals a partial index left by a crashed prior build, and the
+        caller (``Collection.build_index``) treats it as cold.
+        """
+        conn = self._conn()
+        with conn:
+            row = conn.execute(
+                "SELECT 1 FROM meta WHERE key = ?",
+                (_META_BUILD_COMPLETED_KEY,),
+            ).fetchone()
+        return row is not None
+
+    def set_build_completed(self) -> None:
+        """Mark the FTS index as the result of a clean full build."""
+        conn = self._conn()
+        ts = datetime.datetime.now(tz=datetime.UTC).isoformat()
+        with conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO meta(key, value) VALUES(?, ?)",
+                (_META_BUILD_COMPLETED_KEY, ts),
+            )
+
+    def clear_build_completed(self) -> None:
+        """Erase the completeness sentinel (before a destructive rebuild)."""
+        conn = self._conn()
+        with conn:
+            conn.execute("DELETE FROM meta WHERE key = ?", (_META_BUILD_COMPLETED_KEY,))
 
     def search(
         self,

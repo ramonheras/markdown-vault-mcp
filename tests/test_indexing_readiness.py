@@ -294,6 +294,68 @@ class TestWaitForIndexReady:
 # ---------------------------------------------------------------------------
 
 
+class TestWarmRestartCompletenessSentinel:
+    """Warm-restart short-circuit must require proof of clean prior build,
+    not just "FTS has some rows" (a partial-write crash leaves rows
+    without the proof).
+    """
+
+    def test_warm_restart_with_partial_index_rebuilds(self, tmp_path: Path) -> None:
+        """A persistent FTS with rows but no completeness sentinel — the
+        residue of a process that crashed mid-build_index — must trigger
+        a full rebuild on the next process, not be treated as ready.
+        """
+        from markdown_vault_mcp.fts_index import FTSIndex
+        from markdown_vault_mcp.scanner import scan_directory
+
+        vault = _vault(tmp_path)
+        for i in range(3):
+            _seed(vault, f"n_{i}.md", f"# N{i}\n\nbody {i}\n")
+        index_path = tmp_path / "fts.db"
+
+        # Simulate a crash-mid-build: upsert one note directly into the
+        # FTS DB (so list_notes() is non-empty) without going through
+        # Collection.build_index() (so no sentinel is set).
+        fts = FTSIndex(db_path=index_path)
+        for note in scan_directory(vault):
+            fts.upsert_note(note)
+            break  # Stop after one — simulating a mid-loop crash.
+        fts.close()
+
+        # Next process opens the same DB and calls build_index().
+        col = Collection(source_dir=vault, index_path=index_path)
+        col.build_index()
+
+        # Must have rebuilt fully — not short-circuited on the 1 stale row.
+        assert {row["path"] for row in col._fts.list_notes()} == {
+            "n_0.md",
+            "n_1.md",
+            "n_2.md",
+        }
+        col.close()
+
+    def test_clean_warm_restart_short_circuits(self, tmp_path: Path) -> None:
+        """A persistent FTS that was the result of a successful prior
+        build MUST short-circuit — the perf win the PR is for.
+        """
+        vault = _vault(tmp_path)
+        for i in range(3):
+            _seed(vault, f"n_{i}.md", f"# N{i}\n\nbody {i}\n")
+        index_path = tmp_path / "fts.db"
+
+        col1 = Collection(source_dir=vault, index_path=index_path)
+        col1.build_index()
+        col1.close()
+
+        col2 = Collection(source_dir=vault, index_path=index_path)
+        stats = col2.build_index()
+
+        # Short-circuit: zero chunks reindexed.
+        assert stats.documents_indexed == 3
+        assert stats.chunks_indexed == 0
+        col2.close()
+
+
 class TestReadinessFlagSemantics:
     def test_failed_force_rebuild_clears_flag(self, tmp_path: Path) -> None:
         """A failed build_index(force=True) on a previously-built Collection

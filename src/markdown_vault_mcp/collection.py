@@ -545,7 +545,7 @@ class Collection:
         Returns:
             :class:`~markdown_vault_mcp.types.IndexStats` describing what was indexed.
         """
-        if not force:
+        if not force and self._fts.is_build_completed():
             existing = self._fts.list_notes()
             if existing:
                 logger.debug(
@@ -559,11 +559,14 @@ class Collection:
                     skipped=0,
                 )
 
-        # Reset before the (potentially destructive, force=True) rebuild so a
-        # mid-rebuild exception leaves the Collection visibly not-ready —
-        # otherwise a previously-True flag would mask a cleared/partial index.
+        # Reset before the (potentially destructive) rebuild so a mid-build
+        # exception leaves the Collection visibly not-ready. The sentinel
+        # is cleared too so a crash mid-loop is detectable by the next
+        # process (rows without sentinel = partial — see issue #525).
         self._index_built = False
+        self._fts.clear_build_completed()
         result = self._index_mgr.build_index(force=force)
+        self._fts.set_build_completed()
         self._index_built = True
         return result
 
