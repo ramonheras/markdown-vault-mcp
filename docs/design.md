@@ -358,8 +358,15 @@ Two methods manage the index:
 
 - **`build_index(force=False)`**: initial population. Scans `source_dir` and
   builds the FTS index. Short-circuits as a no-op when the persisted FTS
-  database already contains documents (warm restart on the same
-  `index_path`). `force=True` drops and rebuilds from scratch. When a
+  database contains documents **and** carries the completeness sentinel
+  written by a prior clean build (warm restart on the same `index_path`).
+  A database with rows but no sentinel — residue of a process that
+  crashed mid-build, since `IndexManager.build_index` commits per-document
+  in its own transaction — is treated as cold and triggers a full
+  rebuild. The sentinel is the `build_completed_at` row in the FTS
+  `meta` table, cleared by `Collection.build_index` before any
+  destructive rebuild and written only after `_index_mgr.build_index`
+  returns cleanly. `force=True` drops and rebuilds from scratch. When a
   persistent `index_path` contains documents that now match
   `exclude_patterns`, they are purged from the FTS and vector indexes
   after the scan — but only when a scan actually runs (i.e. on a cold

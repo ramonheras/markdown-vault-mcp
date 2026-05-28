@@ -69,11 +69,12 @@ class ConfigurationError(MarkdownMCPError):
 class IndexNotReadyError(MarkdownMCPError):
     """Raised when a method requires a built FTS index and none exists.
 
-    Bucket-3 relational queries (``get_backlinks``, ``get_outlinks``,
-    ``get_similar``, ``get_context``, ``get_connection_path``) and
-    bucket-4 coordinators (``reindex``, ``build_embeddings``) cannot
-    produce correct results against an empty / never-built index. They
-    raise this rather than silently return wrong answers.
+    Bucket-3 relational / FTS-backed queries (``get_backlinks``,
+    ``get_outlinks``, ``get_similar``, ``get_context``,
+    ``get_connection_path``, ``get_toc``) and bucket-4 coordinators
+    (``reindex``, ``build_embeddings``) cannot produce correct results
+    against an empty / never-built index. They raise this rather than
+    silently return wrong answers.
 
     Callers must call :meth:`Collection.build_index` before these
     methods. Once a background indexer lands (issue #513), the
