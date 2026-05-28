@@ -394,6 +394,31 @@ whatever is currently in the index (empty on cold start).
 raises `IndexNotReadyError` pre-#513; once the background indexer
 (#513) lands it will block on a completion event.
 
+**Cold-start background FTS (issue #513 PR1, tool-layer wait
+boundary)**: when the persisted FTS DB is cold (sentinel absent),
+the MCP server lifespan calls
+`Collection.start_background_build_index()` to spawn a daemon
+thread that runs `build_index()` to completion. Bucket-3/4 calls
+arriving at the MCP layer go through the
+`needs_index_ready` decorator (in
+`src/markdown_vault_mcp/_server_readiness.py`), which blocks via
+`Collection.wait_for_index_ready(timeout)` with a configurable
+default (env `MARKDOWN_VAULT_MCP_READY_TIMEOUT_S`, default 60s).
+A failed background build surfaces to MCP clients as
+`IndexBuildFailedError` (the decorator's `wait_for_index_ready`
+call raises) and to operators as
+`get_index_status` reporting
+`{"status": "failed", "error": "..."}`. Embeddings stay on the
+synchronous lifespan path in PR1 — on cold start
+`build_embeddings()` is skipped with a log entry and semantic
+search returns empty until PR2 backgrounds embeddings or the
+operator runs CLI `index`. Warm starts continue to use PR #526's
+O(1) sentinel short-circuit and never spawn the background thread.
+The library's `_require_index_ready()` is unchanged from PR #525
+— it raises immediately on not-ready, which is what lets the git
+pull loop and lifespan's embeddings path handle "not ready"
+without deadlocking on internal blocking.
+
 To apply a configuration change (e.g. new `exclude_patterns`,
 `required_frontmatter`) to a pre-existing index, call
 `build_index(force=True)` — and, when embeddings are configured,

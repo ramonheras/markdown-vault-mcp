@@ -17,6 +17,19 @@ All configuration is via environment variables. Most use the `MARKDOWN_VAULT_MCP
 | `MARKDOWN_VAULT_MCP_TEMPLATES_FOLDER` | string | `_templates` | No | Relative folder path used by the `create_from_template` prompt to discover/read template files |
 | `MARKDOWN_VAULT_MCP_PROMPTS_FOLDER` | path | — | No | Path to a directory of `.md` prompt files that extend or override built-in prompts |
 
+## Index Readiness
+
+### `MARKDOWN_VAULT_MCP_READY_TIMEOUT_S`
+
+Default: `60` (seconds).
+
+Maximum time the MCP-layer `needs_index_ready` decorator waits for
+the FTS index to become ready before raising `IndexNotReadyError`
+to the client. Applied to bucket-3/4 tool and resource calls during
+a cold-start background FTS build. Increase for very large vaults
+where the initial scan takes longer; decrease for tighter feedback
+on stuck builds.
+
 <!-- DOMAIN-CONFIG-VARS-START -->
 ## Server Identity
 

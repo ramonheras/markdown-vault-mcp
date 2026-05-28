@@ -103,6 +103,21 @@ class Collection:
     returns whatever is currently in the index (empty on cold start).
     See issue #525.
 
+    **Background build (issue #513 PR1).** When the persisted FTS DB
+    is cold (sentinel absent), the MCP server lifespan calls
+    :meth:`start_background_build_index` to spawn a daemon thread
+    that runs :meth:`build_index` to completion. Bucket-3/4 MCP tool
+    *clients* block on the new
+    :class:`markdown_vault_mcp._server_readiness.needs_index_ready`
+    decorator, which calls :meth:`wait_for_index_ready` with a
+    bounded default timeout
+    (``MARKDOWN_VAULT_MCP_READY_TIMEOUT_S``, default 60s). The
+    library stays honest: bucket-3/4 *methods* keep the PR #525
+    raise-immediately contract via :meth:`_require_index_ready`.
+    Internal callers (lifespan, git pull loop, CLI, direct library
+    users) get the raise contract and handle "not ready" with
+    caller-appropriate logic — never block.
+
     **Thread safety (issue #519):** every public method on this class is safe
     to call from any thread, concurrently with other reads and writes from
     any other thread. Writes serialise against each other via the internal
