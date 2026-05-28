@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import threading
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pytest
+from fastmcp import Client
 
 from markdown_vault_mcp.collection import Collection
 from markdown_vault_mcp.exceptions import (
@@ -222,3 +224,79 @@ def test_should_use_background_build_warm_on_disk_false(tmp_path: Path) -> None:
     col = Collection(source_dir=vault, index_path=index_path)
     assert col.should_use_background_build() is False
     col.close()
+
+
+# ---------------------------------------------------------------------------
+# get_index_status tests
+# ---------------------------------------------------------------------------
+
+
+def test_get_index_status_ready(tmp_path: Path) -> None:
+    vault = _vault(tmp_path)
+    _seed(vault)
+    col = Collection(source_dir=vault)
+    col.build_index()
+    status = col.get_index_status()
+    assert status["status"] == "ready"
+    assert status["documents_indexed"] == 1
+    assert status["error"] is None
+    col.close()
+
+
+def test_get_index_status_building_in_flight(tmp_path: Path) -> None:
+    col = Collection(source_dir=_vault(tmp_path))
+    col._background_build_done.clear()
+    col._background_started = True
+    status = col.get_index_status()
+    assert status["status"] == "building"
+    assert status["error"] is None
+    col._background_build_done.set()
+    col.close()
+
+
+def test_get_index_status_building_never_started(tmp_path: Path) -> None:
+    """Fresh Collection: event pre-set, no error, _index_built=False.
+    Reports 'building' (not 'ready' — the attempt-6 lie is fixed)."""
+    col = Collection(source_dir=_vault(tmp_path))
+    status = col.get_index_status()
+    assert status["status"] == "building"
+    assert status["error"] is None
+    col.close()
+
+
+def test_get_index_status_failed(tmp_path: Path) -> None:
+    col = Collection(source_dir=_vault(tmp_path))
+    col._background_build_error = RuntimeError("scan failed for X")
+    status = col.get_index_status()
+    assert status["status"] == "failed"
+    assert "scan failed for X" in status["error"]
+    col.close()
+
+
+# ---------------------------------------------------------------------------
+# MCP integration test for get_index_status
+# ---------------------------------------------------------------------------
+
+
+def test_mcp_tool_get_index_status_reports_ready(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    (vault / "n.md").write_text("# N\n\nbody\n", encoding="utf-8")
+    monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", str(vault))
+    monkeypatch.setenv("MARKDOWN_VAULT_MCP_INDEX_PATH", str(tmp_path / "fts.db"))
+    monkeypatch.setenv("MARKDOWN_VAULT_MCP_STATE_PATH", str(tmp_path / "s.json"))
+
+    from markdown_vault_mcp.server import make_server
+
+    server = make_server()
+
+    async def _call() -> dict[str, Any]:
+        async with Client(server) as client:
+            res = await client.call_tool("get_index_status", {})
+            return res.structured_content or {}
+
+    status = asyncio.run(_call())
+    assert status["status"] in ("ready", "building")  # depends on lifespan timing
+    assert status["error"] is None

@@ -498,6 +498,49 @@ class Collection:
             return False
         return not self._fts.is_build_completed()
 
+    def get_index_status(self) -> dict[str, Any]:
+        """Return a non-blocking snapshot of background-build state.
+
+        Shape: ``{"status": "ready" | "building" | "failed",
+        "documents_indexed": int, "error": str | None}``.
+
+        - ``"ready"``: ``is_index_ready()`` is True (synchronous build
+          returned cleanly or background build completed cleanly);
+          ``error`` is None.
+        - ``"failed"``: ``_background_build_error`` is non-None;
+          ``error`` carries its message.
+        - ``"building"``: anything else — event cleared (in-flight)
+          OR event set but ``_index_built`` is False (never scheduled).
+          From the operator's perspective both mean "wait or poll."
+
+        ``documents_indexed`` is taken from
+        :meth:`FTSIndex.list_notes` and so reflects whatever rows are
+        currently committed — progress is observable in the
+        ``"building"`` state as the count rises.
+        """
+        if self._background_build_error is not None:
+            status = "failed"
+            error: str | None = str(self._background_build_error)
+        elif self.is_index_ready():
+            status = "ready"
+            error = None
+        else:
+            status = "building"
+            error = None
+        try:
+            documents_indexed = len(self._fts.list_notes())
+        except Exception:
+            logger.debug(
+                "get_index_status: list_notes failed; reporting 0",
+                exc_info=True,
+            )
+            documents_indexed = 0
+        return {
+            "status": status,
+            "documents_indexed": documents_indexed,
+            "error": error,
+        }
+
     def wait_for_index_ready(self, timeout: float | None = None) -> None:
         """Block until the FTS index is ready, or raise.
 

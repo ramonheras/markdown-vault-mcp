@@ -65,6 +65,9 @@ _TOOL_ICONS: dict[str, list[Icon]] = {
     ]
 }
 
+# Status tools reuse existing icons rather than introducing new SVG files.
+_TOOL_ICONS["get_index_status"] = _TOOL_ICONS["embeddings_status"]
+
 # App-only tools reuse existing icons rather than introducing new SVG files.
 _TOOL_ICONS["vault_context"] = _TOOL_ICONS["get_context"]
 _TOOL_ICONS["vault_list"] = _TOOL_ICONS["list_documents"]
