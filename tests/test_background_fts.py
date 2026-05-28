@@ -121,3 +121,75 @@ def test_wait_for_index_ready_raises_when_never_scheduled(tmp_path: Path) -> Non
     with pytest.raises(IndexNotReadyError, match=r"never scheduled|not built"):
         col.wait_for_index_ready(timeout=0.1)
     col.close()
+
+
+def test_start_background_build_index_eventually_ready(tmp_path: Path) -> None:
+    vault = _vault(tmp_path)
+    for i in range(5):
+        _seed(vault, f"n_{i}.md", f"# N{i}\n\nbody {i}\n")
+    col = Collection(source_dir=vault)
+    col.start_background_build_index()
+    col.wait_for_index_ready(timeout=5.0)
+    assert col.is_index_ready()
+    col.get_backlinks("n_0.md")  # smoke: bucket-3 returns (empty list OK)
+    col.close()
+
+
+def test_start_background_build_index_captures_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    col = Collection(source_dir=_vault(tmp_path))
+
+    def boom(*_a: object, **_kw: object) -> None:
+        raise RuntimeError("simulated scan failure")
+
+    monkeypatch.setattr(col._index_mgr, "build_index", boom)
+    col.start_background_build_index()
+
+    with pytest.raises(IndexBuildFailedError):
+        col.wait_for_index_ready(timeout=5.0)
+    assert col.is_index_ready() is False
+    col.close()
+
+
+def test_start_background_build_index_idempotent(tmp_path: Path) -> None:
+    col = Collection(source_dir=_vault(tmp_path))
+    col.start_background_build_index()
+    first = col._background_build_thread
+    assert first is not None
+    col.start_background_build_index()
+    assert col._background_build_thread is first
+    col.wait_for_index_ready(timeout=5.0)
+    col.start_background_build_index()
+    assert col._background_build_thread is first
+    col.close()
+
+
+def test_start_background_build_index_one_shot_after_thread_start_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If thread.start() itself raises, the captured-error path runs
+    synchronously: event set, error recorded, _background_started True.
+    A retry call is a no-op (one-shot)."""
+    col = Collection(source_dir=_vault(tmp_path))
+
+    def boom_start(_self: threading.Thread) -> None:
+        raise RuntimeError("system thread exhaustion (simulated)")
+
+    monkeypatch.setattr(threading.Thread, "start", boom_start)
+
+    with pytest.raises(RuntimeError, match=r"thread exhaustion"):
+        col.start_background_build_index()
+
+    # Event must be set; error recorded.
+    assert col._background_build_done.is_set()
+    assert isinstance(col._background_build_error, RuntimeError)
+
+    # wait_for_index_ready surfaces it as IndexBuildFailedError.
+    with pytest.raises(IndexBuildFailedError):
+        col.wait_for_index_ready(timeout=0.1)
+
+    # Retry is a no-op (one-shot semantics).
+    monkeypatch.undo()
+    col.start_background_build_index()  # no-op; does NOT spawn a new thread
+    col.close()

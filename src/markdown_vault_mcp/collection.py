@@ -432,6 +432,54 @@ class Collection:
             return False
         return self._background_build_done.is_set()
 
+    def start_background_build_index(self) -> None:
+        """Spawn a daemon thread that runs :meth:`build_index` to completion.
+
+        Idempotent: second call after a successful start, after a
+        clean completion, OR after a failed ``thread.start()`` is a
+        no-op. The method is one-shot per Collection lifetime;
+        operator recovery from a failed start is via CLI
+        ``markdown-vault-mcp index`` or process restart, NOT by
+        calling this method again.
+
+        The worker thread catches ``BaseException`` → captures into
+        ``_background_build_error`` → always sets
+        ``_background_build_done`` in its finally clause.
+
+        If ``thread.start()`` itself raises (system thread exhaustion
+        is the realistic case), the same capture-and-set happens
+        synchronously so callers waiting on the event never hang.
+        """
+
+        def _worker() -> None:
+            try:
+                self.build_index()
+            except BaseException as exc:
+                self._background_build_error = exc
+                logger.exception("Background index build failed")
+            finally:
+                self._background_build_done.set()
+
+        with self._write_lock:
+            if self._background_started:
+                return
+            self._background_started = True
+            self._background_build_error = None
+            self._background_build_done.clear()
+            thread = threading.Thread(
+                target=_worker,
+                name="markdown-vault-mcp.background-build",
+                daemon=True,
+            )
+            self._background_build_thread = thread
+            try:
+                thread.start()
+            except Exception as exc:
+                # Synchronously surface the failure so waiters unblock.
+                self._background_build_error = exc
+                self._background_build_done.set()
+                raise
+
     def wait_for_index_ready(self, timeout: float | None = None) -> None:
         """Block until the FTS index is ready, or raise.
 
