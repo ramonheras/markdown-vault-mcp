@@ -300,3 +300,35 @@ def test_mcp_tool_get_index_status_reports_ready(
     status = asyncio.run(_call())
     assert status["status"] in ("ready", "building")  # depends on lifespan timing
     assert status["error"] is None
+
+
+# ---------------------------------------------------------------------------
+# close() joins background thread (Task 7)
+# ---------------------------------------------------------------------------
+
+
+def test_close_joins_background_thread(tmp_path: Path) -> None:
+    vault = _vault(tmp_path)
+    for i in range(3):
+        _seed(vault, f"n_{i}.md", f"# N{i}\n\nbody {i}\n")
+    col = Collection(source_dir=vault, index_path=tmp_path / "fts.db")
+    col.start_background_build_index()
+    col.close()
+    thread = col._background_build_thread
+    assert thread is not None
+    assert not thread.is_alive()
+
+
+def test_close_before_start_is_safe(tmp_path: Path) -> None:
+    """A Collection that never had a background build can still close cleanly."""
+    col = Collection(source_dir=_vault(tmp_path))
+    col.close()  # must not raise
+
+
+def test_close_twice_is_safe(tmp_path: Path) -> None:
+    vault = _vault(tmp_path)
+    _seed(vault)
+    col = Collection(source_dir=vault)
+    col.build_index()
+    col.close()
+    col.close()  # idempotent

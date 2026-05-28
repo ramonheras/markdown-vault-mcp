@@ -368,6 +368,23 @@ class Collection:
         Flushes deferred embeddings and pending write callbacks, then
         closes the SQLite connection and git strategy.
         """
+        # 0. Join background-build thread before any resource teardown.
+        # Read the thread reference under _write_lock (matches the lock
+        # held when start_background_build_index assigns it).
+        # join() must complete before _fts.close() (step 4) so the
+        # worker isn't writing to a closed FTS. daemon=True keeps a
+        # stuck thread from holding the process; cooperative
+        # cancellation inside _index_mgr.build_index is a follow-up.
+        with self._write_lock:
+            thread = self._background_build_thread
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=30.0)
+            if thread.is_alive():
+                logger.warning(
+                    "close: background build thread did not exit within "
+                    "30s; abandoning (daemon thread does not block process)"
+                )
+
         # 1. Flush any deferred embedding updates.
         self._index_mgr.flush_dirty_embeddings()
 
