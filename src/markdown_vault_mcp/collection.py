@@ -88,11 +88,14 @@ class Collection:
     """Facade over FTS5 index, vector index, and change tracker.
 
     Instantiate once per collection root.  Callers must invoke
-    :meth:`build_index` before bucket-3 relational queries
+    :meth:`build_index` before bucket-3 relational/FTS-backed queries
     (:meth:`get_backlinks`, :meth:`get_outlinks`, :meth:`get_similar`,
-    :meth:`get_context`, :meth:`get_connection_path`) or the bucket-4
-    coordinators :meth:`reindex` and :meth:`build_embeddings`; otherwise
+    :meth:`get_context`, :meth:`get_connection_path`, :meth:`get_toc`)
+    or the bucket-4 coordinators :meth:`reindex` and
+    :meth:`build_embeddings`; otherwise
     :exc:`~markdown_vault_mcp.exceptions.IndexNotReadyError` is raised.
+    :meth:`build_index` must also precede :meth:`start` — see
+    :meth:`start` for the rationale.
     Bucket-1 file operations (:meth:`read`, :meth:`write`, :meth:`edit`,
     :meth:`delete`, :meth:`rename`, :meth:`write_attachment`) and bucket-2
     aggregate queries (:meth:`search`, :meth:`list`, :meth:`stats`, …)
@@ -320,7 +323,14 @@ class Collection:
         self._git_strategy.sync_once(self._source_dir)
 
     def start(self) -> None:
-        """Start background tasks for this Collection (e.g. git pull loop)."""
+        """Start background tasks for this Collection (e.g. git pull loop).
+
+        Call :meth:`build_index` **before** :meth:`start`. The git pull
+        loop wires :meth:`reindex` (bucket 4) as its ``on_pull`` callback,
+        and ``reindex`` raises :exc:`IndexNotReadyError` on an unbuilt
+        index — so a pull event firing before the initial build would
+        crash the loop thread.
+        """
         if self._git_strategy is None or self._git_pull_interval_s <= 0:
             return
         self._git_strategy.start(
@@ -549,6 +559,10 @@ class Collection:
                     skipped=0,
                 )
 
+        # Reset before the (potentially destructive, force=True) rebuild so a
+        # mid-rebuild exception leaves the Collection visibly not-ready —
+        # otherwise a previously-True flag would mask a cleared/partial index.
+        self._index_built = False
         result = self._index_mgr.build_index(force=force)
         self._index_built = True
         return result
@@ -559,6 +573,9 @@ class Collection:
         Returns:
             :class:`~markdown_vault_mcp.types.ReindexResult` with counts of changes
             applied.
+
+        Raises:
+            IndexNotReadyError: If :meth:`build_index` has not been called.
         """
         self._require_index_ready()
         return self._index_mgr.reindex()
@@ -574,6 +591,7 @@ class Collection:
             Total number of chunks embedded.
 
         Raises:
+            IndexNotReadyError: If :meth:`build_index` has not been called.
             ValueError: If ``embedding_provider`` or ``embeddings_path`` is
                 not configured.
         """
@@ -618,7 +636,8 @@ class Collection:
         """Return table of contents for a document.
 
         Queries the FTS sections table for headings and prepends the document
-        title as a synthetic H1 entry.
+        title as a synthetic H1 entry. The result depends on the FTS index, so
+        cold-start callers must build the index first (bucket 3).
 
         Args:
             path: Relative path to the document (e.g. ``"notes/intro.md"``).
@@ -628,8 +647,10 @@ class Collection:
             position, with the document title prepended as level 1.
 
         Raises:
+            IndexNotReadyError: If :meth:`build_index` has not been called.
             ValueError: If no document exists at the given path.
         """
+        self._require_index_ready()
         return self._doc_mgr.get_toc(path)
 
     def get_backlinks(self, path: str) -> list[BacklinkInfo]:
@@ -644,6 +665,7 @@ class Collection:
             for each document that contains a link pointing to ``path``.
 
         Raises:
+            IndexNotReadyError: If :meth:`build_index` has not been called.
             ValueError: If no document exists at the given path.
         """
         self._require_index_ready()
@@ -664,6 +686,7 @@ class Collection:
             each link originating from ``path``.
 
         Raises:
+            IndexNotReadyError: If :meth:`build_index` has not been called.
             ValueError: If no document exists at the given path.
         """
         self._require_index_ready()
@@ -702,6 +725,9 @@ class Collection:
 
         Returns:
             List of grouped results.
+
+        Raises:
+            IndexNotReadyError: If :meth:`build_index` has not been called.
         """
         self._require_index_ready()
         return self._search_mgr.get_similar(
@@ -750,6 +776,7 @@ class Collection:
             stays compact.
 
         Raises:
+            IndexNotReadyError: If :meth:`build_index` has not been called.
             ValueError: If no document exists at the given path.
         """
         self._require_index_ready()
@@ -800,6 +827,7 @@ class Collection:
             (inclusive), or ``None`` if unreachable within *max_depth* hops.
 
         Raises:
+            IndexNotReadyError: If :meth:`build_index` has not been called.
             ValueError: If *source* or *target* is not found in the index.
         """
         self._require_index_ready()

@@ -10,9 +10,12 @@ Collection methods fall into four buckets:
   ``get_most_linked``, ``get_broken_links``, ``stats``. Query against
   current index state; never implicitly build.
 - Bucket 3 (block / raise): ``get_backlinks``, ``get_outlinks``,
-  ``get_similar``, ``get_context``, ``get_connection_path``. Silently
-  wrong on a partial index → raise ``IndexNotReadyError`` pre-#513;
-  block on a background-completion event post-#513.
+  ``get_similar``, ``get_context``, ``get_connection_path``,
+  ``get_toc``. Silently wrong on a partial index → raise
+  ``IndexNotReadyError`` pre-#513; block on a background-completion
+  event post-#513. (``get_toc`` is FTS-backed: on cold start the FTS
+  ``documents`` row is absent and the underlying manager would raise
+  a misleading ``ValueError("Document not found")``.)
 - Bucket 4 (coordinate): ``reindex``, ``build_embeddings``,
   ``build_index``. ``reindex`` and ``build_embeddings`` require a built
   index (raise ``IndexNotReadyError`` otherwise). ``build_index`` is
@@ -197,6 +200,17 @@ class TestBucket3Block:
         with pytest.raises(IndexNotReadyError):
             col.get_connection_path("a.md", "b.md")
 
+    def test_get_toc_on_unbuilt_raises(self, tmp_path: Path) -> None:
+        """get_toc reads from FTS so cold-start must raise readiness, not a
+        misleading ValueError("Document not found") for a file that exists.
+        """
+        vault = _vault(tmp_path)
+        _seed(vault)
+        col = Collection(source_dir=vault)
+
+        with pytest.raises(IndexNotReadyError):
+            col.get_toc("note.md")
+
 
 # ---------------------------------------------------------------------------
 # Bucket 4 — coordinate (reindex/build_embeddings require built index;
@@ -281,6 +295,27 @@ class TestWaitForIndexReady:
 
 
 class TestReadinessFlagSemantics:
+    def test_failed_force_rebuild_clears_flag(self, tmp_path: Path) -> None:
+        """A failed build_index(force=True) on a previously-built Collection
+        must clear ``_index_built`` — otherwise bucket-3 queries proceed
+        against a cleared / partially rebuilt index.
+        """
+        vault = _vault(tmp_path)
+        _seed(vault)
+        col = Collection(source_dir=vault)
+        col.build_index()  # Sets _index_built = True.
+
+        def boom(*_a: object, **_kw: object) -> None:
+            raise RuntimeError("simulated rebuild failure")
+
+        col._index_mgr.build_index = boom  # type: ignore[method-assign]
+
+        with pytest.raises(RuntimeError):
+            col.build_index(force=True)
+
+        with pytest.raises(IndexNotReadyError):
+            col.get_backlinks("note.md")
+
     def test_failed_build_index_leaves_unready(self, tmp_path: Path) -> None:
         """If build_index() raises, subsequent bucket-3 calls still raise."""
         vault = _vault(tmp_path)

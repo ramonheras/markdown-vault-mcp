@@ -371,19 +371,21 @@ Two methods manage the index:
 
 **Readiness contract (issue #525)**: `Collection.__init__` does not
 populate the index. Callers must invoke `build_index()` explicitly
-before bucket-3 relational queries (`get_backlinks`, `get_outlinks`,
-`get_similar`, `get_context`, `get_connection_path`) or the bucket-4
-coordinators (`reindex`, `build_embeddings`); otherwise
-`IndexNotReadyError` is raised. Bucket-1 file operations (`read`,
-`write`, `edit`, `delete`, `rename`, `write_attachment`) and bucket-2
-aggregate queries (`search`, `list`, `stats`, `list_folders`,
-`list_tags`, `get_recent`, `get_orphan_notes`, `get_most_linked`,
-`get_broken_links`, `get_toc`) work on an unbuilt index — bucket-1
-hits disk directly; bucket-2 queries whatever is currently in the
-index (empty on cold start). `wait_for_index_ready(timeout=None)` is
-the readiness primitive: it raises `IndexNotReadyError` pre-#513;
-once the background indexer (#513) lands it will block on a
-completion event.
+before bucket-3 relational/FTS-backed queries (`get_backlinks`,
+`get_outlinks`, `get_similar`, `get_context`, `get_connection_path`,
+`get_toc`) or the bucket-4 coordinators (`reindex`,
+`build_embeddings`); otherwise `IndexNotReadyError` is raised.
+`start()` must also be called after `build_index()` because its git
+pull loop wires `reindex` as the `on_pull` callback. Bucket-1 file
+operations (`read`, `write`, `edit`, `delete`, `rename`,
+`write_attachment`) and bucket-2 aggregate queries (`search`, `list`,
+`stats`, `list_folders`, `list_tags`, `get_recent`,
+`get_orphan_notes`, `get_most_linked`, `get_broken_links`) work on an
+unbuilt index — bucket-1 hits disk directly; bucket-2 queries
+whatever is currently in the index (empty on cold start).
+`wait_for_index_ready(timeout=None)` is the readiness primitive: it
+raises `IndexNotReadyError` pre-#513; once the background indexer
+(#513) lands it will block on a completion event.
 
 To apply a configuration change (e.g. new `exclude_patterns`,
 `required_frontmatter`) to a pre-existing index, call
