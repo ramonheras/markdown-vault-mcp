@@ -788,3 +788,35 @@ def test_foreground_write_during_background_scan_on_disk(tmp_path: Path) -> None
     rows = {r["path"]: r for r in col._fts.list_notes()}
     assert "racy.md" in rows, "foreground write must end up in FTS"
     col.close()
+
+
+def test_reindex_after_pull_handler_handles_not_ready(tmp_path: Path) -> None:
+    """_reindex_after_pull in _server_tools.py catches IndexNotReadyError
+    and sets reindex_failed=True on the pull payload — does NOT block."""
+    import time as time_mod
+
+    from markdown_vault_mcp._server_tools import _reindex_after_pull
+    from markdown_vault_mcp.managers import index as index_mod
+
+    vault = _vault(tmp_path)
+    _seed(vault)
+    col = Collection(source_dir=vault, index_path=tmp_path / "fts.db", read_only=False)
+
+    original = index_mod.IndexManager.build_index
+
+    def slow(self, *, force: bool = False):  # type: ignore[no-untyped-def]
+        time_mod.sleep(0.5)
+        return original(self, force=force)
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(index_mod.IndexManager, "build_index", slow)
+    try:
+        col.start_background_build_index()
+        pull_dict: dict[str, Any] = {}
+        asyncio.run(_reindex_after_pull(col, pull_dict))
+        assert pull_dict.get("reindex_failed") is True
+        assert "reindex_hint" in pull_dict
+    finally:
+        monkeypatch.undo()
+        col.wait_for_index_ready(timeout=5.0)
+        col.close()
