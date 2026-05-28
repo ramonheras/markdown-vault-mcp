@@ -28,6 +28,7 @@ if TYPE_CHECKING:
 
 from ._icons import _TOOL_ICONS
 from ._server_deps import get_collection
+from ._server_readiness import needs_index_ready
 
 logger = logging.getLogger(__name__)
 
@@ -622,6 +623,7 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
             "idempotentHint": True,
         },
     )
+    @needs_index_ready()
     async def get_backlinks(
         path: str,
         collection: Collection = Depends(get_collection),

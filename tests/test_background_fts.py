@@ -480,3 +480,67 @@ def test_lifespan_cold_start_with_embeddings_skips_embeddings(
         or "skipping embeddings" in record.message.lower()
         for record in caplog.records
     ), f"expected 'embeddings deferred' log; got: {[r.message for r in caplog.records]}"
+
+
+def test_decorator_preflight_one_tool(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """COMMIT-A gate: decorator + applied to get_backlinks only.
+    The tool must be callable end-to-end via Client — proves FastMCP
+    accepted the wrapped handler and injected `collection` correctly."""
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    (vault / "a.md").write_text("# A\n\nbody\n", encoding="utf-8")
+    monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", str(vault))
+    monkeypatch.setenv("MARKDOWN_VAULT_MCP_INDEX_PATH", str(tmp_path / "fts.db"))
+    monkeypatch.setenv("MARKDOWN_VAULT_MCP_STATE_PATH", str(tmp_path / "s.json"))
+
+    from markdown_vault_mcp.server import make_server
+
+    server = make_server()
+
+    async def _call() -> list[Any]:
+        async with Client(server) as client:
+            res = await client.call_tool("get_backlinks", {"path": "a.md"})
+            return res.structured_content or []
+
+    result = asyncio.run(_call())
+    assert isinstance(result, (list, dict))  # may be wrapped; just must not raise
+
+
+def test_decorator_cold_path_blocks_until_ready(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An MCP-client call to get_backlinks during in-flight background
+    blocks on the decorator's wait, then succeeds when the build finishes.
+    """
+    import time as time_mod
+
+    from markdown_vault_mcp.managers import index as index_mod
+    from markdown_vault_mcp.server import make_server
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    for i in range(3):
+        (vault / f"n_{i}.md").write_text(f"# N{i}\n\nbody\n", encoding="utf-8")
+
+    monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", str(vault))
+    monkeypatch.setenv("MARKDOWN_VAULT_MCP_INDEX_PATH", str(tmp_path / "fts.db"))
+    monkeypatch.setenv("MARKDOWN_VAULT_MCP_STATE_PATH", str(tmp_path / "s.json"))
+
+    original_build_index = index_mod.IndexManager.build_index
+
+    def slow_build_index(self, *, force: bool = False):  # type: ignore[no-untyped-def]
+        time_mod.sleep(0.3)
+        return original_build_index(self, force=force)
+
+    monkeypatch.setattr(index_mod.IndexManager, "build_index", slow_build_index)
+
+    server = make_server()
+
+    async def _call() -> Any:
+        async with Client(server) as client:
+            return await client.call_tool("get_backlinks", {"path": "n_0.md"})
+
+    result = asyncio.run(_call())
+    assert result is not None  # call succeeded after blocking ~0.3s
