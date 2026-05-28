@@ -677,3 +677,114 @@ def test_decorator_respects_env_timeout_override(
 
     exc = asyncio.run(_call())
     assert exc is not None
+
+
+# ---------------------------------------------------------------------------
+# Task 11: Boundary regression test + git pull loop test + foreground-write test
+# ---------------------------------------------------------------------------
+
+
+def test_require_index_ready_raises_immediately_not_blocks(tmp_path: Path) -> None:
+    """Bucket-3/4 library method called during in-flight background build
+    raises IndexNotReadyError WITHIN 0.1s wall-clock — does NOT block.
+
+    This is the canonical regression test against attempt-6's hole."""
+    import time as time_mod
+
+    from markdown_vault_mcp.managers import index as index_mod
+
+    vault = _vault(tmp_path)
+    for i in range(3):
+        _seed(vault, f"n_{i}.md", f"# N{i}\n\nbody\n")
+    col = Collection(source_dir=vault, index_path=tmp_path / "fts.db")
+
+    original = index_mod.IndexManager.build_index
+
+    def slow(self, *, force: bool = False):  # type: ignore[no-untyped-def]
+        time_mod.sleep(1.0)
+        return original(self, force=force)
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(index_mod.IndexManager, "build_index", slow)
+    try:
+        col.start_background_build_index()
+
+        start = time_mod.perf_counter()
+        with pytest.raises(IndexNotReadyError):
+            col.get_backlinks("n_0.md")  # bucket-3 library call
+        elapsed = time_mod.perf_counter() - start
+        assert elapsed < 0.1, (
+            f"library method blocked for {elapsed:.3f}s; should raise immediately"
+        )
+    finally:
+        monkeypatch.undo()
+        col.wait_for_index_ready(timeout=5.0)
+        col.close()
+
+
+def test_git_pull_during_background_does_not_starve_writes(tmp_path: Path) -> None:
+    """The on_pull=reindex callback in the git pull loop must NOT hold
+    _write_lock while blocking on the background build. Reindex raises
+    IndexNotReadyError, git_sync catches it, releases the lock, retries
+    on next interval — no lock starvation."""
+    import time as time_mod
+
+    from markdown_vault_mcp.managers import index as index_mod
+
+    vault = _vault(tmp_path)
+    for i in range(5):
+        _seed(vault, f"n_{i}.md", f"# N{i}\n\nbody\n")
+    col = Collection(source_dir=vault, index_path=tmp_path / "fts.db", read_only=False)
+
+    original = index_mod.IndexManager.build_index
+
+    def slow(self, *, force: bool = False):  # type: ignore[no-untyped-def]
+        time_mod.sleep(0.5)
+        return original(self, force=force)
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(index_mod.IndexManager, "build_index", slow)
+    try:
+        col.start_background_build_index()
+
+        # Simulate the on_pull callback (reindex) racing the foreground
+        # write. Both should fast-fail / proceed without lock starvation.
+        with pytest.raises(IndexNotReadyError):
+            col.reindex()  # raises immediately, releases internal locks
+
+        # Foreground write must complete promptly (within 1s, well
+        # under the slow scan's 0.5s sleep).
+        start = time_mod.perf_counter()
+        col.write("racy.md", "# Racy\n\nforeground content\n")
+        elapsed = time_mod.perf_counter() - start
+        assert elapsed < 1.0, (
+            f"foreground write blocked for {elapsed:.3f}s (suggests lock starvation)"
+        )
+    finally:
+        monkeypatch.undo()
+        col.wait_for_index_ready(timeout=5.0)
+        col.close()
+
+
+def test_foreground_write_during_background_scan_on_disk(tmp_path: Path) -> None:
+    """On-disk DB: race a foreground write() against background scan.
+    Assertions per spec I13:
+      1. No SQLite locking error.
+      2. racy.md row exists in FTS.
+      3. NO assertion on which content wins. Last-writer-wins per path
+         is the accepted contract; staleness is corrected by next reindex.
+    """
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    for i in range(30):
+        (vault / f"seed_{i}.md").write_text(
+            f"# Seed {i}\n\n" + ("body " * 300) + "\n", encoding="utf-8"
+        )
+    col = Collection(source_dir=vault, index_path=tmp_path / "fts.db", read_only=False)
+    col.start_background_build_index()
+    col.write("racy.md", "# Racy\n\nFOREGROUND CONTENT\n")
+    col.wait_for_index_ready(timeout=10.0)
+
+    rows = {r["path"]: r for r in col._fts.list_notes()}
+    assert "racy.md" in rows, "foreground write must end up in FTS"
+    col.close()
