@@ -780,6 +780,14 @@ class Collection:
         result = self._index_mgr.build_index(force=force)
         self._fts.set_build_completed()
         self._index_built = True
+        # A successful synchronous build is also a recovery path —
+        # clear any captured background-build error so is_index_ready()
+        # returns True and bucket-3/4 calls stop surfacing
+        # IndexBuildFailedError. Reviewers: this is the case where an
+        # operator runs CLI `markdown-vault-mcp index` in the same
+        # process after a background failure, or programmatic callers
+        # use build_index() as a recovery primitive.
+        self._background_build_error = None
         return result
 
     def reindex(self) -> ReindexResult:

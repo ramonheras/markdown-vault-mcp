@@ -820,3 +820,31 @@ def test_reindex_after_pull_handler_handles_not_ready(tmp_path: Path) -> None:
         monkeypatch.undo()
         col.wait_for_index_ready(timeout=5.0)
         col.close()
+
+
+def test_synchronous_build_index_clears_prior_background_error(
+    tmp_path: Path,
+) -> None:
+    """Recovery path: after a failed background build, calling build_index()
+    synchronously must clear _background_build_error so is_index_ready()
+    returns True and bucket-3/4 calls stop raising IndexBuildFailedError."""
+    vault = _vault(tmp_path)
+    _seed(vault)
+    col = Collection(source_dir=vault, index_path=tmp_path / "fts.db")
+
+    # Simulate a prior failed background: error captured, event set,
+    # _index_built still False.
+    col._background_build_error = RuntimeError("simulated prior background failure")
+    col._background_build_done.set()
+    col._background_started = True
+    assert col.is_index_ready() is False
+
+    # Synchronous recovery build.
+    col.build_index()
+
+    # Now ready: error cleared, _index_built True, event still set.
+    assert col._background_build_error is None
+    assert col.is_index_ready() is True
+    # Bucket-3 call no longer surfaces the prior error.
+    col.get_backlinks("n.md")  # must not raise
+    col.close()

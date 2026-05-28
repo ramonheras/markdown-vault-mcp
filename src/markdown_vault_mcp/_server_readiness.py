@@ -47,10 +47,11 @@ def needs_index_ready(
     and injects it via kwargs. The wrapper reads ``collection`` from
     kwargs and passes args/kwargs through unchanged.
 
-    Stacking order: place ``@needs_index_ready(...)`` ABOVE
-    ``@mcp.tool(...)`` (or ``@mcp.resource(...)``). Python applies
-    decorators bottom-up, so ``@mcp.tool`` runs first against the
-    result of ``@needs_index_ready`` — FastMCP registers the
+    Stacking order: place ``@needs_index_ready(...)`` BELOW
+    ``@mcp.tool(...)`` (or ``@mcp.resource(...)``) — that is,
+    closer to ``def``. Python applies decorators bottom-up, so
+    ``@needs_index_ready`` wraps the handler first; then
+    ``@mcp.tool`` runs on the result and FastMCP registers the
     already-wrapped function.
 
     Raises (propagated to MCP client via FastMCP error middleware):
