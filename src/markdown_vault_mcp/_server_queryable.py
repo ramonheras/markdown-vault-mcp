@@ -51,11 +51,13 @@ def _classify_operational_error(
 
     Conservative broken-default: only the well-known transient
     errornames (BUSY, LOCKED, FULL) classify as ``"busy"``. Everything
-    else (CORRUPT, NOTADB, IOERR, generic ERROR, unknown future codes)
-    classifies as ``"broken"`` so operators stay in the loop rather
-    than silently retrying through degradation.
+    else (CORRUPT, NOTADB, IOERR, generic ERROR, unknown future codes,
+    or a missing ``sqlite_errorname`` attribute) classifies as
+    ``"broken"`` so operators stay in the loop rather than silently
+    retrying through degradation.
     """
-    if exc.sqlite_errorname in _BUSY_ERROR_NAMES:
+    errorname = getattr(exc, "sqlite_errorname", None)
+    if errorname in _BUSY_ERROR_NAMES:
         return ("busy", "Index temporarily busy; try again shortly.")
     return ("broken", "Index appears broken; operation could not complete.")
 

@@ -1061,6 +1061,25 @@ class TestNeedsQueryableSqliteCatch:
         assert excinfo.value.__cause__ is original
         col.close()
 
+    def test_decorator_remaps_sqlite_operational_error_without_errorname_to_broken(
+        self, tmp_path: Path
+    ) -> None:
+        """Manually-constructed OperationalError (no sqlite_errorname) → broken.
+        Defensive against any non-driver-raised OperationalError reaching the
+        classifier."""
+        col = self._ready_collection(tmp_path)
+        original = sqlite3.OperationalError("synthetic, no errorname")
+
+        @needs_queryable()
+        async def handler(collection: Collection) -> None:  # noqa: ARG001
+            raise original
+
+        with pytest.raises(IndexUnavailableError) as excinfo:
+            asyncio.run(handler(collection=col))
+        assert excinfo.value.reason == "broken"
+        assert excinfo.value.__cause__ is original
+        col.close()
+
     def test_decorator_does_not_remap_programming_error(self, tmp_path: Path) -> None:
         col = self._ready_collection(tmp_path)
         original = sqlite3.ProgrammingError("incorrect number of bindings")
