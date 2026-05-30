@@ -13,7 +13,7 @@ import re
 import threading
 from typing import TYPE_CHECKING, Any, Literal
 
-from markdown_vault_mcp.exceptions import IndexBuildFailedError, IndexUnavailableError
+from markdown_vault_mcp.exceptions import IndexUnavailableError
 from markdown_vault_mcp.fts_index import FTSIndex
 from markdown_vault_mcp.scanner import (
     ChunkStrategy,
@@ -441,18 +441,21 @@ class Collection:
         """Return True when the structural preconditions for serving FTS
         queries are met (in-process precondition snapshot).
 
-        Checks ``_index_built`` is True, ``_background_build_error`` is
-        None, and ``_background_build_done`` is set. Necessary but not
-        sufficient — actual queryability is determined at use time (a
-        corrupted on-disk database satisfies these preconditions but
-        queries still fail).
+        Checks ``_index_built`` is True and ``_background_build_done`` is
+        set. Necessary but not sufficient — actual queryability is
+        determined at use time (a corrupted on-disk database satisfies
+        these preconditions but queries still fail).
+
+        A captured ``_background_build_error`` from a previous failed
+        attempt does NOT demote queryability: the error is diagnostic
+        state about the most recent build attempt, surfaced via
+        :meth:`get_index_status`'s ``error`` field, not a control-flow
+        gate.
 
         Lock-free by design: plain attribute reads + Event.is_set().
         Assumes CPython GIL semantics for cross-thread visibility.
         """
         if not self._index_built:
-            return False
-        if self._background_build_error is not None:
             return False
         return self._background_build_done.is_set()
 
@@ -544,12 +547,7 @@ class Collection:
         ``error`` carries the diagnostic message from the last background
         build attempt that captured an exception, independent of ``status``.
         """
-        # Intentionally does not call is_queryable() — that method also
-        # gates on _background_build_error is None. Here a captured error
-        # is diagnostic context only (surfaced via the error field),
-        # not a reason to hide a queryable index. The two predicates
-        # converge once is_queryable()'s body is simplified.
-        if self._index_built and self._background_build_done.is_set():
+        if self.is_queryable():
             status = "queryable"
             error: str | None = (
                 str(self._background_build_error)
@@ -587,15 +585,19 @@ class Collection:
         1. ``_background_build_done.wait(timeout)`` — if False
            (timed out), raise
            :exc:`IndexUnavailableError("…timed out…")`.
-        2. If ``_background_build_error`` is not None, raise
-           :exc:`IndexBuildFailedError` with the original as
-           ``__cause__``.
-        3. If ``_index_built`` is False, raise
+        2. If ``_index_built`` is False, raise
            :exc:`IndexUnavailableError("…never scheduled…")` — guards
            the never-scheduled case (event pre-set, no error, no
            build, no thread). Without it, callers on a fresh
            Collection would silently return success.
-        4. Otherwise return.
+        3. Otherwise return.
+
+        A captured ``_background_build_error`` from a previous failed
+        attempt does NOT raise: the error is diagnostic state about
+        the most recent build attempt, surfaced via
+        :meth:`get_index_status`'s ``error`` field, not a control-flow
+        gate. Callers needing the diagnostic must read
+        :meth:`get_index_status`.
 
         This method is opt-in for the MCP-layer `needs_queryable`
         decorator and for external callers that explicitly want to
@@ -611,22 +613,20 @@ class Collection:
                 client-side deadlines.
 
         Raises:
-            IndexBuildFailedError: A prior background build raised.
-            IndexUnavailableError: Index not built and either no build
-                was ever scheduled, or the timeout expired.
+            IndexUnavailableError: Either the timeout expired before
+                the build event was set, or the build did not complete
+                successfully (``_index_built`` remained False).
         """
         if not self._background_build_done.wait(timeout=timeout):
             raise IndexUnavailableError(
                 f"Index build still in progress; timed out after {timeout}s."
             )
-        if self._background_build_error is not None:
-            raise IndexBuildFailedError(
-                "Background index build raised; see __cause__ for details."
-            ) from self._background_build_error
         if not self._index_built:
             raise IndexUnavailableError(
-                "Index not built; background build was never scheduled. "
-                "Call build_index() or start_background_build_index() first."
+                "Index not built: background build was never scheduled "
+                "or did not complete successfully. "
+                "Check get_index_status() for diagnostic details, or call "
+                "build_index() / start_background_build_index() to retry."
             )
 
     @property

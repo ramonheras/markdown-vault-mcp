@@ -405,11 +405,14 @@ arriving at the MCP layer go through the
 `src/markdown_vault_mcp/_server_queryable.py`), which blocks via
 `Collection.wait_until_queryable(timeout)` with a configurable
 default (env `MARKDOWN_VAULT_MCP_BUILD_TIMEOUT_S`, default 60s).
-A failed background build surfaces to MCP clients as
-`IndexBuildFailedError` (the decorator's `wait_until_queryable`
-call raises) and to operators as
+A failed background build surfaces to operators as
 `get_index_status` reporting
-`{"status": "failed", "error": "..."}`. Embeddings stay on the
+`{"status": "failed", "error": "..."}`. MCP clients see
+`IndexUnavailableError` from the decorator's
+`wait_until_queryable` call (the never-scheduled guard fires
+because the worker resets `_index_built=False` before recording the
+error); the captured error message itself is read via
+`get_index_status`. Embeddings stay on the
 synchronous lifespan path in PR1 — on cold start
 `build_embeddings()` is skipped with a log entry and semantic
 search returns empty until PR2 backgrounds embeddings or the

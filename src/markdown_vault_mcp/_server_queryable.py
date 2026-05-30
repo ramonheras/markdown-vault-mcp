@@ -54,8 +54,11 @@ def needs_queryable(
     already-wrapped function.
 
     Raises (propagated to MCP client via FastMCP error middleware):
-        IndexUnavailableError: timeout exceeded; or never scheduled.
-        IndexBuildFailedError: a prior background build raised.
+        IndexUnavailableError: timeout exceeded, or never scheduled,
+            or build did not complete successfully (a captured
+            background-build error surfaces here via the
+            never-scheduled guard; the error message itself is
+            available via get_index_status).
     """
 
     def deco(handler: Callable[..., Any]) -> Callable[..., Any]:

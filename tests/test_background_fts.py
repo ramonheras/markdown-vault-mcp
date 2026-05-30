@@ -13,27 +13,11 @@ from fastmcp import Client
 
 from markdown_vault_mcp.collection import Collection
 from markdown_vault_mcp.exceptions import (
-    IndexBuildFailedError,
     IndexUnavailableError,
-    MarkdownMCPError,
 )
 
 if TYPE_CHECKING:
     from pathlib import Path
-
-
-def test_index_build_failed_error_subclasses_base() -> None:
-    err = IndexBuildFailedError("scan failed")
-    assert isinstance(err, MarkdownMCPError)
-    assert str(err) == "scan failed"
-
-
-def test_index_build_failed_error_carries_cause() -> None:
-    original = RuntimeError("scan exploded")
-    try:
-        raise IndexBuildFailedError("background build failed") from original
-    except IndexBuildFailedError as err:
-        assert err.__cause__ is original
 
 
 def _vault(tmp_path: Path) -> Path:
@@ -71,6 +55,19 @@ def test_is_queryable_false_after_captured_background_error(tmp_path: Path) -> N
     col.close()
 
 
+def test_is_queryable_true_with_captured_error_when_built(tmp_path: Path) -> None:
+    """Direct state poke: built index + done event + captured background
+    error → queryable. The captured error is diagnostic state about the
+    most recent build attempt, not a control-flow gate."""
+    vault = _vault(tmp_path)
+    _seed(vault)
+    col = Collection(source_dir=vault)
+    col.build_index()
+    col._background_build_error = RuntimeError("subsequent rebuild blew up")
+    assert col.is_queryable() is True
+    col.close()
+
+
 def test_wait_until_queryable_returns_when_already_built(tmp_path: Path) -> None:
     vault = _vault(tmp_path)
     _seed(vault)
@@ -104,14 +101,17 @@ def test_wait_until_queryable_raises_on_timeout(tmp_path: Path) -> None:
     col.close()
 
 
-def test_wait_until_queryable_raises_build_failed_when_error_set(
+def test_wait_until_queryable_raises_unavailable_when_error_set_and_not_built(
     tmp_path: Path,
 ) -> None:
+    """Captured error + event set + _index_built=False (default) → raises
+    IndexUnavailableError via step 2 (never-scheduled guard). The captured
+    error is no longer surfaced as a separate exception class; callers
+    read get_index_status() for the diagnostic."""
     col = Collection(source_dir=_vault(tmp_path))
     col._background_build_error = RuntimeError("scan exploded")
-    with pytest.raises(IndexBuildFailedError) as excinfo:
+    with pytest.raises(IndexUnavailableError, match=r"never scheduled|not built"):
         col.wait_until_queryable(timeout=0.1)
-    assert isinstance(excinfo.value.__cause__, RuntimeError)
     col.close()
 
 
@@ -123,6 +123,20 @@ def test_wait_until_queryable_raises_when_never_scheduled(tmp_path: Path) -> Non
     # All defaults: event pre-set, no error, _index_built=False, no spawn.
     with pytest.raises(IndexUnavailableError, match=r"never scheduled|not built"):
         col.wait_until_queryable(timeout=0.1)
+    col.close()
+
+
+def test_wait_until_queryable_returns_when_built_with_captured_error(
+    tmp_path: Path,
+) -> None:
+    """Direct state poke: built + done + captured error → returns (no raise).
+    Captured error is diagnostic only, not a control-flow gate."""
+    vault = _vault(tmp_path)
+    _seed(vault)
+    col = Collection(source_dir=vault)
+    col.build_index()
+    col._background_build_error = RuntimeError("subsequent rebuild blew up")
+    col.wait_until_queryable(timeout=0.1)  # must not raise
     col.close()
 
 
@@ -149,7 +163,7 @@ def test_start_background_build_index_captures_error(
     monkeypatch.setattr(col._index_mgr, "build_index", boom)
     col.start_background_build_index()
 
-    with pytest.raises(IndexBuildFailedError):
+    with pytest.raises(IndexUnavailableError):
         col.wait_until_queryable(timeout=5.0)
     assert col.is_queryable() is False
     col.close()
@@ -188,8 +202,10 @@ def test_start_background_build_index_one_shot_after_thread_start_failure(
     assert col._background_build_done.is_set()
     assert isinstance(col._background_build_error, RuntimeError)
 
-    # wait_until_queryable surfaces it as IndexBuildFailedError.
-    with pytest.raises(IndexBuildFailedError):
+    # wait_until_queryable surfaces this state via the never-scheduled
+    # guard (step 2): event set + _index_built=False → IndexUnavailableError.
+    # The captured error is diagnostic only, readable via get_index_status().
+    with pytest.raises(IndexUnavailableError):
         col.wait_until_queryable(timeout=0.1)
 
     # Retry is a no-op (one-shot semantics).
@@ -260,12 +276,6 @@ def test_get_index_status_queryable_when_built_with_captured_error(
     assert status["documents_indexed"] == 1
     assert status["error"] is not None
     assert "subsequent rebuild blew up" in status["error"]
-    # is_queryable() and get_index_status()'s "queryable" branch disagree
-    # in this state: is_queryable still gates on _background_build_error
-    # being None, while get_index_status applies the priority flip and
-    # treats the captured error as diagnostic context. The asymmetry is
-    # intentional and documented in get_index_status's body comment.
-    assert col.is_queryable() is False
     col.close()
 
 
@@ -854,8 +864,10 @@ def test_synchronous_build_index_clears_prior_background_error(
     tmp_path: Path,
 ) -> None:
     """Recovery path: after a failed background build, calling build_index()
-    synchronously must clear _background_build_error so is_queryable()
-    returns True and bucket-3/4 calls stop raising IndexBuildFailedError."""
+    synchronously sets _index_built=True so is_queryable() returns True and
+    bucket-3/4 calls succeed. Also clears _background_build_error so the
+    diagnostic field in get_index_status reflects the new successful
+    attempt."""
     vault = _vault(tmp_path)
     _seed(vault)
     col = Collection(source_dir=vault, index_path=tmp_path / "fts.db")
