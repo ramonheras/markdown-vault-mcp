@@ -117,14 +117,17 @@ def test_wait_until_queryable_raises_on_timeout(tmp_path: Path) -> None:
     col.close()
 
 
-def test_wait_until_queryable_raises_build_failed_when_error_set(
+def test_wait_until_queryable_raises_unavailable_when_error_set_and_not_built(
     tmp_path: Path,
 ) -> None:
+    """Captured error + event set + _index_built=False (default) → raises
+    IndexUnavailableError via step 2 (never-scheduled guard). The captured
+    error is no longer surfaced as a separate exception class; callers
+    read get_index_status() for the diagnostic."""
     col = Collection(source_dir=_vault(tmp_path))
     col._background_build_error = RuntimeError("scan exploded")
-    with pytest.raises(IndexBuildFailedError) as excinfo:
+    with pytest.raises(IndexUnavailableError, match=r"never scheduled|not built"):
         col.wait_until_queryable(timeout=0.1)
-    assert isinstance(excinfo.value.__cause__, RuntimeError)
     col.close()
 
 
@@ -136,6 +139,20 @@ def test_wait_until_queryable_raises_when_never_scheduled(tmp_path: Path) -> Non
     # All defaults: event pre-set, no error, _index_built=False, no spawn.
     with pytest.raises(IndexUnavailableError, match=r"never scheduled|not built"):
         col.wait_until_queryable(timeout=0.1)
+    col.close()
+
+
+def test_wait_until_queryable_returns_when_built_with_captured_error(
+    tmp_path: Path,
+) -> None:
+    """Direct state poke: built + done + captured error → returns (no raise).
+    Captured error is diagnostic only, not a control-flow gate."""
+    vault = _vault(tmp_path)
+    _seed(vault)
+    col = Collection(source_dir=vault)
+    col.build_index()
+    col._background_build_error = RuntimeError("subsequent rebuild blew up")
+    col.wait_until_queryable(timeout=0.1)  # must not raise
     col.close()
 
 
@@ -162,7 +179,7 @@ def test_start_background_build_index_captures_error(
     monkeypatch.setattr(col._index_mgr, "build_index", boom)
     col.start_background_build_index()
 
-    with pytest.raises(IndexBuildFailedError):
+    with pytest.raises(IndexUnavailableError):
         col.wait_until_queryable(timeout=5.0)
     assert col.is_queryable() is False
     col.close()
@@ -201,8 +218,10 @@ def test_start_background_build_index_one_shot_after_thread_start_failure(
     assert col._background_build_done.is_set()
     assert isinstance(col._background_build_error, RuntimeError)
 
-    # wait_until_queryable surfaces it as IndexBuildFailedError.
-    with pytest.raises(IndexBuildFailedError):
+    # wait_until_queryable surfaces this state via the never-scheduled
+    # guard (step 2): event set + _index_built=False → IndexUnavailableError.
+    # The captured error is diagnostic only, readable via get_index_status().
+    with pytest.raises(IndexUnavailableError):
         col.wait_until_queryable(timeout=0.1)
 
     # Retry is a no-op (one-shot semantics).
