@@ -391,8 +391,9 @@ operations (`read`, `write`, `edit`, `delete`, `rename`,
 unbuilt index — bucket-1 hits disk directly; bucket-2 queries
 whatever is currently in the index (empty on cold start).
 `wait_until_queryable(timeout=None)` is the readiness primitive: it
-raises `IndexUnavailableError` pre-#513; once the background indexer
-(#513) lands it will block on a completion event.
+blocks on the background-build completion event with a bounded
+timeout and raises `IndexUnavailableError` on timeout or when no
+build was ever scheduled.
 
 **Cold-start background FTS (issue #513 PR1, tool-layer wait
 boundary)**: when the persisted FTS DB is cold (sentinel absent),
