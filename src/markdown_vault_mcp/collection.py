@@ -441,18 +441,21 @@ class Collection:
         """Return True when the structural preconditions for serving FTS
         queries are met (in-process precondition snapshot).
 
-        Checks ``_index_built`` is True, ``_background_build_error`` is
-        None, and ``_background_build_done`` is set. Necessary but not
-        sufficient — actual queryability is determined at use time (a
-        corrupted on-disk database satisfies these preconditions but
-        queries still fail).
+        Checks ``_index_built`` is True and ``_background_build_done`` is
+        set. Necessary but not sufficient — actual queryability is
+        determined at use time (a corrupted on-disk database satisfies
+        these preconditions but queries still fail).
+
+        A captured ``_background_build_error`` from a previous failed
+        attempt does NOT demote queryability: the error is diagnostic
+        state about the most recent build attempt, surfaced via
+        :meth:`get_index_status`'s ``error`` field, not a control-flow
+        gate.
 
         Lock-free by design: plain attribute reads + Event.is_set().
         Assumes CPython GIL semantics for cross-thread visibility.
         """
         if not self._index_built:
-            return False
-        if self._background_build_error is not None:
             return False
         return self._background_build_done.is_set()
 
