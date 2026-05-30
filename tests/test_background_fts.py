@@ -260,6 +260,12 @@ def test_get_index_status_queryable_when_built_with_captured_error(
     assert status["documents_indexed"] == 1
     assert status["error"] is not None
     assert "subsequent rebuild blew up" in status["error"]
+    # is_queryable() and get_index_status()'s "queryable" branch disagree
+    # in this state: is_queryable still gates on _background_build_error
+    # being None, while get_index_status applies the priority flip and
+    # treats the captured error as diagnostic context. The asymmetry is
+    # intentional and documented in get_index_status's body comment.
+    assert col.is_queryable() is False
     col.close()
 
 

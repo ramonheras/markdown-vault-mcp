@@ -580,7 +580,7 @@ class Collection:
         }
 
     def wait_until_queryable(self, timeout: float | None = None) -> None:
-        """Block until the FTS index is queryable per :meth:`is_queryable`, or raise.
+        """Block until the FTS index is queryable, or raise.
 
         Control flow (each step in order):
 
