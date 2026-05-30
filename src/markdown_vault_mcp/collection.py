@@ -243,7 +243,7 @@ class Collection:
         # Background-build coordination (issue #513 PR1 attempt 7). The
         # event is the blocking primitive `wait_until_queryable()` waits
         # on; it is pre-set so a freshly constructed Collection that never
-        # called build_index() does not silently look "ready". The
+        # called build_index() does not silently look "queryable". The
         # background path clears the event before spawning the thread
         # and the worker sets it in its finally clause.
         self._background_build_thread: threading.Thread | None = None
@@ -766,7 +766,7 @@ class Collection:
                     len(existing),
                 )
                 self._index_built = True
-                # Recovery: clear any captured background error + signal ready.
+                # Recovery: clear any captured background error + signal queryable.
                 self._background_build_error = None
                 self._background_build_done.set()
                 return IndexStats(
@@ -776,7 +776,7 @@ class Collection:
                 )
 
         # Reset before the (potentially destructive) rebuild so a mid-build
-        # exception leaves the Collection visibly not-ready. The sentinel
+        # exception leaves the Collection visibly not-queryable. The sentinel
         # is cleared too so a crash mid-loop is detectable by the next
         # process (rows without sentinel = partial — see issue #525).
         self._index_built = False
@@ -784,7 +784,7 @@ class Collection:
         result = self._index_mgr.build_index(force=force)
         self._fts.set_build_completed()
         self._index_built = True
-        # Recovery: clear any captured background error + signal ready.
+        # Recovery: clear any captured background error + signal queryable.
         self._background_build_error = None
         self._background_build_done.set()
         return result

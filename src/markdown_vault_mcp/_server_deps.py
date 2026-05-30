@@ -109,7 +109,7 @@ def make_collection_lifespan(config: CollectionConfig) -> Any:
         else:
             stats = await asyncio.to_thread(collection.build_index)
             logger.info(
-                "Index ready: %d documents (synchronous build)",
+                "Index built: %d documents (synchronous build)",
                 stats.documents_indexed,
             )
 
