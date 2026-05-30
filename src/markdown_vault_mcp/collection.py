@@ -13,7 +13,7 @@ import re
 import threading
 from typing import TYPE_CHECKING, Any, Literal
 
-from markdown_vault_mcp.exceptions import IndexBuildFailedError, IndexNotReadyError
+from markdown_vault_mcp.exceptions import IndexBuildFailedError, IndexUnavailableError
 from markdown_vault_mcp.fts_index import FTSIndex
 from markdown_vault_mcp.scanner import (
     ChunkStrategy,
@@ -93,7 +93,7 @@ class Collection:
     :meth:`get_context`, :meth:`get_connection_path`, :meth:`get_toc`)
     or the bucket-4 coordinators :meth:`reindex` and
     :meth:`build_embeddings`; otherwise
-    :exc:`~markdown_vault_mcp.exceptions.IndexNotReadyError` is raised.
+    :exc:`~markdown_vault_mcp.exceptions.IndexUnavailableError` is raised.
     :meth:`build_index` must also precede :meth:`start` — see
     :meth:`start` for the rationale.
     Bucket-1 file operations (:meth:`read`, :meth:`write`, :meth:`edit`,
@@ -108,12 +108,12 @@ class Collection:
     :meth:`start_background_build_index` to spawn a daemon thread
     that runs :meth:`build_index` to completion. Bucket-3/4 MCP tool
     *clients* block on the new
-    :class:`markdown_vault_mcp._server_readiness.needs_index_ready`
-    decorator, which calls :meth:`wait_for_index_ready` with a
+    :class:`markdown_vault_mcp._server_queryable.needs_queryable`
+    decorator, which calls :meth:`wait_until_queryable` with a
     bounded default timeout
-    (``MARKDOWN_VAULT_MCP_READY_TIMEOUT_S``, default 60s). The
+    (``MARKDOWN_VAULT_MCP_BUILD_TIMEOUT_S``, default 60s). The
     library stays honest: bucket-3/4 *methods* keep the PR #525
-    raise-immediately contract via :meth:`_require_index_ready`.
+    raise-immediately contract via :meth:`_require_built`.
     Internal callers (lifespan, git pull loop, CLI, direct library
     users) get the raise contract and handle "not ready" with
     caller-appropriate logic — never block.
@@ -241,9 +241,9 @@ class Collection:
         self._index_built = False
 
         # Background-build coordination (issue #513 PR1 attempt 7). The
-        # event is the blocking primitive `wait_for_index_ready()` waits
+        # event is the blocking primitive `wait_until_queryable()` waits
         # on; it is pre-set so a freshly constructed Collection that never
-        # called build_index() does not silently look "ready". The
+        # called build_index() does not silently look "queryable". The
         # background path clears the event before spawning the thread
         # and the worker sets it in its finally clause.
         self._background_build_thread: threading.Thread | None = None
@@ -354,7 +354,7 @@ class Collection:
 
         Call :meth:`build_index` **before** :meth:`start`. The git pull
         loop wires :meth:`reindex` (bucket 4) as its ``on_pull`` callback,
-        and ``reindex`` raises :exc:`IndexNotReadyError` on an unbuilt
+        and ``reindex`` raises :exc:`IndexUnavailableError` on an unbuilt
         index — so a pull event firing before the initial build would
         crash the loop thread.
         """
@@ -430,33 +430,25 @@ class Collection:
     # Indexing readiness (issue #525)
     # ------------------------------------------------------------------
 
-    def _require_index_ready(self) -> None:
-        """Raise :exc:`IndexNotReadyError` if :meth:`build_index` has not run."""
+    def _require_built(self) -> None:
+        """Raise :exc:`IndexUnavailableError` if :meth:`build_index` has not run."""
         if not self._index_built:
-            raise IndexNotReadyError(
+            raise IndexUnavailableError(
                 "Index not built. Call build_index() before this method."
             )
 
-    def is_index_ready(self) -> bool:
-        """Return ``True`` iff the FTS index is in a clean ready state.
+    def is_queryable(self) -> bool:
+        """Return True when the structural preconditions for serving FTS
+        queries are met (in-process precondition snapshot).
 
-        Non-blocking. Returns ``True`` only when all three conditions
-        hold simultaneously: ``_index_built`` is True (a build returned
-        cleanly), ``_background_build_error`` is None (no captured
-        background failure), and ``_background_build_done`` is set (no
-        in-flight background). A freshly-constructed Collection
-        (event pre-set, no error, ``_index_built`` False) returns False
-        — the attempt-6 status lie is impossible by construction.
+        Checks ``_index_built`` is True, ``_background_build_error`` is
+        None, and ``_background_build_done`` is set. Necessary but not
+        sufficient — actual queryability is determined at use time (a
+        corrupted on-disk database satisfies these preconditions but
+        queries still fail).
 
-        Lock-free by design: reads ``_index_built`` (plain bool
-        attribute), checks ``_background_build_error is None`` (plain
-        attribute), and calls ``_background_build_done.is_set()``
-        (Event method, no lock). Safe to call on hot tool paths.
-
-        Assumes CPython GIL semantics for cross-thread visibility of
-        the plain attribute reads. Not analyzed for Free-Threaded
-        Python 3.13+ (``python -X gil=0``); revisit if the project
-        moves off CPython GIL.
+        Lock-free by design: plain attribute reads + Event.is_set().
+        Assumes CPython GIL semantics for cross-thread visibility.
         """
         if not self._index_built:
             return False
@@ -533,29 +525,43 @@ class Collection:
     def get_index_status(self) -> dict[str, Any]:
         """Return a non-blocking snapshot of background-build state.
 
-        Shape: ``{"status": "ready" | "building" | "failed",
+        Shape: ``{"status": "queryable" | "building" | "failed",
         "documents_indexed": int, "error": str | None}``.
 
-        - ``"ready"``: ``is_index_ready()`` is True (synchronous build
-          returned cleanly or background build completed cleanly);
-          ``error`` is None.
-        - ``"failed"``: ``_background_build_error`` is non-None;
-          ``error`` carries its message.
-        - ``"building"``: anything else — event cleared (in-flight)
+        - ``"queryable"``: ``_index_built`` is True and the build event is
+          set — a completed build exists; captures an error as diagnostic
+          context in ``error`` but does not demote the status.
+        - ``"failed"``: precondition does not hold AND the build event is
+          set AND ``_background_build_error`` is non-None; ``error`` carries
+          its message.
+        - ``"building"``: anything else — event cleared (writer in flight)
           OR event set but ``_index_built`` is False (never scheduled).
-          From the operator's perspective both mean "wait or poll."
 
-        ``documents_indexed`` is taken from
-        :meth:`FTSIndex.list_notes` and so reflects whatever rows are
-        currently committed — progress is observable in the
-        ``"building"`` state as the count rises.
+        ``documents_indexed`` is taken from :meth:`FTSIndex.list_notes` and
+        so reflects whatever rows are currently committed — progress is
+        observable in the ``"building"`` state as the count rises.
+
+        ``error`` carries the diagnostic message from the last background
+        build attempt that captured an exception, independent of ``status``.
         """
-        if self._background_build_error is not None:
+        # Intentionally does not call is_queryable() — that method also
+        # gates on _background_build_error is None. Here a captured error
+        # is diagnostic context only (surfaced via the error field),
+        # not a reason to hide a queryable index. The two predicates
+        # converge once is_queryable()'s body is simplified.
+        if self._index_built and self._background_build_done.is_set():
+            status = "queryable"
+            error: str | None = (
+                str(self._background_build_error)
+                if self._background_build_error is not None
+                else None
+            )
+        elif (
+            self._background_build_done.is_set()
+            and self._background_build_error is not None
+        ):
             status = "failed"
-            error: str | None = str(self._background_build_error)
-        elif self.is_index_ready():
-            status = "ready"
-            error = None
+            error = str(self._background_build_error)
         else:
             status = "building"
             error = None
@@ -573,28 +579,28 @@ class Collection:
             "error": error,
         }
 
-    def wait_for_index_ready(self, timeout: float | None = None) -> None:
-        """Block until the FTS index is ready, or raise.
+    def wait_until_queryable(self, timeout: float | None = None) -> None:
+        """Block until the FTS index is queryable, or raise.
 
         Control flow (each step in order):
 
         1. ``_background_build_done.wait(timeout)`` — if False
            (timed out), raise
-           :exc:`IndexNotReadyError("…timed out…")`.
+           :exc:`IndexUnavailableError("…timed out…")`.
         2. If ``_background_build_error`` is not None, raise
            :exc:`IndexBuildFailedError` with the original as
            ``__cause__``.
         3. If ``_index_built`` is False, raise
-           :exc:`IndexNotReadyError("…never scheduled…")` — guards
+           :exc:`IndexUnavailableError("…never scheduled…")` — guards
            the never-scheduled case (event pre-set, no error, no
            build, no thread). Without it, callers on a fresh
            Collection would silently return success.
         4. Otherwise return.
 
-        This method is opt-in for the MCP-layer `needs_index_ready`
+        This method is opt-in for the MCP-layer `needs_queryable`
         decorator and for external callers that explicitly want to
         wait. Library bucket-3/4 methods do NOT call this — they call
-        :meth:`_require_index_ready` which raises immediately. That
+        :meth:`_require_built` which raises immediately. That
         separation is the boundary that closed attempt 6's hole.
 
         Args:
@@ -606,11 +612,11 @@ class Collection:
 
         Raises:
             IndexBuildFailedError: A prior background build raised.
-            IndexNotReadyError: Index not built and either no build
+            IndexUnavailableError: Index not built and either no build
                 was ever scheduled, or the timeout expired.
         """
         if not self._background_build_done.wait(timeout=timeout):
-            raise IndexNotReadyError(
+            raise IndexUnavailableError(
                 f"Index build still in progress; timed out after {timeout}s."
             )
         if self._background_build_error is not None:
@@ -618,7 +624,7 @@ class Collection:
                 "Background index build raised; see __cause__ for details."
             ) from self._background_build_error
         if not self._index_built:
-            raise IndexNotReadyError(
+            raise IndexUnavailableError(
                 "Index not built; background build was never scheduled. "
                 "Call build_index() or start_background_build_index() first."
             )
@@ -765,7 +771,7 @@ class Collection:
                     len(existing),
                 )
                 self._index_built = True
-                # Recovery: clear any captured background error + signal ready.
+                # Recovery: clear any captured background error + signal queryable.
                 self._background_build_error = None
                 self._background_build_done.set()
                 return IndexStats(
@@ -775,7 +781,7 @@ class Collection:
                 )
 
         # Reset before the (potentially destructive) rebuild so a mid-build
-        # exception leaves the Collection visibly not-ready. The sentinel
+        # exception leaves the Collection visibly not-queryable. The sentinel
         # is cleared too so a crash mid-loop is detectable by the next
         # process (rows without sentinel = partial — see issue #525).
         self._index_built = False
@@ -783,7 +789,7 @@ class Collection:
         result = self._index_mgr.build_index(force=force)
         self._fts.set_build_completed()
         self._index_built = True
-        # Recovery: clear any captured background error + signal ready.
+        # Recovery: clear any captured background error + signal queryable.
         self._background_build_error = None
         self._background_build_done.set()
         return result
@@ -796,9 +802,9 @@ class Collection:
             applied.
 
         Raises:
-            IndexNotReadyError: If :meth:`build_index` has not been called.
+            IndexUnavailableError: If :meth:`build_index` has not been called.
         """
-        self._require_index_ready()
+        self._require_built()
         return self._index_mgr.reindex()
 
     def build_embeddings(self, *, force: bool = False) -> int:
@@ -812,11 +818,11 @@ class Collection:
             Total number of chunks embedded.
 
         Raises:
-            IndexNotReadyError: If :meth:`build_index` has not been called.
+            IndexUnavailableError: If :meth:`build_index` has not been called.
             ValueError: If ``embedding_provider`` or ``embeddings_path`` is
                 not configured.
         """
-        self._require_index_ready()
+        self._require_built()
         return self._index_mgr.build_embeddings(force=force)
 
     def embeddings_status(self) -> dict:
@@ -868,10 +874,10 @@ class Collection:
             position, with the document title prepended as level 1.
 
         Raises:
-            IndexNotReadyError: If :meth:`build_index` has not been called.
+            IndexUnavailableError: If :meth:`build_index` has not been called.
             ValueError: If no document exists at the given path.
         """
-        self._require_index_ready()
+        self._require_built()
         return self._doc_mgr.get_toc(path)
 
     def get_backlinks(self, path: str) -> list[BacklinkInfo]:
@@ -886,10 +892,10 @@ class Collection:
             for each document that contains a link pointing to ``path``.
 
         Raises:
-            IndexNotReadyError: If :meth:`build_index` has not been called.
+            IndexUnavailableError: If :meth:`build_index` has not been called.
             ValueError: If no document exists at the given path.
         """
-        self._require_index_ready()
+        self._require_built()
         return self._link_mgr.get_backlinks(path)
 
     def get_outlinks(self, path: str) -> list[OutlinkInfo]:
@@ -907,10 +913,10 @@ class Collection:
             each link originating from ``path``.
 
         Raises:
-            IndexNotReadyError: If :meth:`build_index` has not been called.
+            IndexUnavailableError: If :meth:`build_index` has not been called.
             ValueError: If no document exists at the given path.
         """
-        self._require_index_ready()
+        self._require_built()
         return self._link_mgr.get_outlinks(path)
 
     def get_broken_links(self, *, folder: str | None = None) -> list[BrokenLinkInfo]:
@@ -948,9 +954,9 @@ class Collection:
             List of grouped results.
 
         Raises:
-            IndexNotReadyError: If :meth:`build_index` has not been called.
+            IndexUnavailableError: If :meth:`build_index` has not been called.
         """
-        self._require_index_ready()
+        self._require_built()
         return self._search_mgr.get_similar(
             path, limit=limit, chunks_per_file=chunks_per_file
         )
@@ -997,10 +1003,10 @@ class Collection:
             stays compact.
 
         Raises:
-            IndexNotReadyError: If :meth:`build_index` has not been called.
+            IndexUnavailableError: If :meth:`build_index` has not been called.
             ValueError: If no document exists at the given path.
         """
-        self._require_index_ready()
+        self._require_built()
         return self._search_mgr.get_context(
             path, similar_limit=similar_limit, link_limit=link_limit
         )
@@ -1048,10 +1054,10 @@ class Collection:
             (inclusive), or ``None`` if unreachable within *max_depth* hops.
 
         Raises:
-            IndexNotReadyError: If :meth:`build_index` has not been called.
+            IndexUnavailableError: If :meth:`build_index` has not been called.
             ValueError: If *source* or *target* is not found in the index.
         """
-        self._require_index_ready()
+        self._require_built()
         return self._link_mgr.get_connection_path(source, target, max_depth=max_depth)
 
     # ------------------------------------------------------------------

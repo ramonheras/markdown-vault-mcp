@@ -381,7 +381,7 @@ populate the index. Callers must invoke `build_index()` explicitly
 before bucket-3 relational/FTS-backed queries (`get_backlinks`,
 `get_outlinks`, `get_similar`, `get_context`, `get_connection_path`,
 `get_toc`) or the bucket-4 coordinators (`reindex`,
-`build_embeddings`); otherwise `IndexNotReadyError` is raised.
+`build_embeddings`); otherwise `IndexUnavailableError` is raised.
 `start()` must also be called after `build_index()` because its git
 pull loop wires `reindex` as the `on_pull` callback. Bucket-1 file
 operations (`read`, `write`, `edit`, `delete`, `rename`,
@@ -390,9 +390,10 @@ operations (`read`, `write`, `edit`, `delete`, `rename`,
 `get_orphan_notes`, `get_most_linked`, `get_broken_links`) work on an
 unbuilt index — bucket-1 hits disk directly; bucket-2 queries
 whatever is currently in the index (empty on cold start).
-`wait_for_index_ready(timeout=None)` is the readiness primitive: it
-raises `IndexNotReadyError` pre-#513; once the background indexer
-(#513) lands it will block on a completion event.
+`wait_until_queryable(timeout=None)` is the readiness primitive: it
+blocks on the background-build completion event with a bounded
+timeout and raises `IndexUnavailableError` on timeout or when no
+build was ever scheduled.
 
 **Cold-start background FTS (issue #513 PR1, tool-layer wait
 boundary)**: when the persisted FTS DB is cold (sentinel absent),
@@ -400,12 +401,12 @@ the MCP server lifespan calls
 `Collection.start_background_build_index()` to spawn a daemon
 thread that runs `build_index()` to completion. Bucket-3/4 calls
 arriving at the MCP layer go through the
-`needs_index_ready` decorator (in
-`src/markdown_vault_mcp/_server_readiness.py`), which blocks via
-`Collection.wait_for_index_ready(timeout)` with a configurable
-default (env `MARKDOWN_VAULT_MCP_READY_TIMEOUT_S`, default 60s).
+`needs_queryable` decorator (in
+`src/markdown_vault_mcp/_server_queryable.py`), which blocks via
+`Collection.wait_until_queryable(timeout)` with a configurable
+default (env `MARKDOWN_VAULT_MCP_BUILD_TIMEOUT_S`, default 60s).
 A failed background build surfaces to MCP clients as
-`IndexBuildFailedError` (the decorator's `wait_for_index_ready`
+`IndexBuildFailedError` (the decorator's `wait_until_queryable`
 call raises) and to operators as
 `get_index_status` reporting
 `{"status": "failed", "error": "..."}`. Embeddings stay on the
@@ -414,10 +415,17 @@ synchronous lifespan path in PR1 — on cold start
 search returns empty until PR2 backgrounds embeddings or the
 operator runs CLI `index`. Warm starts continue to use PR #526's
 O(1) sentinel short-circuit and never spawn the background thread.
-The library's `_require_index_ready()` is unchanged from PR #525
+The library's `_require_built()` is unchanged from PR #525
 — it raises immediately on not-ready, which is what lets the git
 pull loop and lifespan's embeddings path handle "not ready"
 without deadlocking on internal blocking.
+
+The `MARKDOWN_VAULT_MCP_BUILD_TIMEOUT_S` env var bounds the
+`@needs_queryable` decorator's wait, which calls
+`Collection.wait_until_queryable`. The env var and the method name
+describe the same wait from different angles — operators tune the
+timeout in seconds; the method describes what predicate the wait
+resolves to.
 
 To apply a configuration change (e.g. new `exclude_patterns`,
 `required_frontmatter`) to a pre-existing index, call
