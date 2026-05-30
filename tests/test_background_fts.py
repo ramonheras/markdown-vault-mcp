@@ -661,7 +661,7 @@ def test_decorator_respects_env_timeout_override(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """monkeypatch.setenv must be visible at call time because
-    _resolve_ready_timeout reads at call time, not import time."""
+    _resolve_build_timeout reads at call time, not import time."""
     import time as time_mod
 
     from markdown_vault_mcp.managers import index as index_mod
@@ -673,7 +673,7 @@ def test_decorator_respects_env_timeout_override(
     monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", str(vault))
     monkeypatch.setenv("MARKDOWN_VAULT_MCP_INDEX_PATH", str(tmp_path / "fts.db"))
     monkeypatch.setenv("MARKDOWN_VAULT_MCP_STATE_PATH", str(tmp_path / "s.json"))
-    monkeypatch.setenv("MARKDOWN_VAULT_MCP_READY_TIMEOUT_S", "0.1")
+    monkeypatch.setenv("MARKDOWN_VAULT_MCP_BUILD_TIMEOUT_S", "0.1")
 
     # Mock build_index to never finish so the timeout fires.
     original = index_mod.IndexManager.build_index
@@ -911,14 +911,14 @@ def test_decorator_works_with_positional_collection_arg(tmp_path: Path) -> None:
     Direct call (no FastMCP) with positional collection must work."""
     import asyncio
 
-    from markdown_vault_mcp._server_readiness import needs_index_ready
+    from markdown_vault_mcp._server_queryable import needs_queryable
 
     vault = _vault(tmp_path)
     _seed(vault)
     col = Collection(source_dir=vault)
     col.build_index()  # mark ready
 
-    @needs_index_ready()
+    @needs_queryable()
     async def handler(path: str, collection: Collection) -> str:  # noqa: ARG001
         return f"got: {path}"
 

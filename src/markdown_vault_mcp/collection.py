@@ -108,10 +108,10 @@ class Collection:
     :meth:`start_background_build_index` to spawn a daemon thread
     that runs :meth:`build_index` to completion. Bucket-3/4 MCP tool
     *clients* block on the new
-    :class:`markdown_vault_mcp._server_readiness.needs_index_ready`
+    :class:`markdown_vault_mcp._server_queryable.needs_queryable`
     decorator, which calls :meth:`wait_until_queryable` with a
     bounded default timeout
-    (``MARKDOWN_VAULT_MCP_READY_TIMEOUT_S``, default 60s). The
+    (``MARKDOWN_VAULT_MCP_BUILD_TIMEOUT_S``, default 60s). The
     library stays honest: bucket-3/4 *methods* keep the PR #525
     raise-immediately contract via :meth:`_require_built`.
     Internal callers (lifespan, git pull loop, CLI, direct library
@@ -592,7 +592,7 @@ class Collection:
            Collection would silently return success.
         4. Otherwise return.
 
-        This method is opt-in for the MCP-layer `needs_index_ready`
+        This method is opt-in for the MCP-layer `needs_queryable`
         decorator and for external callers that explicitly want to
         wait. Library bucket-3/4 methods do NOT call this — they call
         :meth:`_require_built` which raises immediately. That

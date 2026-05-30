@@ -22,7 +22,7 @@ from markdown_vault_mcp.config import CollectionConfig
 
 from ._icons import _TOOL_ICONS
 from ._server_deps import get_collection
-from ._server_readiness import needs_index_ready
+from ._server_queryable import needs_queryable
 
 
 def _get_config(ctx: Context) -> CollectionConfig:
@@ -130,7 +130,7 @@ def register_resources(mcp: FastMCP) -> None:
     @mcp.resource(
         "toc://vault/{path}", mime_type="application/json", icons=_TOOL_ICONS["read"]
     )
-    @needs_index_ready()
+    @needs_queryable()
     async def vault_toc(
         path: str,
         collection: Collection = Depends(get_collection),
@@ -144,7 +144,7 @@ def register_resources(mcp: FastMCP) -> None:
         mime_type="application/json",
         icons=_TOOL_ICONS["get_similar"],
     )
-    @needs_index_ready()
+    @needs_queryable()
     async def vault_similar(
         path: str,
         collection: Collection = Depends(get_collection),

@@ -94,7 +94,7 @@ class IndexBuildFailedError(MarkdownMCPError):
     Distinguishes "build never finished / never started"
     (:exc:`IndexNotReadyError`) from "build started but raised" — both
     surface through :meth:`Collection.wait_until_queryable` and through
-    the MCP-layer `needs_index_ready` decorator. Operator action
+    the MCP-layer `needs_queryable` decorator. Operator action
     differs: not-ready means wait or check status; failed means
     inspect logs and decide whether to retry via CLI
     ``markdown-vault-mcp index``.
