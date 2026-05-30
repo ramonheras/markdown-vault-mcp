@@ -437,26 +437,18 @@ class Collection:
                 "Index not built. Call build_index() before this method."
             )
 
-    def is_index_ready(self) -> bool:
-        """Return ``True`` iff the FTS index is in a clean ready state.
+    def is_queryable(self) -> bool:
+        """Return True when the structural preconditions for serving FTS
+        queries are met (in-process precondition snapshot).
 
-        Non-blocking. Returns ``True`` only when all three conditions
-        hold simultaneously: ``_index_built`` is True (a build returned
-        cleanly), ``_background_build_error`` is None (no captured
-        background failure), and ``_background_build_done`` is set (no
-        in-flight background). A freshly-constructed Collection
-        (event pre-set, no error, ``_index_built`` False) returns False
-        — the attempt-6 status lie is impossible by construction.
+        Checks ``_index_built`` is True, ``_background_build_error`` is
+        None, and ``_background_build_done`` is set. Necessary but not
+        sufficient — actual queryability is determined at use time (a
+        corrupted on-disk database satisfies these preconditions but
+        queries still fail).
 
-        Lock-free by design: reads ``_index_built`` (plain bool
-        attribute), checks ``_background_build_error is None`` (plain
-        attribute), and calls ``_background_build_done.is_set()``
-        (Event method, no lock). Safe to call on hot tool paths.
-
-        Assumes CPython GIL semantics for cross-thread visibility of
-        the plain attribute reads. Not analyzed for Free-Threaded
-        Python 3.13+ (``python -X gil=0``); revisit if the project
-        moves off CPython GIL.
+        Lock-free by design: plain attribute reads + Event.is_set().
+        Assumes CPython GIL semantics for cross-thread visibility.
         """
         if not self._index_built:
             return False

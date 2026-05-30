@@ -46,28 +46,28 @@ def _seed(vault: Path, name: str = "n.md", body: str = "# N\n\nbody\n") -> None:
     (vault / name).write_text(body, encoding="utf-8")
 
 
-def test_is_index_ready_false_after_construction(tmp_path: Path) -> None:
+def test_is_queryable_false_after_construction(tmp_path: Path) -> None:
     col = Collection(source_dir=_vault(tmp_path))
-    assert col.is_index_ready() is False
+    assert col.is_queryable() is False
     col.close()
 
 
-def test_is_index_ready_true_after_synchronous_build(tmp_path: Path) -> None:
+def test_is_queryable_true_after_synchronous_build(tmp_path: Path) -> None:
     vault = _vault(tmp_path)
     _seed(vault)
     col = Collection(source_dir=vault)
     col.build_index()
-    assert col.is_index_ready() is True
+    assert col.is_queryable() is True
     col.close()
 
 
-def test_is_index_ready_false_after_captured_background_error(tmp_path: Path) -> None:
+def test_is_queryable_false_after_captured_background_error(tmp_path: Path) -> None:
     """Direct state poke: simulate a finished-but-failed background by setting
     the error and the event, leaving _index_built False."""
     col = Collection(source_dir=_vault(tmp_path))
     col._background_build_error = RuntimeError("simulated")
     col._background_build_done.set()
-    assert col.is_index_ready() is False
+    assert col.is_queryable() is False
     col.close()
 
 
@@ -133,7 +133,7 @@ def test_start_background_build_index_eventually_ready(tmp_path: Path) -> None:
     col = Collection(source_dir=vault)
     col.start_background_build_index()
     col.wait_for_index_ready(timeout=5.0)
-    assert col.is_index_ready()
+    assert col.is_queryable()
     col.get_backlinks("n_0.md")  # smoke: bucket-3 returns (empty list OK)
     col.close()
 
@@ -151,7 +151,7 @@ def test_start_background_build_index_captures_error(
 
     with pytest.raises(IndexBuildFailedError):
         col.wait_for_index_ready(timeout=5.0)
-    assert col.is_index_ready() is False
+    assert col.is_queryable() is False
     col.close()
 
 
@@ -439,7 +439,7 @@ def test_lifespan_cold_start_with_embeddings_skips_embeddings(
     """Provider configured + cold start: lifespan must log the skip and not block.
 
     Must inject a slow _index_mgr.build_index mock so the background thread is
-    reliably still running when the lifespan checks is_index_ready() — otherwise
+    reliably still running when the lifespan checks is_queryable() — otherwise
     on a tiny vault the background completes between spawn and check, embeddings
     runs, and the test asserts the wrong thing.
     """
@@ -459,7 +459,7 @@ def test_lifespan_cold_start_with_embeddings_skips_embeddings(
 
     # Patch IndexManager.build_index globally to sleep before returning,
     # ensuring the background thread is still running when the lifespan
-    # makes the is_index_ready() decision.
+    # makes the is_queryable() decision.
     from markdown_vault_mcp.managers import index as index_mod
 
     original_build_index = index_mod.IndexManager.build_index
@@ -848,7 +848,7 @@ def test_synchronous_build_index_clears_prior_background_error(
     tmp_path: Path,
 ) -> None:
     """Recovery path: after a failed background build, calling build_index()
-    synchronously must clear _background_build_error so is_index_ready()
+    synchronously must clear _background_build_error so is_queryable()
     returns True and bucket-3/4 calls stop raising IndexBuildFailedError."""
     vault = _vault(tmp_path)
     _seed(vault)
@@ -859,14 +859,14 @@ def test_synchronous_build_index_clears_prior_background_error(
     col._background_build_error = RuntimeError("simulated prior background failure")
     col._background_build_done.set()
     col._background_started = True
-    assert col.is_index_ready() is False
+    assert col.is_queryable() is False
 
     # Synchronous recovery build.
     col.build_index()
 
     # Now ready: error cleared, _index_built True, event still set.
     assert col._background_build_error is None
-    assert col.is_index_ready() is True
+    assert col.is_queryable() is True
     # Bucket-3 call no longer surfaces the prior error.
     col.get_backlinks("n.md")  # must not raise
     col.close()
@@ -878,7 +878,7 @@ def test_synchronous_build_index_warm_path_clears_prior_background_error(
     """Recovery path via the warm-restart short-circuit: a prior background
     failure left _background_build_error populated; the sentinel from a
     prior successful build is still present; calling build_index()
-    synchronously must clear the captured error and is_index_ready() must
+    synchronously must clear the captured error and is_queryable() must
     return True."""
     vault = _vault(tmp_path)
     _seed(vault)
@@ -895,13 +895,13 @@ def test_synchronous_build_index_warm_path_clears_prior_background_error(
     col._background_build_error = RuntimeError("simulated prior background failure")
     col._background_build_done.set()
     col._background_started = True
-    assert col.is_index_ready() is False
+    assert col.is_queryable() is False
 
     # Warm-restart short-circuit recovery.
     col.build_index()
 
     assert col._background_build_error is None
-    assert col.is_index_ready() is True
+    assert col.is_queryable() is True
     col.close()
 
 

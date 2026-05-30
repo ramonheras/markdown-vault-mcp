@@ -36,7 +36,7 @@ def needs_index_ready(
 
     Before invoking the wrapped handler, blocks on
     ``Collection.wait_for_index_ready(timeout)``. On the warm path
-    (``is_index_ready`` already True) the wait is skipped — no
+    (``is_queryable`` already True) the wait is skipped — no
     thread-pool overhead.
 
     The wrapper does NOT redeclare ``collection`` in its own
@@ -74,7 +74,7 @@ def needs_index_ready(
                     "handler must declare "
                     "`collection: Collection = Depends(get_collection)`."
                 )
-            if not collection.is_index_ready():
+            if not collection.is_queryable():
                 effective = timeout if timeout is not None else _resolve_ready_timeout()
                 await asyncio.to_thread(collection.wait_for_index_ready, effective)
             return await handler(*args, **kwargs)

@@ -118,7 +118,7 @@ def make_collection_lifespan(config: CollectionConfig) -> Any:
         # PR2 follow-up backgrounds embeddings so semantic search
         # becomes available without operator-initiated rebuild.
         if kwargs.get("embedding_provider") is not None:
-            if collection.is_index_ready():
+            if collection.is_queryable():
                 chunks_embedded = await asyncio.to_thread(collection.build_embeddings)
                 logger.info("Embeddings ready: %d chunks", chunks_embedded)
             else:
