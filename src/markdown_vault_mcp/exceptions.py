@@ -78,15 +78,15 @@ IndexUnavailableReason = Literal["never_built", "timeout", "broken", "busy"]
 - ``"broken"`` — a SQLite ``OperationalError`` surfaced from a
   bucket-3/4 handler call with an errorname OUTSIDE the busy set
   (e.g., ``SQLITE_CORRUPT``, ``SQLITE_NOTADB``, ``SQLITE_CANTOPEN``,
-  ``SQLITE_SCHEMA``, ``SQLITE_IOERR``, generic ``SQLITE_ERROR``).
-  The chained ``__cause__`` carries the original exception with full
-  traceback. Operator action: inspect the cause and likely rebuild
-  the index from scratch.
+  ``SQLITE_SCHEMA``, ``SQLITE_IOERR``, ``SQLITE_FULL``, generic
+  ``SQLITE_ERROR``). The chained ``__cause__`` carries the original
+  exception with full traceback. Operator action: inspect the cause
+  and likely rebuild the index or free disk space, depending on the
+  underlying errorname.
 - ``"busy"`` — a SQLite ``OperationalError`` with errorname in
-  ``{SQLITE_BUSY, SQLITE_LOCKED, SQLITE_FULL}`` — transient or
-  operator-resolvable (lock contention, disk-full). The chained
-  ``__cause__`` carries the original exception. A retry after a
-  short backoff may succeed.
+  ``{SQLITE_BUSY, SQLITE_LOCKED}`` — lock contention from concurrent
+  connections. The chained ``__cause__`` carries the original
+  exception. A retry after a short backoff may succeed.
 """
 
 
@@ -119,8 +119,8 @@ class IndexUnavailableError(MarkdownMCPError):
       inspect and likely rebuild the index from scratch.
     - **SQLite operational error — busy** (``reason="busy"``). A
       bucket-3/4 MCP handler call raised ``sqlite3.OperationalError``
-      with errorname in ``{SQLITE_BUSY, SQLITE_LOCKED, SQLITE_FULL}``
-      — transient or operator-resolvable. A retry after a short
+      with errorname in ``{SQLITE_BUSY, SQLITE_LOCKED}`` — lock
+      contention from concurrent connections. A retry after a short
       backoff may succeed.
 
     A captured background-build error is NOT a separate exception

@@ -994,7 +994,11 @@ class TestNeedsQueryableSqliteCatch:
         assert excinfo.value.__cause__ is original
         col.close()
 
-    def test_decorator_remaps_sqlite_full_to_reason_busy(self, tmp_path: Path) -> None:
+    def test_decorator_remaps_sqlite_full_to_reason_broken(
+        self, tmp_path: Path
+    ) -> None:
+        """SQLITE_FULL (disk full) requires operator action to free
+        space, not retry — so it classifies as broken, not busy."""
         col = self._ready_collection(tmp_path)
         original = sqlite3.OperationalError("database or disk is full")
         original.sqlite_errorname = "SQLITE_FULL"  # type: ignore[attr-defined]
@@ -1005,7 +1009,7 @@ class TestNeedsQueryableSqliteCatch:
 
         with pytest.raises(IndexUnavailableError) as excinfo:
             asyncio.run(handler(collection=col))
-        assert excinfo.value.reason == "busy"
+        assert excinfo.value.reason == "broken"
         assert excinfo.value.__cause__ is original
         col.close()
 

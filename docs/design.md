@@ -425,9 +425,9 @@ error message itself is read via `get_index_status`.
 `needs_queryable` decorator also wraps the handler call in a narrow
 `try/except sqlite3.OperationalError`. When a bucket-3/4 handler's
 SQLite operation raises, the decorator classifies by errorname:
-`SQLITE_BUSY`, `SQLITE_LOCKED`, and `SQLITE_FULL` remap to
+`SQLITE_BUSY` and `SQLITE_LOCKED` (lock contention) remap to
 `IndexUnavailableError(reason="busy")`; anything else (corruption,
-malformed schema, I/O failure, unknown codes) remaps to
+malformed schema, I/O failure, disk full, unknown codes) remaps to
 `reason="broken"`. The original exception is preserved as
 `__cause__`. Library callers (direct Collection method use) see
 the raw `sqlite3.OperationalError` — the catch is MCP-layer only,

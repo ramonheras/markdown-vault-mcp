@@ -34,7 +34,6 @@ _BUSY_ERROR_NAMES: frozenset[str] = frozenset(
     {
         "SQLITE_BUSY",
         "SQLITE_LOCKED",
-        "SQLITE_FULL",
     }
 )
 
@@ -49,12 +48,14 @@ def _classify_operational_error(
 ) -> tuple[IndexUnavailableReason, str]:
     """Map a SQLite OperationalError to a ``(reason, message)`` pair.
 
-    Conservative broken-default: only the well-known transient
-    errornames (BUSY, LOCKED, FULL) classify as ``"busy"``. Everything
-    else (CORRUPT, NOTADB, IOERR, generic ERROR, unknown future codes,
-    or a missing ``sqlite_errorname`` attribute) classifies as
+    Conservative broken-default: only the well-known lock-contention
+    errornames (BUSY, LOCKED) classify as ``"busy"``. Everything else
+    (CORRUPT, NOTADB, IOERR, FULL, generic ERROR, unknown future
+    codes, or a missing ``sqlite_errorname`` attribute) classifies as
     ``"broken"`` so operators stay in the loop rather than silently
-    retrying through degradation.
+    retrying through degradation. Note: ``SQLITE_FULL`` (disk full)
+    requires operator action to free space, not retry, so it
+    classifies as ``"broken"``.
     """
     errorname = getattr(exc, "sqlite_errorname", None)
     if errorname in _BUSY_ERROR_NAMES:
@@ -92,10 +93,11 @@ def needs_queryable(
             ever scheduled or a background build did not complete
             successfully, ``reason="broken"`` when a handler raised
             ``sqlite3.OperationalError`` from a non-busy errorname
-            (CORRUPT, NOTADB, IOERR, etc.) — inspect ``__cause__`` for
-            the underlying exception, or ``reason="busy"`` when the
-            errorname is in ``{SQLITE_BUSY, SQLITE_LOCKED, SQLITE_FULL}``
-            (transient; retry may succeed).
+            (CORRUPT, NOTADB, IOERR, FULL, etc.) — inspect
+            ``__cause__`` for the underlying exception, or
+            ``reason="busy"`` when the errorname is in
+            ``{SQLITE_BUSY, SQLITE_LOCKED}`` (lock contention; retry
+            may succeed).
     """
 
     def deco(handler: Callable[..., Any]) -> Callable[..., Any]:
