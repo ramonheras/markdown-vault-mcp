@@ -419,7 +419,23 @@ A failed background build surfaces to operators as
 from the decorator's `wait_until_queryable` call. The
 never-scheduled guard fires because the worker resets
 `_index_built=False` before recording the error; the captured
-error message itself is read via `get_index_status`. Embeddings stay on the
+error message itself is read via `get_index_status`.
+
+**Runtime corruption check (issue #541, MCP-layer):** the
+`needs_queryable` decorator also wraps the handler call in a narrow
+`try/except sqlite3.OperationalError`. When a bucket-3/4 handler's
+SQLite operation raises, the decorator classifies by errorname:
+`SQLITE_BUSY` and `SQLITE_LOCKED` (lock contention) remap to
+`IndexUnavailableError(reason="busy")`; anything else (corruption,
+malformed schema, I/O failure, disk full, unknown codes) remaps to
+`reason="broken"`. The original exception is preserved as
+`__cause__`. Library callers (direct Collection method use) see
+the raw `sqlite3.OperationalError` — the catch is MCP-layer only,
+to keep the library boundary thin and let internal callers
+classify on their own. Sibling SQLite exceptions
+(`ProgrammingError`, `IntegrityError`, etc.) bubble unwrapped from
+the decorator — they signify caller bugs or constraint violations,
+not index unavailability. Embeddings stay on the
 synchronous lifespan path in PR1 — on cold start
 `build_embeddings()` is skipped with a log entry and semantic
 search returns empty until PR2 backgrounds embeddings or the
