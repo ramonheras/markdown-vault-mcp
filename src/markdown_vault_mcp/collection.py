@@ -623,8 +623,10 @@ class Collection:
             )
         if not self._index_built:
             raise IndexUnavailableError(
-                "Index not built; background build was never scheduled. "
-                "Call build_index() or start_background_build_index() first."
+                "Index not built: background build was never scheduled "
+                "or did not complete successfully. "
+                "Check get_index_status() for diagnostic details, or call "
+                "build_index() / start_background_build_index() to retry."
             )
 
     @property
