@@ -96,8 +96,9 @@ def test_wait_until_queryable_raises_on_timeout(tmp_path: Path) -> None:
     col = Collection(source_dir=_vault(tmp_path))
     col._background_build_done.clear()
     col._index_built = False
-    with pytest.raises(IndexUnavailableError, match=r"timed out"):
+    with pytest.raises(IndexUnavailableError) as excinfo:
         col.wait_until_queryable(timeout=0.05)
+    assert excinfo.value.reason == "timeout"
     col.close()
 
 
@@ -110,8 +111,9 @@ def test_wait_until_queryable_raises_unavailable_when_error_set_and_not_built(
     read get_index_status() for the diagnostic."""
     col = Collection(source_dir=_vault(tmp_path))
     col._background_build_error = RuntimeError("scan exploded")
-    with pytest.raises(IndexUnavailableError, match=r"never scheduled|not built"):
+    with pytest.raises(IndexUnavailableError) as excinfo:
         col.wait_until_queryable(timeout=0.1)
+    assert excinfo.value.reason == "never_built"
     col.close()
 
 
@@ -121,8 +123,9 @@ def test_wait_until_queryable_raises_when_never_scheduled(tmp_path: Path) -> Non
     let wait() return success without the explicit guard."""
     col = Collection(source_dir=_vault(tmp_path))
     # All defaults: event pre-set, no error, _index_built=False, no spawn.
-    with pytest.raises(IndexUnavailableError, match=r"never scheduled|not built"):
+    with pytest.raises(IndexUnavailableError) as excinfo:
         col.wait_until_queryable(timeout=0.1)
+    assert excinfo.value.reason == "never_built"
     col.close()
 
 
@@ -163,8 +166,9 @@ def test_start_background_build_index_captures_error(
     monkeypatch.setattr(col._index_mgr, "build_index", boom)
     col.start_background_build_index()
 
-    with pytest.raises(IndexUnavailableError):
+    with pytest.raises(IndexUnavailableError) as excinfo:
         col.wait_until_queryable(timeout=5.0)
+    assert excinfo.value.reason == "never_built"
     assert col.is_queryable() is False
     col.close()
 
@@ -205,8 +209,9 @@ def test_start_background_build_index_one_shot_after_thread_start_failure(
     # wait_until_queryable surfaces this state via the never-scheduled
     # guard (step 2): event set + _index_built=False → IndexUnavailableError.
     # The captured error is diagnostic only, readable via get_index_status().
-    with pytest.raises(IndexUnavailableError):
+    with pytest.raises(IndexUnavailableError) as excinfo:
         col.wait_until_queryable(timeout=0.1)
+    assert excinfo.value.reason == "never_built"
 
     # Retry is a no-op (one-shot semantics).
     monkeypatch.undo()
@@ -748,8 +753,9 @@ def test_require_built_raises_immediately_not_blocks(tmp_path: Path) -> None:
         col.start_background_build_index()
 
         start = time_mod.perf_counter()
-        with pytest.raises(IndexUnavailableError):
+        with pytest.raises(IndexUnavailableError) as excinfo:
             col.get_backlinks("n_0.md")  # bucket-3 library call
+        assert excinfo.value.reason == "never_built"
         elapsed = time_mod.perf_counter() - start
         assert elapsed < 0.1, (
             f"library method blocked for {elapsed:.3f}s; should raise immediately"
@@ -787,8 +793,9 @@ def test_git_pull_during_background_does_not_starve_writes(tmp_path: Path) -> No
 
         # Simulate the on_pull callback (reindex) racing the foreground
         # write. Both should fast-fail / proceed without lock starvation.
-        with pytest.raises(IndexUnavailableError):
+        with pytest.raises(IndexUnavailableError) as excinfo:
             col.reindex()  # raises immediately, releases internal locks
+        assert excinfo.value.reason == "never_built"
 
         # Foreground write must complete promptly (within 1s, well
         # under the slow scan's 0.5s sleep).

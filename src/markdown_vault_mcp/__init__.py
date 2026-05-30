@@ -8,6 +8,8 @@ from markdown_vault_mcp.exceptions import (
     DocumentExistsError,
     DocumentNotFoundError,
     EditConflictError,
+    IndexUnavailableError,
+    IndexUnavailableReason,
     MarkdownMCPError,
     ReadOnlyError,
 )
@@ -65,6 +67,8 @@ __all__ = [
     "GroupedResult",
     "HistoryEntry",
     "IndexStats",
+    "IndexUnavailableError",
+    "IndexUnavailableReason",
     "LinkInfo",
     "MarkdownMCPError",
     "MostLinkedNote",
