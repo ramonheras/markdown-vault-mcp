@@ -395,9 +395,11 @@ whatever is currently in the index (empty on cold start).
 blocks on the background-build completion event with a bounded
 timeout and raises `IndexUnavailableError(reason="timeout")` on
 timeout or `IndexUnavailableError(reason="never_built")` when no
-build was ever scheduled (the latter also covers the case where a
-background build started and raised — see the errors-as-events
-section).
+build was ever scheduled. The `never_built` branch also fires when
+a background build started and then raised — the worker resets
+`_index_built=False` before the destructive rebuild, so a failed
+build leaves `_index_built=False` and `wait_until_queryable`'s
+never-scheduled guard catches it.
 
 **Cold-start background FTS (issue #513 PR1, tool-layer wait
 boundary)**: when the persisted FTS DB is cold (sentinel absent),
