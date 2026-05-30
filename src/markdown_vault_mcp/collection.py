@@ -13,7 +13,7 @@ import re
 import threading
 from typing import TYPE_CHECKING, Any, Literal
 
-from markdown_vault_mcp.exceptions import IndexBuildFailedError, IndexNotReadyError
+from markdown_vault_mcp.exceptions import IndexBuildFailedError, IndexUnavailableError
 from markdown_vault_mcp.fts_index import FTSIndex
 from markdown_vault_mcp.scanner import (
     ChunkStrategy,
@@ -93,7 +93,7 @@ class Collection:
     :meth:`get_context`, :meth:`get_connection_path`, :meth:`get_toc`)
     or the bucket-4 coordinators :meth:`reindex` and
     :meth:`build_embeddings`; otherwise
-    :exc:`~markdown_vault_mcp.exceptions.IndexNotReadyError` is raised.
+    :exc:`~markdown_vault_mcp.exceptions.IndexUnavailableError` is raised.
     :meth:`build_index` must also precede :meth:`start` — see
     :meth:`start` for the rationale.
     Bucket-1 file operations (:meth:`read`, :meth:`write`, :meth:`edit`,
@@ -354,7 +354,7 @@ class Collection:
 
         Call :meth:`build_index` **before** :meth:`start`. The git pull
         loop wires :meth:`reindex` (bucket 4) as its ``on_pull`` callback,
-        and ``reindex`` raises :exc:`IndexNotReadyError` on an unbuilt
+        and ``reindex`` raises :exc:`IndexUnavailableError` on an unbuilt
         index — so a pull event firing before the initial build would
         crash the loop thread.
         """
@@ -431,9 +431,9 @@ class Collection:
     # ------------------------------------------------------------------
 
     def _require_built(self) -> None:
-        """Raise :exc:`IndexNotReadyError` if :meth:`build_index` has not run."""
+        """Raise :exc:`IndexUnavailableError` if :meth:`build_index` has not run."""
         if not self._index_built:
-            raise IndexNotReadyError(
+            raise IndexUnavailableError(
                 "Index not built. Call build_index() before this method."
             )
 
@@ -581,12 +581,12 @@ class Collection:
 
         1. ``_background_build_done.wait(timeout)`` — if False
            (timed out), raise
-           :exc:`IndexNotReadyError("…timed out…")`.
+           :exc:`IndexUnavailableError("…timed out…")`.
         2. If ``_background_build_error`` is not None, raise
            :exc:`IndexBuildFailedError` with the original as
            ``__cause__``.
         3. If ``_index_built`` is False, raise
-           :exc:`IndexNotReadyError("…never scheduled…")` — guards
+           :exc:`IndexUnavailableError("…never scheduled…")` — guards
            the never-scheduled case (event pre-set, no error, no
            build, no thread). Without it, callers on a fresh
            Collection would silently return success.
@@ -607,11 +607,11 @@ class Collection:
 
         Raises:
             IndexBuildFailedError: A prior background build raised.
-            IndexNotReadyError: Index not built and either no build
+            IndexUnavailableError: Index not built and either no build
                 was ever scheduled, or the timeout expired.
         """
         if not self._background_build_done.wait(timeout=timeout):
-            raise IndexNotReadyError(
+            raise IndexUnavailableError(
                 f"Index build still in progress; timed out after {timeout}s."
             )
         if self._background_build_error is not None:
@@ -619,7 +619,7 @@ class Collection:
                 "Background index build raised; see __cause__ for details."
             ) from self._background_build_error
         if not self._index_built:
-            raise IndexNotReadyError(
+            raise IndexUnavailableError(
                 "Index not built; background build was never scheduled. "
                 "Call build_index() or start_background_build_index() first."
             )
@@ -797,7 +797,7 @@ class Collection:
             applied.
 
         Raises:
-            IndexNotReadyError: If :meth:`build_index` has not been called.
+            IndexUnavailableError: If :meth:`build_index` has not been called.
         """
         self._require_built()
         return self._index_mgr.reindex()
@@ -813,7 +813,7 @@ class Collection:
             Total number of chunks embedded.
 
         Raises:
-            IndexNotReadyError: If :meth:`build_index` has not been called.
+            IndexUnavailableError: If :meth:`build_index` has not been called.
             ValueError: If ``embedding_provider`` or ``embeddings_path`` is
                 not configured.
         """
@@ -869,7 +869,7 @@ class Collection:
             position, with the document title prepended as level 1.
 
         Raises:
-            IndexNotReadyError: If :meth:`build_index` has not been called.
+            IndexUnavailableError: If :meth:`build_index` has not been called.
             ValueError: If no document exists at the given path.
         """
         self._require_built()
@@ -887,7 +887,7 @@ class Collection:
             for each document that contains a link pointing to ``path``.
 
         Raises:
-            IndexNotReadyError: If :meth:`build_index` has not been called.
+            IndexUnavailableError: If :meth:`build_index` has not been called.
             ValueError: If no document exists at the given path.
         """
         self._require_built()
@@ -908,7 +908,7 @@ class Collection:
             each link originating from ``path``.
 
         Raises:
-            IndexNotReadyError: If :meth:`build_index` has not been called.
+            IndexUnavailableError: If :meth:`build_index` has not been called.
             ValueError: If no document exists at the given path.
         """
         self._require_built()
@@ -949,7 +949,7 @@ class Collection:
             List of grouped results.
 
         Raises:
-            IndexNotReadyError: If :meth:`build_index` has not been called.
+            IndexUnavailableError: If :meth:`build_index` has not been called.
         """
         self._require_built()
         return self._search_mgr.get_similar(
@@ -998,7 +998,7 @@ class Collection:
             stays compact.
 
         Raises:
-            IndexNotReadyError: If :meth:`build_index` has not been called.
+            IndexUnavailableError: If :meth:`build_index` has not been called.
             ValueError: If no document exists at the given path.
         """
         self._require_built()
@@ -1049,7 +1049,7 @@ class Collection:
             (inclusive), or ``None`` if unreachable within *max_depth* hops.
 
         Raises:
-            IndexNotReadyError: If :meth:`build_index` has not been called.
+            IndexUnavailableError: If :meth:`build_index` has not been called.
             ValueError: If *source* or *target* is not found in the index.
         """
         self._require_built()

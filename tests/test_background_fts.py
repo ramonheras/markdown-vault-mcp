@@ -14,7 +14,7 @@ from fastmcp import Client
 from markdown_vault_mcp.collection import Collection
 from markdown_vault_mcp.exceptions import (
     IndexBuildFailedError,
-    IndexNotReadyError,
+    IndexUnavailableError,
     MarkdownMCPError,
 )
 
@@ -99,7 +99,7 @@ def test_wait_until_queryable_raises_on_timeout(tmp_path: Path) -> None:
     col = Collection(source_dir=_vault(tmp_path))
     col._background_build_done.clear()
     col._index_built = False
-    with pytest.raises(IndexNotReadyError, match=r"timed out"):
+    with pytest.raises(IndexUnavailableError, match=r"timed out"):
         col.wait_until_queryable(timeout=0.05)
     col.close()
 
@@ -121,7 +121,7 @@ def test_wait_until_queryable_raises_when_never_scheduled(tmp_path: Path) -> Non
     let wait() return success without the explicit guard."""
     col = Collection(source_dir=_vault(tmp_path))
     # All defaults: event pre-set, no error, _index_built=False, no spawn.
-    with pytest.raises(IndexNotReadyError, match=r"never scheduled|not built"):
+    with pytest.raises(IndexUnavailableError, match=r"never scheduled|not built"):
         col.wait_until_queryable(timeout=0.1)
     col.close()
 
@@ -708,7 +708,7 @@ def test_decorator_respects_env_timeout_override(
 
 def test_require_built_raises_immediately_not_blocks(tmp_path: Path) -> None:
     """Bucket-3/4 library method called during in-flight background build
-    raises IndexNotReadyError WITHIN 0.1s wall-clock — does NOT block.
+    raises IndexUnavailableError WITHIN 0.1s wall-clock — does NOT block.
 
     This is the canonical regression test against attempt-6's hole."""
     import time as time_mod
@@ -732,7 +732,7 @@ def test_require_built_raises_immediately_not_blocks(tmp_path: Path) -> None:
         col.start_background_build_index()
 
         start = time_mod.perf_counter()
-        with pytest.raises(IndexNotReadyError):
+        with pytest.raises(IndexUnavailableError):
             col.get_backlinks("n_0.md")  # bucket-3 library call
         elapsed = time_mod.perf_counter() - start
         assert elapsed < 0.1, (
@@ -747,7 +747,7 @@ def test_require_built_raises_immediately_not_blocks(tmp_path: Path) -> None:
 def test_git_pull_during_background_does_not_starve_writes(tmp_path: Path) -> None:
     """The on_pull=reindex callback in the git pull loop must NOT hold
     _write_lock while blocking on the background build. Reindex raises
-    IndexNotReadyError, git_sync catches it, releases the lock, retries
+    IndexUnavailableError, git_sync catches it, releases the lock, retries
     on next interval — no lock starvation."""
     import time as time_mod
 
@@ -771,7 +771,7 @@ def test_git_pull_during_background_does_not_starve_writes(tmp_path: Path) -> No
 
         # Simulate the on_pull callback (reindex) racing the foreground
         # write. Both should fast-fail / proceed without lock starvation.
-        with pytest.raises(IndexNotReadyError):
+        with pytest.raises(IndexUnavailableError):
             col.reindex()  # raises immediately, releases internal locks
 
         # Foreground write must complete promptly (within 1s, well
@@ -813,7 +813,7 @@ def test_foreground_write_during_background_scan_on_disk(tmp_path: Path) -> None
 
 
 def test_reindex_after_pull_handler_handles_not_ready(tmp_path: Path) -> None:
-    """_reindex_after_pull in _server_tools.py catches IndexNotReadyError
+    """_reindex_after_pull in _server_tools.py catches IndexUnavailableError
     and sets reindex_failed=True on the pull payload — does NOT block."""
     import time as time_mod
 

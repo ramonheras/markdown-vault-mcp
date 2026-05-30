@@ -12,13 +12,13 @@ Collection methods fall into four buckets:
 - Bucket 3 (block / raise): ``get_backlinks``, ``get_outlinks``,
   ``get_similar``, ``get_context``, ``get_connection_path``,
   ``get_toc``. Silently wrong on a partial index → raise
-  ``IndexNotReadyError`` pre-#513; block on a background-completion
+  ``IndexUnavailableError`` pre-#513; block on a background-completion
   event post-#513. (``get_toc`` is FTS-backed: on cold start the FTS
   ``documents`` row is absent and the underlying manager would raise
   a misleading ``ValueError("Document not found")``.)
 - Bucket 4 (coordinate): ``reindex``, ``build_embeddings``,
   ``build_index``. ``reindex`` and ``build_embeddings`` require a built
-  index (raise ``IndexNotReadyError`` otherwise). ``build_index`` is
+  index (raise ``IndexUnavailableError`` otherwise). ``build_index`` is
   the bootstrap; its warm-restart short-circuit uses persisted FTS
   state alone (no ``_initialized`` flag).
 """
@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from markdown_vault_mcp.collection import Collection
-from markdown_vault_mcp.exceptions import IndexNotReadyError
+from markdown_vault_mcp.exceptions import IndexUnavailableError
 from tests.conftest import MockEmbeddingProvider
 
 if TYPE_CHECKING:
@@ -150,7 +150,7 @@ class TestBucket2PartialReport:
 
 
 # ---------------------------------------------------------------------------
-# Bucket 3 — block (raise IndexNotReadyError on unbuilt pre-#513)
+# Bucket 3 — block (raise IndexUnavailableError on unbuilt pre-#513)
 # ---------------------------------------------------------------------------
 
 
@@ -160,7 +160,7 @@ class TestBucket3Block:
         _seed(vault)
         col = Collection(source_dir=vault)
 
-        with pytest.raises(IndexNotReadyError):
+        with pytest.raises(IndexUnavailableError):
             col.get_backlinks("note.md")
 
     def test_get_outlinks_on_unbuilt_raises(self, tmp_path: Path) -> None:
@@ -168,7 +168,7 @@ class TestBucket3Block:
         _seed(vault)
         col = Collection(source_dir=vault)
 
-        with pytest.raises(IndexNotReadyError):
+        with pytest.raises(IndexUnavailableError):
             col.get_outlinks("note.md")
 
     def test_get_similar_on_unbuilt_raises(self, tmp_path: Path) -> None:
@@ -180,7 +180,7 @@ class TestBucket3Block:
             embeddings_path=tmp_path / "vectors",
         )
 
-        with pytest.raises(IndexNotReadyError):
+        with pytest.raises(IndexUnavailableError):
             col.get_similar("note.md")
 
     def test_get_context_on_unbuilt_raises(self, tmp_path: Path) -> None:
@@ -188,7 +188,7 @@ class TestBucket3Block:
         _seed(vault)
         col = Collection(source_dir=vault)
 
-        with pytest.raises(IndexNotReadyError):
+        with pytest.raises(IndexUnavailableError):
             col.get_context("note.md")
 
     def test_get_connection_path_on_unbuilt_raises(self, tmp_path: Path) -> None:
@@ -197,7 +197,7 @@ class TestBucket3Block:
         _seed(vault, "b.md")
         col = Collection(source_dir=vault)
 
-        with pytest.raises(IndexNotReadyError):
+        with pytest.raises(IndexUnavailableError):
             col.get_connection_path("a.md", "b.md")
 
     def test_get_toc_on_unbuilt_raises(self, tmp_path: Path) -> None:
@@ -208,7 +208,7 @@ class TestBucket3Block:
         _seed(vault)
         col = Collection(source_dir=vault)
 
-        with pytest.raises(IndexNotReadyError):
+        with pytest.raises(IndexUnavailableError):
             col.get_toc("note.md")
 
 
@@ -224,7 +224,7 @@ class TestBucket4Coordinate:
         _seed(vault)
         col = Collection(source_dir=vault)
 
-        with pytest.raises(IndexNotReadyError):
+        with pytest.raises(IndexUnavailableError):
             col.reindex()
 
     def test_build_embeddings_on_unbuilt_raises(self, tmp_path: Path) -> None:
@@ -236,7 +236,7 @@ class TestBucket4Coordinate:
             embeddings_path=tmp_path / "vectors",
         )
 
-        with pytest.raises(IndexNotReadyError):
+        with pytest.raises(IndexUnavailableError):
             col.build_embeddings()
 
     def test_build_index_short_circuits_on_warm_restart(self, tmp_path: Path) -> None:
@@ -276,7 +276,7 @@ class TestWaitUntilQueryable:
         vault = _vault(tmp_path)
         col = Collection(source_dir=vault)
 
-        with pytest.raises(IndexNotReadyError):
+        with pytest.raises(IndexUnavailableError):
             col.wait_until_queryable(timeout=0.1)
 
     def test_after_build_returns(self, tmp_path: Path) -> None:
@@ -375,7 +375,7 @@ class TestReadinessFlagSemantics:
         with pytest.raises(RuntimeError):
             col.build_index(force=True)
 
-        with pytest.raises(IndexNotReadyError):
+        with pytest.raises(IndexUnavailableError):
             col.get_backlinks("note.md")
 
     def test_failed_build_index_leaves_unready(self, tmp_path: Path) -> None:
@@ -393,5 +393,5 @@ class TestReadinessFlagSemantics:
         with pytest.raises(RuntimeError):
             col.build_index()
 
-        with pytest.raises(IndexNotReadyError):
+        with pytest.raises(IndexUnavailableError):
             col.get_backlinks("note.md")

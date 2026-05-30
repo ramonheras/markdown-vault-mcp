@@ -1,11 +1,11 @@
 """MCP-layer `needs_queryable` decorator (#513 PR1).
 
-Boundary: the library raises ``IndexNotReadyError`` immediately on
-not-ready (PR #525 contract). Blocking semantics live here at the MCP
+Boundary: the library raises ``IndexUnavailableError`` immediately on
+not-queryable (PR #525 contract). Blocking semantics live here at the MCP
 layer, where the caller's intent — "an MCP client is waiting and
 wants to wait" — is unambiguous. Internal callers (lifespan, git
 pull loop, CLI, direct library users) do NOT go through this
-decorator; they handle "not ready" with their own caller-appropriate
+decorator; they handle "not queryable" with their own caller-appropriate
 logic (skip, log, retry on next interval).
 """
 
@@ -54,7 +54,7 @@ def needs_queryable(
     already-wrapped function.
 
     Raises (propagated to MCP client via FastMCP error middleware):
-        IndexNotReadyError: timeout exceeded; or never scheduled.
+        IndexUnavailableError: timeout exceeded; or never scheduled.
         IndexBuildFailedError: a prior background build raised.
     """
 

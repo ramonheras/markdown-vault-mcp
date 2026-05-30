@@ -66,20 +66,16 @@ class ConfigurationError(MarkdownMCPError):
     """Raised for invalid or unsupported configuration at startup."""
 
 
-class IndexNotReadyError(MarkdownMCPError):
-    """Raised when a method requires a built FTS index and none exists.
+class IndexUnavailableError(MarkdownMCPError):
+    """Raised when the FTS index is not in a state to serve a query.
 
-    Bucket-3 relational / FTS-backed queries (``get_backlinks``,
-    ``get_outlinks``, ``get_similar``, ``get_context``,
-    ``get_connection_path``, ``get_toc``) and bucket-4 coordinators
-    (``reindex``, ``build_embeddings``) cannot produce correct results
-    against an empty / never-built index. They raise this rather than
-    silently return wrong answers.
+    Covers two operational situations today:
 
-    Callers must call :meth:`Collection.build_index` before these
-    methods. Once a background indexer lands (issue #513), the
-    :meth:`Collection.wait_until_queryable` primitive will block on a
-    completion event instead of raising.
+    - The Collection has never had ``build_index()`` complete (cold
+      collection, or a previously-failed build never retried).
+    - A caller waited via :meth:`Collection.wait_until_queryable` and
+      the bounded timeout elapsed before the background build
+      signaled completion.
 
     See :exc:`IndexBuildFailedError` for the related case where a
     background build started but then raised.
@@ -92,13 +88,10 @@ class IndexBuildFailedError(MarkdownMCPError):
     The original exception is available via ``__cause__``.
 
     Distinguishes "build never finished / never started"
-    (:exc:`IndexNotReadyError`) from "build started but raised" — both
-    surface through :meth:`Collection.wait_until_queryable` and through
-    the MCP-layer `needs_queryable` decorator. Operator action
-    differs: not-ready means wait or check status; failed means
-    inspect logs and decide whether to retry via CLI
+    (:exc:`IndexUnavailableError`) from "build started but raised" —
+    both surface through :meth:`Collection.wait_until_queryable` and
+    through the MCP-layer ``needs_queryable`` decorator. Operator
+    action differs: unavailable means wait or check status; failed
+    means inspect logs and decide whether to retry via CLI
     ``markdown-vault-mcp index``.
-
-    See :exc:`IndexNotReadyError` for the "never finished / never
-    started" case.
     """

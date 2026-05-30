@@ -597,7 +597,7 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
 
         Use this when ``initialize`` returned but bucket-3/4 calls
         block longer than expected or surface
-        ``IndexNotReadyError``/``IndexBuildFailedError`` — the
+        ``IndexUnavailableError``/``IndexBuildFailedError`` — the
         ``status`` field distinguishes "still building" from "build
         failed."
 
