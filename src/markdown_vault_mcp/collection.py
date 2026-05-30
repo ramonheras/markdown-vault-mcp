@@ -113,7 +113,7 @@ class Collection:
     bounded default timeout
     (``MARKDOWN_VAULT_MCP_READY_TIMEOUT_S``, default 60s). The
     library stays honest: bucket-3/4 *methods* keep the PR #525
-    raise-immediately contract via :meth:`_require_index_ready`.
+    raise-immediately contract via :meth:`_require_built`.
     Internal callers (lifespan, git pull loop, CLI, direct library
     users) get the raise contract and handle "not ready" with
     caller-appropriate logic — never block.
@@ -430,7 +430,7 @@ class Collection:
     # Indexing readiness (issue #525)
     # ------------------------------------------------------------------
 
-    def _require_index_ready(self) -> None:
+    def _require_built(self) -> None:
         """Raise :exc:`IndexNotReadyError` if :meth:`build_index` has not run."""
         if not self._index_built:
             raise IndexNotReadyError(
@@ -595,7 +595,7 @@ class Collection:
         This method is opt-in for the MCP-layer `needs_index_ready`
         decorator and for external callers that explicitly want to
         wait. Library bucket-3/4 methods do NOT call this — they call
-        :meth:`_require_index_ready` which raises immediately. That
+        :meth:`_require_built` which raises immediately. That
         separation is the boundary that closed attempt 6's hole.
 
         Args:
@@ -799,7 +799,7 @@ class Collection:
         Raises:
             IndexNotReadyError: If :meth:`build_index` has not been called.
         """
-        self._require_index_ready()
+        self._require_built()
         return self._index_mgr.reindex()
 
     def build_embeddings(self, *, force: bool = False) -> int:
@@ -817,7 +817,7 @@ class Collection:
             ValueError: If ``embedding_provider`` or ``embeddings_path`` is
                 not configured.
         """
-        self._require_index_ready()
+        self._require_built()
         return self._index_mgr.build_embeddings(force=force)
 
     def embeddings_status(self) -> dict:
@@ -872,7 +872,7 @@ class Collection:
             IndexNotReadyError: If :meth:`build_index` has not been called.
             ValueError: If no document exists at the given path.
         """
-        self._require_index_ready()
+        self._require_built()
         return self._doc_mgr.get_toc(path)
 
     def get_backlinks(self, path: str) -> list[BacklinkInfo]:
@@ -890,7 +890,7 @@ class Collection:
             IndexNotReadyError: If :meth:`build_index` has not been called.
             ValueError: If no document exists at the given path.
         """
-        self._require_index_ready()
+        self._require_built()
         return self._link_mgr.get_backlinks(path)
 
     def get_outlinks(self, path: str) -> list[OutlinkInfo]:
@@ -911,7 +911,7 @@ class Collection:
             IndexNotReadyError: If :meth:`build_index` has not been called.
             ValueError: If no document exists at the given path.
         """
-        self._require_index_ready()
+        self._require_built()
         return self._link_mgr.get_outlinks(path)
 
     def get_broken_links(self, *, folder: str | None = None) -> list[BrokenLinkInfo]:
@@ -951,7 +951,7 @@ class Collection:
         Raises:
             IndexNotReadyError: If :meth:`build_index` has not been called.
         """
-        self._require_index_ready()
+        self._require_built()
         return self._search_mgr.get_similar(
             path, limit=limit, chunks_per_file=chunks_per_file
         )
@@ -1001,7 +1001,7 @@ class Collection:
             IndexNotReadyError: If :meth:`build_index` has not been called.
             ValueError: If no document exists at the given path.
         """
-        self._require_index_ready()
+        self._require_built()
         return self._search_mgr.get_context(
             path, similar_limit=similar_limit, link_limit=link_limit
         )
@@ -1052,7 +1052,7 @@ class Collection:
             IndexNotReadyError: If :meth:`build_index` has not been called.
             ValueError: If *source* or *target* is not found in the index.
         """
-        self._require_index_ready()
+        self._require_built()
         return self._link_mgr.get_connection_path(source, target, max_depth=max_depth)
 
     # ------------------------------------------------------------------

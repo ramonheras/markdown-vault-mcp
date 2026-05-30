@@ -706,7 +706,7 @@ def test_decorator_respects_env_timeout_override(
 # ---------------------------------------------------------------------------
 
 
-def test_require_index_ready_raises_immediately_not_blocks(tmp_path: Path) -> None:
+def test_require_built_raises_immediately_not_blocks(tmp_path: Path) -> None:
     """Bucket-3/4 library method called during in-flight background build
     raises IndexNotReadyError WITHIN 0.1s wall-clock — does NOT block.
 
