@@ -599,8 +599,11 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
         block longer than expected or surface
         ``IndexUnavailableError`` — the ``status`` field
         distinguishes "still building" from "build failed," and the
-        ``error`` field carries the exception message when a build
-        did not complete successfully.
+        ``error`` field carries the exception message from the last
+        background-build attempt that captured one, independent of
+        ``status`` (a queryable index after a subsequent failed
+        rebuild will report ``status=queryable`` with ``error``
+        populated).
 
         Returns:
             Dict with the following fields:
