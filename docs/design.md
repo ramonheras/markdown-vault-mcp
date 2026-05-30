@@ -381,7 +381,8 @@ populate the index. Callers must invoke `build_index()` explicitly
 before bucket-3 relational/FTS-backed queries (`get_backlinks`,
 `get_outlinks`, `get_similar`, `get_context`, `get_connection_path`,
 `get_toc`) or the bucket-4 coordinators (`reindex`,
-`build_embeddings`); otherwise `IndexUnavailableError` is raised.
+`build_embeddings`); otherwise `IndexUnavailableError(reason="never_built")`
+is raised.
 `start()` must also be called after `build_index()` because its git
 pull loop wires `reindex` as the `on_pull` callback. Bucket-1 file
 operations (`read`, `write`, `edit`, `delete`, `rename`,
@@ -392,8 +393,11 @@ unbuilt index — bucket-1 hits disk directly; bucket-2 queries
 whatever is currently in the index (empty on cold start).
 `wait_until_queryable(timeout=None)` is the readiness primitive: it
 blocks on the background-build completion event with a bounded
-timeout and raises `IndexUnavailableError` on timeout or when no
-build was ever scheduled.
+timeout and raises `IndexUnavailableError(reason="timeout")` on
+timeout or `IndexUnavailableError(reason="never_built")` when no
+build was ever scheduled (the latter also covers the case where a
+background build started and raised — see the errors-as-events
+section).
 
 **Cold-start background FTS (issue #513 PR1, tool-layer wait
 boundary)**: when the persisted FTS DB is cold (sentinel absent),
@@ -408,11 +412,12 @@ default (env `MARKDOWN_VAULT_MCP_BUILD_TIMEOUT_S`, default 60s).
 A failed background build surfaces to operators as
 `get_index_status` reporting
 `{"status": "failed", "error": "..."}`. MCP clients see
-`IndexUnavailableError` from the decorator's
-`wait_until_queryable` call (the never-scheduled guard fires
-because the worker resets `_index_built=False` before recording the
-error); the captured error message itself is read via
-`get_index_status`. Embeddings stay on the
+`IndexUnavailableError` with `reason="never_built"` (or
+`reason="timeout"` if the decorator's bounded wait elapsed first)
+from the decorator's `wait_until_queryable` call. The
+never-scheduled guard fires because the worker resets
+`_index_built=False` before recording the error; the captured
+error message itself is read via `get_index_status`. Embeddings stay on the
 synchronous lifespan path in PR1 — on cold start
 `build_embeddings()` is skipped with a log entry and semantic
 search returns empty until PR2 backgrounds embeddings or the

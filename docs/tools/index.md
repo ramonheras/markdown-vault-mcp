@@ -204,9 +204,10 @@ Check the embedding provider configuration and vector index status. Use this to 
 
 Returns background-build state of the FTS index. Use this when
 `initialize` returned but bucket-3/4 calls block longer than expected
-or surface `IndexUnavailableError` — the `status` field distinguishes
-"still building" from "build failed," and the `error` field carries
-the diagnostic message from the last failed background build attempt.
+or surface `IndexUnavailableError` (with `reason` of `"never_built"`
+or `"timeout"`) — the `status` field distinguishes "still building"
+from "build failed," and the `error` field carries the diagnostic
+message from the last failed background build attempt.
 
 **Returns:**
 - `status`: `"queryable"`, `"building"`, or `"failed"`.
@@ -222,7 +223,7 @@ the diagnostic message from the last failed background build attempt.
 ## Index Management
 
 !!! note "Cold-start blocking"
-    Calls to `reindex` and `build_embeddings` during a cold-start background FTS build block via the tool-layer `needs_queryable` decorator. If the build takes longer than `MARKDOWN_VAULT_MCP_BUILD_TIMEOUT_S` (default 60s), the tool returns `IndexUnavailableError`. The same exception fires if the background build did not complete successfully — read `get_index_status`'s `error` field for the captured diagnostic. Poll `get_index_status` to observe build state without blocking.
+    Calls to `reindex` and `build_embeddings` during a cold-start background FTS build block via the tool-layer `needs_queryable` decorator. If the build takes longer than `MARKDOWN_VAULT_MCP_BUILD_TIMEOUT_S` (default 60s), the tool returns `IndexUnavailableError(reason="timeout")`. The same exception fires with `reason="never_built"` if the background build did not complete successfully — read `get_index_status`'s `error` field for the captured diagnostic. Poll `get_index_status` to observe build state without blocking.
 
 ### `reindex`
 
@@ -609,7 +610,7 @@ managed git mode (`MARKDOWN_VAULT_MCP_GIT_REPO_URL` not set).
 ## Link Graph
 
 !!! note "Cold-start blocking"
-    Calls to `get_backlinks`, `get_outlinks`, `get_similar`, `get_context`, and `get_connection_path` during a cold-start background FTS build block via the tool-layer `needs_queryable` decorator. If the build takes longer than `MARKDOWN_VAULT_MCP_BUILD_TIMEOUT_S` (default 60s), the tool returns `IndexUnavailableError`. The same exception fires if the background build did not complete successfully — read `get_index_status`'s `error` field for the captured diagnostic. Poll `get_index_status` to observe build state without blocking.
+    Calls to `get_backlinks`, `get_outlinks`, `get_similar`, `get_context`, and `get_connection_path` during a cold-start background FTS build block via the tool-layer `needs_queryable` decorator. If the build takes longer than `MARKDOWN_VAULT_MCP_BUILD_TIMEOUT_S` (default 60s), the tool returns `IndexUnavailableError(reason="timeout")`. The same exception fires with `reason="never_built"` if the background build did not complete successfully — read `get_index_status`'s `error` field for the captured diagnostic. Poll `get_index_status` to observe build state without blocking.
 
 ### `get_backlinks`
 

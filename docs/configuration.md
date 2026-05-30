@@ -24,8 +24,8 @@ All configuration is via environment variables. Most use the `MARKDOWN_VAULT_MCP
 Default: `60` (seconds).
 
 Maximum time the MCP-layer `needs_queryable` decorator waits for
-the FTS index to become queryable before raising `IndexUnavailableError`
-to the client. Applied to bucket-3/4 tool and resource calls during
+the FTS index to become queryable before raising
+`IndexUnavailableError(reason="timeout")` to the client. Applied to bucket-3/4 tool and resource calls during
 a cold-start background FTS build. Increase for very large vaults
 where the initial scan takes longer; decrease for tighter feedback
 on stuck builds.
