@@ -547,12 +547,7 @@ class Collection:
         ``error`` carries the diagnostic message from the last background
         build attempt that captured an exception, independent of ``status``.
         """
-        # Intentionally does not call is_queryable() — that method also
-        # gates on _background_build_error is None. Here a captured error
-        # is diagnostic context only (surfaced via the error field),
-        # not a reason to hide a queryable index. The two predicates
-        # converge once is_queryable()'s body is simplified.
-        if self._index_built and self._background_build_done.is_set():
+        if self.is_queryable():
             status = "queryable"
             error: str | None = (
                 str(self._background_build_error)
