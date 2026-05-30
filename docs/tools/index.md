@@ -204,7 +204,7 @@ Check the embedding provider configuration and vector index status. Use this to 
 
 Returns background-build state of the FTS index. Use this when
 `initialize` returned but bucket-3/4 calls block longer than expected
-or surface `IndexNotReadyError`/`IndexBuildFailedError` — the
+or surface `IndexUnavailableError`/`IndexBuildFailedError` — the
 `status` field distinguishes "still building" from "build failed."
 
 **Returns:**

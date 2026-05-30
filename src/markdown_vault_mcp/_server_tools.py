@@ -604,7 +604,7 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
         Returns:
             Dict with the following fields:
 
-            - status (str): ``"ready"``, ``"building"``, or
+            - status (str): ``"queryable"``, ``"building"``, or
               ``"failed"``.
             - documents_indexed (int): Count of documents committed to
               the FTS index right now (rises during ``"building"``).
