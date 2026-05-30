@@ -77,21 +77,7 @@ class IndexUnavailableError(MarkdownMCPError):
       the bounded timeout elapsed before the background build
       signaled completion.
 
-    See :exc:`IndexBuildFailedError` for the related case where a
-    background build started but then raised.
-    """
-
-
-class IndexBuildFailedError(MarkdownMCPError):
-    """Raised when a background index build failed with an exception.
-
-    The original exception is available via ``__cause__``.
-
-    Distinguishes "build never finished / never started"
-    (:exc:`IndexUnavailableError`) from "build started but raised" —
-    both surface through :meth:`Collection.wait_until_queryable` and
-    through the MCP-layer ``needs_queryable`` decorator. Operator
-    action differs: unavailable means wait or check status; failed
-    means inspect logs and decide whether to retry via CLI
-    ``markdown-vault-mcp index``.
+    A captured background-build error is NOT a separate exception
+    class: it is diagnostic state surfaced via
+    :meth:`Collection.get_index_status`'s ``error`` field.
     """

@@ -13,27 +13,11 @@ from fastmcp import Client
 
 from markdown_vault_mcp.collection import Collection
 from markdown_vault_mcp.exceptions import (
-    IndexBuildFailedError,
     IndexUnavailableError,
-    MarkdownMCPError,
 )
 
 if TYPE_CHECKING:
     from pathlib import Path
-
-
-def test_index_build_failed_error_subclasses_base() -> None:
-    err = IndexBuildFailedError("scan failed")
-    assert isinstance(err, MarkdownMCPError)
-    assert str(err) == "scan failed"
-
-
-def test_index_build_failed_error_carries_cause() -> None:
-    original = RuntimeError("scan exploded")
-    try:
-        raise IndexBuildFailedError("background build failed") from original
-    except IndexBuildFailedError as err:
-        assert err.__cause__ is original
 
 
 def _vault(tmp_path: Path) -> Path:
@@ -880,8 +864,10 @@ def test_synchronous_build_index_clears_prior_background_error(
     tmp_path: Path,
 ) -> None:
     """Recovery path: after a failed background build, calling build_index()
-    synchronously must clear _background_build_error so is_queryable()
-    returns True and bucket-3/4 calls stop raising IndexBuildFailedError."""
+    synchronously sets _index_built=True so is_queryable() returns True and
+    bucket-3/4 calls succeed. Also clears _background_build_error so the
+    diagnostic field in get_index_status reflects the new successful
+    attempt."""
     vault = _vault(tmp_path)
     _seed(vault)
     col = Collection(source_dir=vault, index_path=tmp_path / "fts.db")
