@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import sqlite3
 import threading
 import time
 from typing import TYPE_CHECKING, Any
@@ -11,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 from fastmcp import Client
 
+from markdown_vault_mcp._server_queryable import needs_queryable
 from markdown_vault_mcp.collection import Collection
 from markdown_vault_mcp.exceptions import (
     IndexUnavailableError,
@@ -934,10 +936,6 @@ def test_decorator_works_with_positional_collection_arg(tmp_path: Path) -> None:
     """The decorator must extract `collection` from positional args
     via inspect.signature.bind_partial, not just from kwargs.
     Direct call (no FastMCP) with positional collection must work."""
-    import asyncio
-
-    from markdown_vault_mcp._server_queryable import needs_queryable
-
     vault = _vault(tmp_path)
     _seed(vault)
     col = Collection(source_dir=vault)
@@ -951,3 +949,153 @@ def test_decorator_works_with_positional_collection_arg(tmp_path: Path) -> None:
     result = asyncio.run(handler("n.md", col))
     assert result == "got: n.md"
     col.close()
+
+
+class TestNeedsQueryableSqliteCatch:
+    """needs_queryable decorator's narrow sqlite3.OperationalError remap."""
+
+    @staticmethod
+    def _ready_collection(tmp_path: Path) -> Collection:
+        vault = _vault(tmp_path)
+        _seed(vault)
+        col = Collection(source_dir=vault)
+        col.build_index()
+        return col
+
+    def test_decorator_remaps_sqlite_busy_to_reason_busy(self, tmp_path: Path) -> None:
+        col = self._ready_collection(tmp_path)
+        original = sqlite3.OperationalError("database is locked")
+        original.sqlite_errorname = "SQLITE_BUSY"  # type: ignore[attr-defined]
+
+        @needs_queryable()
+        async def handler(collection: Collection) -> None:  # noqa: ARG001
+            raise original
+
+        with pytest.raises(IndexUnavailableError) as excinfo:
+            asyncio.run(handler(collection=col))
+        assert excinfo.value.reason == "busy"
+        assert excinfo.value.__cause__ is original
+        col.close()
+
+    def test_decorator_remaps_sqlite_locked_to_reason_busy(
+        self, tmp_path: Path
+    ) -> None:
+        col = self._ready_collection(tmp_path)
+        original = sqlite3.OperationalError("database table is locked")
+        original.sqlite_errorname = "SQLITE_LOCKED"  # type: ignore[attr-defined]
+
+        @needs_queryable()
+        async def handler(collection: Collection) -> None:  # noqa: ARG001
+            raise original
+
+        with pytest.raises(IndexUnavailableError) as excinfo:
+            asyncio.run(handler(collection=col))
+        assert excinfo.value.reason == "busy"
+        assert excinfo.value.__cause__ is original
+        col.close()
+
+    def test_decorator_remaps_sqlite_full_to_reason_busy(self, tmp_path: Path) -> None:
+        col = self._ready_collection(tmp_path)
+        original = sqlite3.OperationalError("database or disk is full")
+        original.sqlite_errorname = "SQLITE_FULL"  # type: ignore[attr-defined]
+
+        @needs_queryable()
+        async def handler(collection: Collection) -> None:  # noqa: ARG001
+            raise original
+
+        with pytest.raises(IndexUnavailableError) as excinfo:
+            asyncio.run(handler(collection=col))
+        assert excinfo.value.reason == "busy"
+        assert excinfo.value.__cause__ is original
+        col.close()
+
+    def test_decorator_remaps_sqlite_corrupt_to_reason_broken(
+        self, tmp_path: Path
+    ) -> None:
+        col = self._ready_collection(tmp_path)
+        original = sqlite3.OperationalError("database disk image is malformed")
+        original.sqlite_errorname = "SQLITE_CORRUPT"  # type: ignore[attr-defined]
+
+        @needs_queryable()
+        async def handler(collection: Collection) -> None:  # noqa: ARG001
+            raise original
+
+        with pytest.raises(IndexUnavailableError) as excinfo:
+            asyncio.run(handler(collection=col))
+        assert excinfo.value.reason == "broken"
+        assert excinfo.value.__cause__ is original
+        col.close()
+
+    def test_decorator_remaps_sqlite_notadb_to_reason_broken(
+        self, tmp_path: Path
+    ) -> None:
+        col = self._ready_collection(tmp_path)
+        original = sqlite3.OperationalError("file is not a database")
+        original.sqlite_errorname = "SQLITE_NOTADB"  # type: ignore[attr-defined]
+
+        @needs_queryable()
+        async def handler(collection: Collection) -> None:  # noqa: ARG001
+            raise original
+
+        with pytest.raises(IndexUnavailableError) as excinfo:
+            asyncio.run(handler(collection=col))
+        assert excinfo.value.reason == "broken"
+        assert excinfo.value.__cause__ is original
+        col.close()
+
+    def test_decorator_remaps_sqlite_ioerr_to_reason_broken(
+        self, tmp_path: Path
+    ) -> None:
+        """IOERR is NOT in the busy whitelist — conservative broken-default."""
+        col = self._ready_collection(tmp_path)
+        original = sqlite3.OperationalError("disk I/O error")
+        original.sqlite_errorname = "SQLITE_IOERR"  # type: ignore[attr-defined]
+
+        @needs_queryable()
+        async def handler(collection: Collection) -> None:  # noqa: ARG001
+            raise original
+
+        with pytest.raises(IndexUnavailableError) as excinfo:
+            asyncio.run(handler(collection=col))
+        assert excinfo.value.reason == "broken"
+        assert excinfo.value.__cause__ is original
+        col.close()
+
+    def test_decorator_does_not_remap_programming_error(self, tmp_path: Path) -> None:
+        col = self._ready_collection(tmp_path)
+        original = sqlite3.ProgrammingError("incorrect number of bindings")
+
+        @needs_queryable()
+        async def handler(collection: Collection) -> None:  # noqa: ARG001
+            raise original
+
+        with pytest.raises(sqlite3.ProgrammingError) as excinfo:
+            asyncio.run(handler(collection=col))
+        assert excinfo.value is original
+        col.close()
+
+    def test_decorator_does_not_remap_os_error(self, tmp_path: Path) -> None:
+        col = self._ready_collection(tmp_path)
+        original = OSError("permission denied")
+
+        @needs_queryable()
+        async def handler(collection: Collection) -> None:  # noqa: ARG001
+            raise original
+
+        with pytest.raises(OSError) as excinfo:
+            asyncio.run(handler(collection=col))
+        assert excinfo.value is original
+        col.close()
+
+    def test_decorator_does_not_remap_value_error(self, tmp_path: Path) -> None:
+        col = self._ready_collection(tmp_path)
+        original = ValueError("bad input")
+
+        @needs_queryable()
+        async def handler(collection: Collection) -> None:  # noqa: ARG001
+            raise original
+
+        with pytest.raises(ValueError) as excinfo:
+            asyncio.run(handler(collection=col))
+        assert excinfo.value is original
+        col.close()

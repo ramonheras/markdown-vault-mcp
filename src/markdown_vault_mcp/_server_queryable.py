@@ -16,7 +16,13 @@ import functools
 import inspect
 import logging
 import os
+import sqlite3
 from typing import TYPE_CHECKING, Any
+
+from markdown_vault_mcp.exceptions import (
+    IndexUnavailableError,
+    IndexUnavailableReason,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -24,9 +30,34 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+_BUSY_ERROR_NAMES: frozenset[str] = frozenset(
+    {
+        "SQLITE_BUSY",
+        "SQLITE_LOCKED",
+        "SQLITE_FULL",
+    }
+)
+
+
 def _resolve_build_timeout() -> float:
     """Read env var at call time so tests can monkeypatch.setenv it."""
     return float(os.environ.get("MARKDOWN_VAULT_MCP_BUILD_TIMEOUT_S", "60"))
+
+
+def _classify_operational_error(
+    exc: sqlite3.OperationalError,
+) -> tuple[IndexUnavailableReason, str]:
+    """Map a SQLite OperationalError to a ``(reason, message)`` pair.
+
+    Conservative broken-default: only the well-known transient
+    errornames (BUSY, LOCKED, FULL) classify as ``"busy"``. Everything
+    else (CORRUPT, NOTADB, IOERR, generic ERROR, unknown future codes)
+    classifies as ``"broken"`` so operators stay in the loop rather
+    than silently retrying through degradation.
+    """
+    if exc.sqlite_errorname in _BUSY_ERROR_NAMES:
+        return ("busy", "Index temporarily busy; try again shortly.")
+    return ("broken", "Index appears broken; operation could not complete.")
 
 
 def needs_queryable(
@@ -55,11 +86,14 @@ def needs_queryable(
 
     Raises (propagated to MCP client via FastMCP error middleware):
         IndexUnavailableError: ``reason="timeout"`` when the bounded
-            wait elapsed, or ``reason="never_built"`` when no build
-            was ever scheduled or a background build did not complete
-            successfully (the never-scheduled guard fires for both
-            cold-collection and failed-rebuild cases; the captured
-            error message itself is available via get_index_status).
+            wait elapsed, ``reason="never_built"`` when no build was
+            ever scheduled or a background build did not complete
+            successfully, ``reason="broken"`` when a handler raised
+            ``sqlite3.OperationalError`` from a non-busy errorname
+            (CORRUPT, NOTADB, IOERR, etc.) — inspect ``__cause__`` for
+            the underlying exception, or ``reason="busy"`` when the
+            errorname is in ``{SQLITE_BUSY, SQLITE_LOCKED, SQLITE_FULL}``
+            (transient; retry may succeed).
     """
 
     def deco(handler: Callable[..., Any]) -> Callable[..., Any]:
@@ -81,7 +115,11 @@ def needs_queryable(
             if not collection.is_queryable():
                 effective = timeout if timeout is not None else _resolve_build_timeout()
                 await asyncio.to_thread(collection.wait_until_queryable, effective)
-            return await handler(*args, **kwargs)
+            try:
+                return await handler(*args, **kwargs)
+            except sqlite3.OperationalError as exc:
+                reason, message = _classify_operational_error(exc)
+                raise IndexUnavailableError(message, reason=reason) from exc
 
         return wrapper
 
