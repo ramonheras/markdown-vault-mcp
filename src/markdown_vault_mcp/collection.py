@@ -109,7 +109,7 @@ class Collection:
     that runs :meth:`build_index` to completion. Bucket-3/4 MCP tool
     *clients* block on the new
     :class:`markdown_vault_mcp._server_readiness.needs_index_ready`
-    decorator, which calls :meth:`wait_for_index_ready` with a
+    decorator, which calls :meth:`wait_until_queryable` with a
     bounded default timeout
     (``MARKDOWN_VAULT_MCP_READY_TIMEOUT_S``, default 60s). The
     library stays honest: bucket-3/4 *methods* keep the PR #525
@@ -241,7 +241,7 @@ class Collection:
         self._index_built = False
 
         # Background-build coordination (issue #513 PR1 attempt 7). The
-        # event is the blocking primitive `wait_for_index_ready()` waits
+        # event is the blocking primitive `wait_until_queryable()` waits
         # on; it is pre-set so a freshly constructed Collection that never
         # called build_index() does not silently look "ready". The
         # background path clears the event before spawning the thread
@@ -574,8 +574,8 @@ class Collection:
             "error": error,
         }
 
-    def wait_for_index_ready(self, timeout: float | None = None) -> None:
-        """Block until the FTS index is ready, or raise.
+    def wait_until_queryable(self, timeout: float | None = None) -> None:
+        """Block until the FTS index is queryable per :meth:`is_queryable`, or raise.
 
         Control flow (each step in order):
 

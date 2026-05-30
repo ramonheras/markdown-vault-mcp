@@ -71,16 +71,16 @@ def test_is_queryable_false_after_captured_background_error(tmp_path: Path) -> N
     col.close()
 
 
-def test_wait_for_index_ready_returns_when_already_built(tmp_path: Path) -> None:
+def test_wait_until_queryable_returns_when_already_built(tmp_path: Path) -> None:
     vault = _vault(tmp_path)
     _seed(vault)
     col = Collection(source_dir=vault)
     col.build_index()
-    col.wait_for_index_ready(timeout=0.1)  # must not raise
+    col.wait_until_queryable(timeout=0.1)  # must not raise
     col.close()
 
 
-def test_wait_for_index_ready_blocks_until_event_set(tmp_path: Path) -> None:
+def test_wait_until_queryable_blocks_until_event_set(tmp_path: Path) -> None:
     col = Collection(source_dir=_vault(tmp_path))
     col._background_build_done.clear()
     col._index_built = False
@@ -91,38 +91,38 @@ def test_wait_for_index_ready_blocks_until_event_set(tmp_path: Path) -> None:
         col._background_build_done.set()
 
     threading.Thread(target=setter).start()
-    col.wait_for_index_ready(timeout=1.0)  # returns when event fires
+    col.wait_until_queryable(timeout=1.0)  # returns when event fires
     col.close()
 
 
-def test_wait_for_index_ready_raises_on_timeout(tmp_path: Path) -> None:
+def test_wait_until_queryable_raises_on_timeout(tmp_path: Path) -> None:
     col = Collection(source_dir=_vault(tmp_path))
     col._background_build_done.clear()
     col._index_built = False
     with pytest.raises(IndexNotReadyError, match=r"timed out"):
-        col.wait_for_index_ready(timeout=0.05)
+        col.wait_until_queryable(timeout=0.05)
     col.close()
 
 
-def test_wait_for_index_ready_raises_build_failed_when_error_set(
+def test_wait_until_queryable_raises_build_failed_when_error_set(
     tmp_path: Path,
 ) -> None:
     col = Collection(source_dir=_vault(tmp_path))
     col._background_build_error = RuntimeError("scan exploded")
     with pytest.raises(IndexBuildFailedError) as excinfo:
-        col.wait_for_index_ready(timeout=0.1)
+        col.wait_until_queryable(timeout=0.1)
     assert isinstance(excinfo.value.__cause__, RuntimeError)
     col.close()
 
 
-def test_wait_for_index_ready_raises_when_never_scheduled(tmp_path: Path) -> None:
+def test_wait_until_queryable_raises_when_never_scheduled(tmp_path: Path) -> None:
     """Pre-set event + no error + _index_built=False + _background_started=False.
     This is the case the spec calls 'never scheduled' — the pre-set event would
     let wait() return success without the explicit guard."""
     col = Collection(source_dir=_vault(tmp_path))
     # All defaults: event pre-set, no error, _index_built=False, no spawn.
     with pytest.raises(IndexNotReadyError, match=r"never scheduled|not built"):
-        col.wait_for_index_ready(timeout=0.1)
+        col.wait_until_queryable(timeout=0.1)
     col.close()
 
 
@@ -132,7 +132,7 @@ def test_start_background_build_index_eventually_ready(tmp_path: Path) -> None:
         _seed(vault, f"n_{i}.md", f"# N{i}\n\nbody {i}\n")
     col = Collection(source_dir=vault)
     col.start_background_build_index()
-    col.wait_for_index_ready(timeout=5.0)
+    col.wait_until_queryable(timeout=5.0)
     assert col.is_queryable()
     col.get_backlinks("n_0.md")  # smoke: bucket-3 returns (empty list OK)
     col.close()
@@ -150,7 +150,7 @@ def test_start_background_build_index_captures_error(
     col.start_background_build_index()
 
     with pytest.raises(IndexBuildFailedError):
-        col.wait_for_index_ready(timeout=5.0)
+        col.wait_until_queryable(timeout=5.0)
     assert col.is_queryable() is False
     col.close()
 
@@ -162,7 +162,7 @@ def test_start_background_build_index_idempotent(tmp_path: Path) -> None:
     assert first is not None
     col.start_background_build_index()
     assert col._background_build_thread is first
-    col.wait_for_index_ready(timeout=5.0)
+    col.wait_until_queryable(timeout=5.0)
     col.start_background_build_index()
     assert col._background_build_thread is first
     col.close()
@@ -188,9 +188,9 @@ def test_start_background_build_index_one_shot_after_thread_start_failure(
     assert col._background_build_done.is_set()
     assert isinstance(col._background_build_error, RuntimeError)
 
-    # wait_for_index_ready surfaces it as IndexBuildFailedError.
+    # wait_until_queryable surfaces it as IndexBuildFailedError.
     with pytest.raises(IndexBuildFailedError):
-        col.wait_for_index_ready(timeout=0.1)
+        col.wait_until_queryable(timeout=0.1)
 
     # Retry is a no-op (one-shot semantics).
     monkeypatch.undo()
@@ -740,7 +740,7 @@ def test_require_built_raises_immediately_not_blocks(tmp_path: Path) -> None:
         )
     finally:
         monkeypatch.undo()
-        col.wait_for_index_ready(timeout=5.0)
+        col.wait_until_queryable(timeout=5.0)
         col.close()
 
 
@@ -784,7 +784,7 @@ def test_git_pull_during_background_does_not_starve_writes(tmp_path: Path) -> No
         )
     finally:
         monkeypatch.undo()
-        col.wait_for_index_ready(timeout=5.0)
+        col.wait_until_queryable(timeout=5.0)
         col.close()
 
 
@@ -805,7 +805,7 @@ def test_foreground_write_during_background_scan_on_disk(tmp_path: Path) -> None
     col = Collection(source_dir=vault, index_path=tmp_path / "fts.db", read_only=False)
     col.start_background_build_index()
     col.write("racy.md", "# Racy\n\nFOREGROUND CONTENT\n")
-    col.wait_for_index_ready(timeout=10.0)
+    col.wait_until_queryable(timeout=10.0)
 
     rows = {r["path"]: r for r in col._fts.list_notes()}
     assert "racy.md" in rows, "foreground write must end up in FTS"
@@ -840,7 +840,7 @@ def test_reindex_after_pull_handler_handles_not_ready(tmp_path: Path) -> None:
         assert "reindex_hint" in pull_dict
     finally:
         monkeypatch.undo()
-        col.wait_for_index_ready(timeout=5.0)
+        col.wait_until_queryable(timeout=5.0)
         col.close()
 
 

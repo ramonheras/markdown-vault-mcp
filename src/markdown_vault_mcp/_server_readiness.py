@@ -35,7 +35,7 @@ def needs_index_ready(
     """Decorator for bucket-3/4 MCP tool and resource handlers.
 
     Before invoking the wrapped handler, blocks on
-    ``Collection.wait_for_index_ready(timeout)``. On the warm path
+    ``Collection.wait_until_queryable(timeout)``. On the warm path
     (``is_queryable`` already True) the wait is skipped — no
     thread-pool overhead.
 
@@ -76,7 +76,7 @@ def needs_index_ready(
                 )
             if not collection.is_queryable():
                 effective = timeout if timeout is not None else _resolve_ready_timeout()
-                await asyncio.to_thread(collection.wait_for_index_ready, effective)
+                await asyncio.to_thread(collection.wait_until_queryable, effective)
             return await handler(*args, **kwargs)
 
         return wrapper

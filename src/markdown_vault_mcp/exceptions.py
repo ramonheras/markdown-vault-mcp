@@ -78,7 +78,7 @@ class IndexNotReadyError(MarkdownMCPError):
 
     Callers must call :meth:`Collection.build_index` before these
     methods. Once a background indexer lands (issue #513), the
-    :meth:`Collection.wait_for_index_ready` primitive will block on a
+    :meth:`Collection.wait_until_queryable` primitive will block on a
     completion event instead of raising.
 
     See :exc:`IndexBuildFailedError` for the related case where a
@@ -93,7 +93,7 @@ class IndexBuildFailedError(MarkdownMCPError):
 
     Distinguishes "build never finished / never started"
     (:exc:`IndexNotReadyError`) from "build started but raised" — both
-    surface through :meth:`Collection.wait_for_index_ready` and through
+    surface through :meth:`Collection.wait_until_queryable` and through
     the MCP-layer `needs_index_ready` decorator. Operator action
     differs: not-ready means wait or check status; failed means
     inspect logs and decide whether to retry via CLI

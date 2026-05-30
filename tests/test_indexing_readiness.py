@@ -267,17 +267,17 @@ class TestBucket4Coordinate:
 
 
 # ---------------------------------------------------------------------------
-# wait_for_index_ready primitive
+# wait_until_queryable primitive
 # ---------------------------------------------------------------------------
 
 
-class TestWaitForIndexReady:
+class TestWaitUntilQueryable:
     def test_unbuilt_raises(self, tmp_path: Path) -> None:
         vault = _vault(tmp_path)
         col = Collection(source_dir=vault)
 
         with pytest.raises(IndexNotReadyError):
-            col.wait_for_index_ready(timeout=0.1)
+            col.wait_until_queryable(timeout=0.1)
 
     def test_after_build_returns(self, tmp_path: Path) -> None:
         vault = _vault(tmp_path)
@@ -286,7 +286,7 @@ class TestWaitForIndexReady:
         col.build_index()
 
         # Must return without raising.
-        col.wait_for_index_ready(timeout=0.1)
+        col.wait_until_queryable(timeout=0.1)
 
 
 # ---------------------------------------------------------------------------
