@@ -1,5 +1,7 @@
 """Exception types for markdown-vault-mcp."""
 
+from typing import Literal
+
 
 class MarkdownMCPError(Exception):
     """Base exception for all markdown-vault-mcp errors."""
@@ -66,18 +68,34 @@ class ConfigurationError(MarkdownMCPError):
     """Raised for invalid or unsupported configuration at startup."""
 
 
+IndexUnavailableReason = Literal["never_built", "timeout"]
+"""Discriminator for IndexUnavailableError's cause.
+
+- ``"never_built"`` — the index has not been built (cold collection, or
+  background build was scheduled but did not complete successfully).
+- ``"timeout"`` — caller waited via ``wait_until_queryable()`` and the
+  bounded timeout elapsed before the build event was set.
+"""
+
+
 class IndexUnavailableError(MarkdownMCPError):
     """Raised when the FTS index is not in a state to serve a query.
 
+    Attributes:
+        reason: One of ``"never_built"``, ``"timeout"`` — disambiguates
+            which of the operational situations below fired. See the
+            :data:`IndexUnavailableReason` Literal for definitions.
+
     Covers the following operational situations:
 
-    - **Never built.** The Collection has never had
-      ``build_index()`` complete (cold collection on a fresh process).
-    - **Build did not complete successfully.** A previous background
-      build raised and was not retried (``_index_built`` remained
-      False; the captured error is available via
-      :meth:`Collection.get_index_status`'s ``error`` field).
-    - **Timeout.** A caller waited via
+    - **Never built** (``reason="never_built"``). The Collection has
+      never had ``build_index()`` complete (cold collection on a fresh
+      process).
+    - **Build did not complete successfully** (``reason="never_built"``).
+      A previous background build raised and was not retried
+      (``_index_built`` remained False; the captured error is available
+      via :meth:`Collection.get_index_status`'s ``error`` field).
+    - **Timeout** (``reason="timeout"``). A caller waited via
       :meth:`Collection.wait_until_queryable` and the bounded timeout
       elapsed before the background build signaled completion.
 
@@ -85,3 +103,7 @@ class IndexUnavailableError(MarkdownMCPError):
     class: it is diagnostic state surfaced via
     :meth:`Collection.get_index_status`'s ``error`` field.
     """
+
+    def __init__(self, message: str, *, reason: IndexUnavailableReason) -> None:
+        super().__init__(message)
+        self.reason: IndexUnavailableReason = reason

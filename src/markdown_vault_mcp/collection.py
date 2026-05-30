@@ -434,7 +434,8 @@ class Collection:
         """Raise :exc:`IndexUnavailableError` if :meth:`build_index` has not run."""
         if not self._index_built:
             raise IndexUnavailableError(
-                "Index not built. Call build_index() before this method."
+                "Index not built. Call build_index() before this method.",
+                reason="never_built",
             )
 
     def is_queryable(self) -> bool:
@@ -614,19 +615,22 @@ class Collection:
 
         Raises:
             IndexUnavailableError: Either the timeout expired before
-                the build event was set, or the build did not complete
-                successfully (``_index_built`` remained False).
+                the build event was set (``reason="timeout"``), or the
+                build did not complete successfully and ``_index_built``
+                remained False (``reason="never_built"``).
         """
         if not self._background_build_done.wait(timeout=timeout):
             raise IndexUnavailableError(
-                f"Index build still in progress; timed out after {timeout}s."
+                f"Index build still in progress; timed out after {timeout}s.",
+                reason="timeout",
             )
         if not self._index_built:
             raise IndexUnavailableError(
                 "Index not built: background build was never scheduled "
                 "or did not complete successfully. "
                 "Check get_index_status() for diagnostic details, or call "
-                "build_index() / start_background_build_index() to retry."
+                "build_index() / start_background_build_index() to retry.",
+                reason="never_built",
             )
 
     @property
