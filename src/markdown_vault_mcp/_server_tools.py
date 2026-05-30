@@ -600,10 +600,11 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
         ``IndexUnavailableError`` — the ``status`` field
         distinguishes "still building" from "build failed," and the
         ``error`` field carries the exception message from the last
-        background-build attempt that captured one, independent of
-        ``status`` (a queryable index after a subsequent failed
-        rebuild will report ``status=queryable`` with ``error``
-        populated).
+        background-build attempt that captured one. ``error`` may be
+        populated when ``status`` is ``"queryable"`` (a successful
+        build followed by a later failed rebuild leaves the captured
+        diagnostic in place until the next successful build clears
+        it) and is always ``None`` when ``status`` is ``"building"``.
 
         Returns:
             Dict with the following fields:
