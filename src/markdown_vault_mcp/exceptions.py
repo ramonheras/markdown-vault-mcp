@@ -68,13 +68,25 @@ class ConfigurationError(MarkdownMCPError):
     """Raised for invalid or unsupported configuration at startup."""
 
 
-IndexUnavailableReason = Literal["never_built", "timeout"]
+IndexUnavailableReason = Literal["never_built", "timeout", "broken", "busy"]
 """Discriminator for IndexUnavailableError's cause.
 
 - ``"never_built"`` — the index has not been built (cold collection, or
   background build was scheduled but did not complete successfully).
 - ``"timeout"`` — caller waited via ``wait_until_queryable()`` and the
   bounded timeout elapsed before the build event was set.
+- ``"broken"`` — a SQLite ``OperationalError`` surfaced from a
+  bucket-3/4 handler call with an errorname OUTSIDE the busy set
+  (e.g., ``SQLITE_CORRUPT``, ``SQLITE_NOTADB``, ``SQLITE_CANTOPEN``,
+  ``SQLITE_SCHEMA``, ``SQLITE_IOERR``, generic ``SQLITE_ERROR``).
+  The chained ``__cause__`` carries the original exception with full
+  traceback. Operator action: inspect the cause and likely rebuild
+  the index from scratch.
+- ``"busy"`` — a SQLite ``OperationalError`` with errorname in
+  ``{SQLITE_BUSY, SQLITE_LOCKED, SQLITE_FULL}`` — transient or
+  operator-resolvable (lock contention, disk-full). The chained
+  ``__cause__`` carries the original exception. A retry after a
+  short backoff may succeed.
 """
 
 
@@ -82,8 +94,9 @@ class IndexUnavailableError(MarkdownMCPError):
     """Raised when the FTS index is not in a state to serve a query.
 
     Attributes:
-        reason: One of ``"never_built"``, ``"timeout"`` — disambiguates
-            which of the operational situations below fired. See the
+        reason: One of ``"never_built"``, ``"timeout"``, ``"broken"``,
+            ``"busy"`` — disambiguates which of the operational
+            situations below fired. See the
             :data:`IndexUnavailableReason` Literal for definitions.
 
     Covers the following operational situations:
@@ -98,6 +111,17 @@ class IndexUnavailableError(MarkdownMCPError):
     - **Timeout** (``reason="timeout"``). A caller waited via
       :meth:`Collection.wait_until_queryable` and the bounded timeout
       elapsed before the background build signaled completion.
+    - **SQLite operational error — broken** (``reason="broken"``). A
+      bucket-3/4 MCP handler call raised ``sqlite3.OperationalError``
+      with an errorname outside the busy whitelist (e.g.,
+      ``SQLITE_CORRUPT``, ``SQLITE_NOTADB``, ``SQLITE_IOERR``). The
+      chained ``__cause__`` carries the original; operators should
+      inspect and likely rebuild the index from scratch.
+    - **SQLite operational error — busy** (``reason="busy"``). A
+      bucket-3/4 MCP handler call raised ``sqlite3.OperationalError``
+      with errorname in ``{SQLITE_BUSY, SQLITE_LOCKED, SQLITE_FULL}``
+      — transient or operator-resolvable. A retry after a short
+      backoff may succeed.
 
     A captured background-build error is NOT a separate exception
     class: it is diagnostic state surfaced via
