@@ -533,29 +533,38 @@ class Collection:
     def get_index_status(self) -> dict[str, Any]:
         """Return a non-blocking snapshot of background-build state.
 
-        Shape: ``{"status": "ready" | "building" | "failed",
+        Shape: ``{"status": "queryable" | "building" | "failed",
         "documents_indexed": int, "error": str | None}``.
 
-        - ``"ready"``: ``is_index_ready()`` is True (synchronous build
-          returned cleanly or background build completed cleanly);
-          ``error`` is None.
-        - ``"failed"``: ``_background_build_error`` is non-None;
-          ``error`` carries its message.
-        - ``"building"``: anything else — event cleared (in-flight)
+        - ``"queryable"``: ``_index_built`` is True and the build event is
+          set — a completed build exists; captures an error as diagnostic
+          context in ``error`` but does not demote the status.
+        - ``"failed"``: precondition does not hold AND the build event is
+          set AND ``_background_build_error`` is non-None; ``error`` carries
+          its message.
+        - ``"building"``: anything else — event cleared (writer in flight)
           OR event set but ``_index_built`` is False (never scheduled).
-          From the operator's perspective both mean "wait or poll."
 
-        ``documents_indexed`` is taken from
-        :meth:`FTSIndex.list_notes` and so reflects whatever rows are
-        currently committed — progress is observable in the
-        ``"building"`` state as the count rises.
+        ``documents_indexed`` is taken from :meth:`FTSIndex.list_notes` and
+        so reflects whatever rows are currently committed — progress is
+        observable in the ``"building"`` state as the count rises.
+
+        ``error`` carries the diagnostic message from the last background
+        build attempt that captured an exception, independent of ``status``.
         """
-        if self._background_build_error is not None:
+        if self._index_built and self._background_build_done.is_set():
+            status = "queryable"
+            error: str | None = (
+                str(self._background_build_error)
+                if self._background_build_error is not None
+                else None
+            )
+        elif (
+            self._background_build_done.is_set()
+            and self._background_build_error is not None
+        ):
             status = "failed"
-            error: str | None = str(self._background_build_error)
-        elif self.is_index_ready():
-            status = "ready"
-            error = None
+            error = str(self._background_build_error)
         else:
             status = "building"
             error = None

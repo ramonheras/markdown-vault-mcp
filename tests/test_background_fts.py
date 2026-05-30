@@ -232,15 +232,34 @@ def test_should_use_background_build_warm_on_disk_false(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_get_index_status_ready(tmp_path: Path) -> None:
+def test_get_index_status_queryable(tmp_path: Path) -> None:
     vault = _vault(tmp_path)
     _seed(vault)
     col = Collection(source_dir=vault)
     col.build_index()
     status = col.get_index_status()
-    assert status["status"] == "ready"
+    assert status["status"] == "queryable"
     assert status["documents_indexed"] == 1
     assert status["error"] is None
+    col.close()
+
+
+def test_get_index_status_queryable_when_built_with_captured_error(
+    tmp_path: Path,
+) -> None:
+    """Priority flip: a built index with a captured background error
+    reports 'queryable' (not 'failed'). The error field carries the
+    last-attempt message as diagnostic context, independent of status."""
+    vault = _vault(tmp_path)
+    _seed(vault)
+    col = Collection(source_dir=vault)
+    col.build_index()  # _index_built True, error cleared
+    col._background_build_error = RuntimeError("subsequent rebuild blew up")
+    status = col.get_index_status()
+    assert status["status"] == "queryable"
+    assert status["documents_indexed"] == 1
+    assert status["error"] is not None
+    assert "subsequent rebuild blew up" in status["error"]
     col.close()
 
 
@@ -265,11 +284,14 @@ def test_get_index_status_building_never_started(tmp_path: Path) -> None:
     col.close()
 
 
-def test_get_index_status_failed(tmp_path: Path) -> None:
+def test_get_index_status_failed_when_not_queryable_with_captured_error(
+    tmp_path: Path,
+) -> None:
     col = Collection(source_dir=_vault(tmp_path))
     col._background_build_error = RuntimeError("scan failed for X")
     status = col.get_index_status()
     assert status["status"] == "failed"
+    assert status["error"] is not None
     assert "scan failed for X" in status["error"]
     col.close()
 
@@ -279,7 +301,7 @@ def test_get_index_status_failed(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_mcp_tool_get_index_status_reports_ready(
+def test_mcp_tool_get_index_status_reports_queryable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     vault = tmp_path / "vault"
@@ -299,7 +321,7 @@ def test_mcp_tool_get_index_status_reports_ready(
             return res.structured_content or {}
 
     status = asyncio.run(_call())
-    assert status["status"] in ("ready", "building")  # depends on lifespan timing
+    assert status["status"] in ("queryable", "building")  # depends on lifespan timing
     assert status["error"] is None
 
 
@@ -367,7 +389,7 @@ def test_lifespan_cold_start_handshake_under_1s(
             res: Any = None
             for _ in range(50):
                 res = await client.call_tool("get_index_status", {})
-                if (res.structured_content or {}).get("status") == "ready":
+                if (res.structured_content or {}).get("status") == "queryable":
                     break
                 await asyncio.sleep(0.1)
             final = res.structured_content or {}
@@ -377,7 +399,7 @@ def test_lifespan_cold_start_handshake_under_1s(
     assert handshake_elapsed < 1.0, (
         f"cold-start handshake took {handshake_elapsed:.3f}s, expected < 1.0s"
     )
-    assert final["status"] == "ready"
+    assert final["status"] == "queryable"
     assert final["documents_indexed"] == 20
 
 
@@ -407,7 +429,7 @@ def test_lifespan_warm_start_skips_background(
             return res.structured_content or {}
 
     status = asyncio.run(_run())
-    assert status["status"] == "ready"
+    assert status["status"] == "queryable"
     assert status["documents_indexed"] == 1
 
 
