@@ -24,6 +24,7 @@ from markdown_vault_mcp.config import (
     resolve_auth_mode,
 )
 from markdown_vault_mcp.server import make_server
+from tests.conftest import wait_for_mcp_writer_drain
 
 if TYPE_CHECKING:
     import mcp.types as mcp_types
@@ -265,6 +266,7 @@ class TestSearchTool:
     async def test_keyword_search(self) -> None:
         server = make_server()
         async with Client(server) as client:
+            await wait_for_mcp_writer_drain(client)
             result = await client.call_tool(
                 "search", {"query": "simple document", "limit": 5}
             )
@@ -278,6 +280,7 @@ class TestSearchTool:
     async def test_search_with_folder_filter(self) -> None:
         server = make_server()
         async with Client(server) as client:
+            await wait_for_mcp_writer_drain(client)
             result = await client.call_tool(
                 "search",
                 {"query": "subfolder nested", "folder": "subfolder"},
@@ -341,6 +344,7 @@ class TestListDocumentsTool:
     async def test_list_all(self) -> None:
         server = make_server()
         async with Client(server) as client:
+            await wait_for_mcp_writer_drain(client)
             result = await client.call_tool("list_documents", {})
         data = _parse_tool_data(result)
         assert isinstance(data, list)
@@ -352,6 +356,7 @@ class TestListDocumentsTool:
     async def test_list_by_folder(self) -> None:
         server = make_server()
         async with Client(server) as client:
+            await wait_for_mcp_writer_drain(client)
             result = await client.call_tool("list_documents", {"folder": "subfolder"})
         data = _parse_tool_data(result)
         assert isinstance(data, list)
@@ -369,6 +374,7 @@ class TestListDocumentsTool:
 
         server = make_server()
         async with Client(server) as client:
+            await wait_for_mcp_writer_drain(client)
             result = await client.call_tool("list_documents", {"folder": "_templates"})
         data = _parse_tool_data(result)
         paths = {doc["path"] for doc in data}
@@ -382,6 +388,7 @@ class TestListFoldersTool:
     async def test_list_folders(self) -> None:
         server = make_server()
         async with Client(server) as client:
+            await wait_for_mcp_writer_drain(client)
             result = await client.call_tool("list_folders", {})
         folders = result.data
         assert isinstance(folders, list)
@@ -395,6 +402,7 @@ class TestListTagsTool:
     async def test_list_tags(self) -> None:
         server = make_server()
         async with Client(server) as client:
+            await wait_for_mcp_writer_drain(client)
             result = await client.call_tool("list_tags", {"field": "cluster"})
         tags = result.data
         assert isinstance(tags, list)
@@ -408,6 +416,7 @@ class TestStatsTool:
     async def test_stats(self) -> None:
         server = make_server()
         async with Client(server) as client:
+            await wait_for_mcp_writer_drain(client)
             result = await client.call_tool("stats", {})
         data = result.data
         assert isinstance(data, dict)
@@ -433,15 +442,26 @@ class TestReindexTool:
     """Test the reindex MCP tool."""
 
     @pytest.mark.usefixtures("_mcp_env")
-    async def test_reindex_no_changes(self) -> None:
+    async def test_reindex_returns_queued_immediately(self) -> None:
+        """reindex submits a job to the writer and returns {'status': 'queued'}."""
         server = make_server()
         async with Client(server) as client:
             result = await client.call_tool("reindex", {})
         data = result.data
-        assert isinstance(data, dict)
-        assert data["added"] == 0
-        assert data["modified"] == 0
-        assert data["deleted"] == 0
+        assert data == {"status": "queued"}
+
+
+class TestBuildEmbeddingsTool:
+    """Test the build_embeddings MCP tool."""
+
+    @pytest.mark.usefixtures("_mcp_env")
+    async def test_build_embeddings_returns_queued_immediately(self) -> None:
+        """build_embeddings submits a job and returns {'status': 'queued'}."""
+        server = make_server()
+        async with Client(server) as client:
+            result = await client.call_tool("build_embeddings", {})
+        data = result.data
+        assert data == {"status": "queued"}
 
 
 # ---------------------------------------------------------------------------
@@ -703,6 +723,7 @@ class TestMCPExcludePatterns:
 
         server = make_server()
         async with Client(server) as client:
+            await wait_for_mcp_writer_drain(client)
             result = await client.call_tool("list_documents", {})
 
         data = _parse_tool_data(result)
@@ -1451,6 +1472,7 @@ class TestMCPListDocumentsAttachments:
     ) -> None:
         server = make_server()
         async with Client(server) as client:
+            await wait_for_mcp_writer_drain(client)
             result = await client.call_tool("list_documents", {})
         items = _parse_tool_data(result)
         paths = [item["path"] for item in items]
@@ -1461,6 +1483,7 @@ class TestMCPListDocumentsAttachments:
     ) -> None:
         server = make_server()
         async with Client(server) as client:
+            await wait_for_mcp_writer_drain(client)
             result = await client.call_tool(
                 "list_documents", {"include_attachments": True}
             )
@@ -1479,6 +1502,7 @@ class TestMCPListDocumentsAttachments:
     ) -> None:
         server = make_server()
         async with Client(server) as client:
+            await wait_for_mcp_writer_drain(client)
             result = await client.call_tool(
                 "list_documents", {"include_attachments": True}
             )
@@ -1497,6 +1521,7 @@ class TestMCPStatsAttachmentExtensions:
     ) -> None:
         server = make_server()
         async with Client(server) as client:
+            await wait_for_mcp_writer_drain(client)
             result = await client.call_tool("stats", {})
         data = result.data
         assert "attachment_extensions" in data
@@ -1574,6 +1599,7 @@ class TestLinkTools:
     async def test_get_broken_links(self) -> None:
         server = make_server()
         async with Client(server) as client:
+            await wait_for_mcp_writer_drain(client)
             result = await client.call_tool("get_broken_links", {})
         data = _parse_tool_data(result)
         assert len(data) == 1
@@ -1584,6 +1610,7 @@ class TestLinkTools:
     async def test_get_broken_links_with_folder_filter(self) -> None:
         server = make_server()
         async with Client(server) as client:
+            await wait_for_mcp_writer_drain(client)
             result = await client.call_tool("get_broken_links", {"folder": "notes"})
         data = _parse_tool_data(result)
         # notes/topic.md links to ../index.md which exists — no broken links
@@ -1815,6 +1842,7 @@ class TestResources:
     async def test_config_resource(self) -> None:
         server = make_server()
         async with Client(server) as client:
+            await wait_for_mcp_writer_drain(client)
             result = await client.read_resource("config://vault")
         data = json.loads(result[0].text)
         assert "source_dir" in data
@@ -1830,6 +1858,7 @@ class TestResources:
     async def test_stats_resource(self) -> None:
         server = make_server()
         async with Client(server) as client:
+            await wait_for_mcp_writer_drain(client)
             resource_result = await client.read_resource("stats://vault")
             tool_result = await client.call_tool("stats", {})
         resource_data = json.loads(resource_result[0].text)
@@ -1841,6 +1870,7 @@ class TestResources:
     async def test_tags_resource_grouped(self) -> None:
         server = make_server()
         async with Client(server) as client:
+            await wait_for_mcp_writer_drain(client)
             result = await client.read_resource("tags://vault")
         data = json.loads(result[0].text)
         # With indexed fields "cluster,tags", both keys should be present.
@@ -1852,6 +1882,7 @@ class TestResources:
     async def test_tags_resource_by_field(self) -> None:
         server = make_server()
         async with Client(server) as client:
+            await wait_for_mcp_writer_drain(client)
             result = await client.read_resource("tags://vault/cluster")
         data = json.loads(result[0].text)
         assert isinstance(data, list)
@@ -1862,6 +1893,7 @@ class TestResources:
     async def test_folders_resource(self) -> None:
         server = make_server()
         async with Client(server) as client:
+            await wait_for_mcp_writer_drain(client)
             result = await client.read_resource("folders://vault")
         data = json.loads(result[0].text)
         assert isinstance(data, list)
@@ -2270,7 +2302,9 @@ class TestLifespanAutoEmbeddings:
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """With EMBEDDINGS_PATH set, startup builds vectors automatically."""
+        """With EMBEDDINGS_PATH set, startup submits a BuildEmbeddings job
+        that the writer drains in the background (#559)."""
+        import asyncio as _asyncio
         from unittest.mock import patch
 
         from .conftest import MockEmbeddingProvider
@@ -2292,8 +2326,15 @@ class TestLifespanAutoEmbeddings:
         ):
             server = make_server()
             async with Client(server) as client:
-                result = await client.call_tool_mcp("embeddings_status", {})
-        data = json.loads(result.content[0].text)
+                # BuildEmbeddings is fire-and-forget on the writer FIFO;
+                # poll until the writer drains and chunks are present.
+                data: dict[str, Any] = {}
+                for _ in range(50):
+                    result = await client.call_tool_mcp("embeddings_status", {})
+                    data = json.loads(result.content[0].text)
+                    if data.get("chunk_count", 0) > 0:
+                        break
+                    await _asyncio.sleep(0.1)
         assert data["chunk_count"] > 0
 
     async def test_subsequent_startup_skips_rebuild(
@@ -2303,6 +2344,7 @@ class TestLifespanAutoEmbeddings:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """With existing embeddings on disk, startup loads them without rebuilding."""
+        import asyncio as _asyncio
         from unittest.mock import patch
 
         from .conftest import MockEmbeddingProvider
@@ -2315,15 +2357,20 @@ class TestLifespanAutoEmbeddings:
         monkeypatch.setenv("MARKDOWN_VAULT_MCP_EMBEDDINGS_PATH", embeddings_path)
 
         mock_prov = MockEmbeddingProvider()
-        # First startup: build embeddings from scratch.
+        count1 = 0
+        # First startup: build embeddings from scratch (writer-async).
         with patch(
             "markdown_vault_mcp.providers.get_embedding_provider",
             return_value=mock_prov,
         ):
             server = make_server()
             async with Client(server) as client:
-                r1 = await client.call_tool_mcp("embeddings_status", {})
-        count1 = json.loads(r1.content[0].text)["chunk_count"]
+                for _ in range(50):
+                    r1 = await client.call_tool_mcp("embeddings_status", {})
+                    count1 = json.loads(r1.content[0].text)["chunk_count"]
+                    if count1 > 0:
+                        break
+                    await _asyncio.sleep(0.1)
         assert count1 > 0
 
         # Second startup: should load from disk, not re-embed.
@@ -2336,14 +2383,19 @@ class TestLifespanAutoEmbeddings:
             return original_embed(texts)
 
         mock_prov2.embed = tracking_embed  # type: ignore[method-assign]
+        count2 = 0
         with patch(
             "markdown_vault_mcp.providers.get_embedding_provider",
             return_value=mock_prov2,
         ):
             server2 = make_server()
             async with Client(server2) as client2:
-                r2 = await client2.call_tool_mcp("embeddings_status", {})
-        count2 = json.loads(r2.content[0].text)["chunk_count"]
+                for _ in range(50):
+                    r2 = await client2.call_tool_mcp("embeddings_status", {})
+                    count2 = json.loads(r2.content[0].text)["chunk_count"]
+                    if count2 == count1:
+                        break
+                    await _asyncio.sleep(0.1)
         assert count2 == count1
         # embed() must NOT have been called — vectors were loaded from disk.
         assert embed_calls == [], f"embed() was called with {embed_calls} texts"
@@ -3376,6 +3428,7 @@ async def test_search_tool_accepts_chunks_per_file_and_snippet_words(
 
     server = make_server()
     async with Client(server) as client:
+        await wait_for_mcp_writer_drain(client)
         result = await client.call_tool(
             "search",
             {
@@ -3419,6 +3472,7 @@ async def test_read_tool_returns_only_named_section(
 
     server = make_server()
     async with Client(server) as client:
+        await wait_for_mcp_writer_drain(client)
         whole = await client.call_tool("read", {"path": "a.md"})
         assert "first body" in whole.data["content"]
         assert "second body" in whole.data["content"]

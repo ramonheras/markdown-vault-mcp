@@ -296,8 +296,6 @@ class SearchManager:
         attachment_extensions: Allowed non-.md extensions.  ``None`` uses
             the default set.
         link_manager: Optional :class:`LinkManager` for context queries.
-        flush_embeddings: Callback to flush deferred embedding updates
-            before semantic search.
         rebuild_embeddings: Callback to rebuild all embeddings from scratch
             (used when vector index compatibility fails).
     """
@@ -313,7 +311,6 @@ class SearchManager:
         exclude_patterns: list[str] | None = None,
         attachment_extensions: list[str] | None = None,
         link_manager: LinkManager | None = None,
-        flush_embeddings: Callable[[], None] | None = None,
         rebuild_embeddings: Callable[[], None] | None = None,
         chunks_per_file: int = 2,
         snippet_words: int = 200,
@@ -327,7 +324,6 @@ class SearchManager:
         self._exclude_patterns = exclude_patterns
         self._attachment_extensions = attachment_extensions
         self._link_manager = link_manager
-        self._flush_embeddings = flush_embeddings or (lambda: None)
         self._rebuild_embeddings = rebuild_embeddings or (lambda: None)
         self._chunks_per_file = chunks_per_file
         self._snippet_words = snippet_words
@@ -717,7 +713,6 @@ class SearchManager:
         chunks_per_file: int,
         snippet_words: int,
     ) -> list[GroupedResult]:
-        self._flush_embeddings()
         vectors = self._load_vectors()
         candidate_limit = max(limit * (chunks_per_file + 4), 50)
         raw = vectors.search(query, limit=candidate_limit)
@@ -792,7 +787,6 @@ class SearchManager:
         snippet_words: int,
     ) -> list[GroupedResult]:
         """RRF merge of keyword and semantic results, then field-collapse."""
-        self._flush_embeddings()
         candidate_limit = max(limit * (chunks_per_file + 4), 50)
 
         fts_raw: list[FTSResult] = self._fts.search(
@@ -1016,7 +1010,7 @@ class SearchManager:
         exts = self._effective_attachment_extensions()
         attachments: list[AttachmentInfo] = []
 
-        # Attachment scan runs outside _write_lock — result is a best-effort
+        # Attachment scan runs without any lock — result is a best-effort
         # snapshot and is not atomic with the FTS note listing above.
         for abs_path in self._source_dir.rglob("*", **GLOB_SYMLINK_KWARGS):
             if not abs_path.is_file():

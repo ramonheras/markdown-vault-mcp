@@ -11,6 +11,7 @@ import logging
 import queue
 import re
 import threading
+from concurrent.futures import Future
 from typing import TYPE_CHECKING, Any, Literal
 
 from markdown_vault_mcp.exceptions import IndexUnavailableError
@@ -44,9 +45,22 @@ from markdown_vault_mcp.types import (
     WriteResult,
 )
 from markdown_vault_mcp.utils import effective_attachment_extensions
+from markdown_vault_mcp.writer import (
+    BuildEmbeddings,
+    BuildIndex,
+    IndexWriter,
+    ProcessDirtyPaths,
+    ReindexAll,
+    WriterContext,
+    run_build_embeddings,
+    run_build_index,
+    run_flush_dirty_embeddings,
+    run_process_dirty_paths,
+    run_reindex_all,
+)
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Iterable, Iterator
     from pathlib import Path
 
     from markdown_vault_mcp.git import GitWriteStrategy
@@ -103,11 +117,16 @@ class Collection:
     returns whatever is currently in the index (empty on cold start).
     See issue #525.
 
-    **Background build (issue #513 PR1).** When the persisted FTS DB
-    is cold (sentinel absent), the MCP server lifespan calls
-    :meth:`start_background_build_index` to spawn a daemon thread
-    that runs :meth:`build_index` to completion. Bucket-3/4 MCP tool
-    *clients* block on the new
+    **Index lifecycle (issues #513, #526, #559).** The MCP server
+    lifespan submits a :class:`~markdown_vault_mcp.writer.BuildIndex`
+    job to the single-owner
+    :class:`~markdown_vault_mcp.writer.IndexWriter` via
+    :meth:`build_index_async` and yields immediately. On a warm
+    restart the persisted FTS completeness sentinel (PR #526) causes
+    :meth:`build_index_async` to return an already-resolved
+    ``Future`` in O(1) without touching the writer queue. On a cold
+    restart the writer thread runs the job asynchronously while the
+    lifespan yields; bucket-3/4 MCP tool *clients* block on the
     :class:`markdown_vault_mcp._server_queryable.needs_queryable`
     decorator, which calls :meth:`wait_until_queryable` with a
     bounded default timeout
@@ -120,8 +139,11 @@ class Collection:
 
     **Thread safety (issue #519):** every public method on this class is safe
     to call from any thread, concurrently with other reads and writes from
-    any other thread. Writes serialise against each other via the internal
-    ``_write_lock`` (RLock). ``close()`` is safe from any thread; after
+    any other thread. Index mutations (FTS + vector index) are serialised
+    by the single-owner :class:`~markdown_vault_mcp.writer.IndexWriter`
+    thread (#559); file-mutation operations on disk are serialised via
+    ``_file_write_lock`` (RLock) so two MCP write tools racing on the
+    same path do not tear. ``close()`` is safe from any thread; after
     ``close()`` the collection must not be used. Cross-method atomicity
     (e.g. read-then-write without intervening concurrent write) is the
     caller's responsibility — pass ``if_match=`` to write methods for
@@ -252,10 +274,11 @@ class Collection:
         self._background_build_error: BaseException | None = None
         self._background_started: bool = False
 
-        # Serialise concurrent write operations on this instance.
-        # Re-entrant: periodic pull tick blocks writes, then reindex() acquires
-        # this lock again for its mutation phase.
-        self._write_lock = threading.RLock()
+        # Lock for file-mutation atomicity only (#559). The IndexWriter
+        # thread is the serialization point for index mutations; this lock
+        # serialises ONLY the read-modify-write of files in DocumentManager
+        # so two MCP write tools racing on the same path don't tear.
+        self._file_write_lock = threading.RLock()
 
         # Manager modules (dependency-injected, no back-reference).
         from markdown_vault_mcp.managers.document import DocumentManager
@@ -265,17 +288,17 @@ class Collection:
 
         # 1. LinkManager (no deps)
         self._link_mgr = LinkManager(fts=self._fts, source_dir=self._source_dir)
-        # 2. IndexManager (needs fts, tracker, write_lock — NOT search_mgr)
+        # 2. IndexManager (needs fts, tracker — NOT search_mgr)
         #    get_vectors/set_vectors use late-binding lambdas that capture
         #    self._search_mgr; they are only called at runtime after all
-        #    managers are constructed.
+        #    managers are constructed.  No write_lock — the IndexWriter
+        #    thread is the sole mutator of indices (#559).
         self._index_mgr = IndexManager(
             fts=self._fts,
             tracker=self._tracker,
             source_dir=self._source_dir,
             embeddings_path=self._embeddings_path,
             embedding_provider=self._embedding_provider,
-            write_lock=self._write_lock,
             chunk_strategy=self._chunk_strategy,
             exclude_patterns=self._exclude_patterns,
             required_frontmatter=self._required_frontmatter,
@@ -285,6 +308,20 @@ class Collection:
             get_vectors=lambda: self._search_mgr.vectors,
             set_vectors=lambda v: setattr(self._search_mgr, "vectors", v),
         )
+        # Single-owner writer thread for all index mutations (#559).
+        self._writer_ctx = WriterContext(index_manager=self._index_mgr)
+        self._writer = IndexWriter(
+            runners={
+                "build_index": run_build_index,
+                "reindex_all": run_reindex_all,
+                "build_embeddings": run_build_embeddings,
+                "process_dirty_paths": run_process_dirty_paths,
+                "flush_dirty_embeddings": run_flush_dirty_embeddings,
+            },
+            ctx=self._writer_ctx,
+        )
+        self._writer_ctx.writer = self._writer
+        self._writer.start()
         # 3. SearchManager (receives IndexManager callbacks via constructor)
         self._search_mgr = SearchManager(
             fts=self._fts,
@@ -295,17 +332,23 @@ class Collection:
             exclude_patterns=self._exclude_patterns,
             attachment_extensions=self._attachment_extensions,
             link_manager=self._link_mgr,
-            flush_embeddings=self._index_mgr.flush_dirty_embeddings,
-            rebuild_embeddings=lambda: self._index_mgr.build_embeddings(force=True),
+            # rebuild_embeddings is invoked from SearchManager._load_vectors when a
+            # VectorIndexCompatibilityError fires (embedding model upgrade); it runs
+            # on the search thread (asyncio thread pool), not the writer thread.
+            # Routing through self._writer.submit().result() preserves the
+            # single-owner invariant (#559): only the writer thread mutates indexes.
+            rebuild_embeddings=lambda: self._writer.submit(
+                BuildEmbeddings(force=True)
+            ).result(),
             chunks_per_file=chunks_per_file,
             snippet_words=snippet_words,
             length_downweight_alpha=length_downweight_alpha,
         )
-        # 4. DocumentManager (needs index_mgr callbacks)
+        # 4. DocumentManager (mark_paths_dirty routes through the writer)
         self._doc_mgr = DocumentManager(
             fts=self._fts,
             source_dir=self._source_dir,
-            write_lock=self._write_lock,
+            write_lock=self._file_write_lock,
             chunk_strategy=self._chunk_strategy,
             read_only=self._read_only,
             exclude_patterns=self._exclude_patterns,
@@ -313,8 +356,7 @@ class Collection:
             max_attachment_size_mb=self._max_attachment_size_mb,
             max_note_read_bytes=self._max_note_read_bytes,
             on_write_callback=self._fire_write_callback,
-            on_vector_update=self._index_mgr.update_vector_index,
-            on_vector_dirty=self._index_mgr.mark_dirty,
+            mark_paths_dirty=self._mark_paths_dirty_for_writer,
         )
 
         # Deferred write callback queue (issue #175).  Git commit (on_write
@@ -330,12 +372,16 @@ class Collection:
 
     @contextlib.contextmanager
     def pause_writes(self) -> Iterator[None]:
-        """Block all write operations until the context exits.
+        """Block file-mutation write operations until the context exits.
 
-        Write operations are queued (blocked on the lock) rather than being
-        rejected. Reads and search remain unblocked at the Python level.
+        Holds the :attr:`_file_write_lock` so concurrent
+        :class:`DocumentManager` write/edit/delete/rename calls block on
+        the lock until the context exits. Index mutations on the
+        :class:`IndexWriter` thread continue unaffected — the writer
+        thread does not contend on this lock.  Reads and search remain
+        unblocked at the Python level.
         """
-        with self._write_lock:
+        with self._file_write_lock:
             yield
 
     def sync_from_remote_before_index(self) -> None:
@@ -383,14 +429,21 @@ class Collection:
         Flushes deferred embeddings and pending write callbacks, then
         closes the SQLite connection and git strategy.
         """
-        # 0. Join background-build thread before any resource teardown.
-        # Read the thread reference under _write_lock (matches the lock
-        # held when start_background_build_index assigns it).
-        # join() must complete before _fts.close() (step 4) so the
-        # worker isn't writing to a closed FTS. daemon=True keeps a
-        # stuck thread from holding the process; cooperative
-        # cancellation inside _index_mgr.build_index is a follow-up.
-        with self._write_lock:
+        # 0. Join the legacy background-build thread FIRST.  Its worker
+        # body calls self.build_index() → self._writer.submit(...).result(),
+        # so the inner submit must complete against an OPEN writer.  If
+        # the writer were closed before this join, a still-running bg
+        # build would observe submit() raising RuntimeError, capture it
+        # into _background_build_error, and leave the collection
+        # non-queryable.  Only legacy tests exercise this path;
+        # production uses build_index_async via lifespan.
+        #
+        # Read the thread reference under _file_write_lock (matches the
+        # lock held when start_background_build_index assigns it).
+        # daemon=True keeps a stuck thread from holding the process;
+        # cooperative cancellation inside _index_mgr.build_index is a
+        # follow-up.
+        with self._file_write_lock:
             thread = self._background_build_thread
         if thread is not None and thread.is_alive():
             thread.join(timeout=30.0)
@@ -400,8 +453,17 @@ class Collection:
                     "30s; abandoning (daemon thread does not block process)"
                 )
 
-        # 1. Flush any deferred embedding updates.
-        self._index_mgr.flush_dirty_embeddings()
+        # 0a. THEN close the IndexWriter so no further index mutations
+        # can be submitted while we tear down downstream resources. The
+        # hasattr guard handles the case where __init__ failed mid-way
+        # and _writer was never assigned (#559). The writer drains its
+        # own pending jobs cleanly before returning, including any work
+        # the bg-build thread submitted before it terminated.
+        if hasattr(self, "_writer") and self._writer is not None:
+            self._writer.close(timeout=30.0)
+
+        # 1. Deferred embedding updates are flushed by the IndexWriter
+        # before its close() returns; no further flush needed here (#559).
 
         # 2. Drain the write-callback queue (git commits).
         if self._callback_worker is not None and self._callback_worker.is_alive():
@@ -463,6 +525,16 @@ class Collection:
     def start_background_build_index(self) -> None:
         """Spawn a daemon thread that runs :meth:`build_index` to completion.
 
+        .. deprecated:: 1.28
+           Superseded by :meth:`build_index_async`, which submits a
+           :class:`BuildIndex` job to the single-owner
+           :class:`~markdown_vault_mcp.writer.IndexWriter` thread (#559).
+           The MCP server lifespan no longer calls this method; only
+           legacy tests retain it. Prefer :meth:`build_index_async`
+           for fire-and-forget initial builds and
+           :meth:`build_index` for synchronous builds with
+           Collection-level state management.
+
         Idempotent: second call after a successful start, after a
         clean completion, OR after a failed ``thread.start()`` is a
         no-op. The method is one-shot per Collection lifetime;
@@ -482,13 +554,21 @@ class Collection:
         def _worker() -> None:
             try:
                 self.build_index()
-            except BaseException as exc:
+            except Exception as exc:
                 self._background_build_error = exc
                 logger.exception("Background index build failed")
+            except BaseException as exc:
+                # BaseException-family (KeyboardInterrupt / SystemExit /
+                # asyncio.CancelledError): capture so waiters observe the
+                # failure, set the done event in finally, then re-raise so
+                # the thread terminates.
+                self._background_build_error = exc
+                logger.exception("Background index build interrupted")
+                raise
             finally:
                 self._background_build_done.set()
 
-        with self._write_lock:
+        with self._file_write_lock:
             if self._background_started:
                 return
             self._background_started = True
@@ -512,6 +592,13 @@ class Collection:
         """Return True iff the lifespan should route to the background
         FTS build path.
 
+        .. deprecated:: 1.28
+           The MCP server lifespan no longer branches on this predicate
+           — it always submits a :class:`BuildIndex` job to the
+           :class:`~markdown_vault_mcp.writer.IndexWriter` (#559). The
+           method survives only for legacy tests that still exercise
+           :meth:`start_background_build_index`.
+
         Returns True only for cold on-disk DBs (index_path is a real
         file path AND the FTS completeness sentinel from PR #526 is
         absent). Returns False for:
@@ -530,7 +617,9 @@ class Collection:
         """Return a non-blocking snapshot of background-build state.
 
         Shape: ``{"status": "queryable" | "building" | "failed",
-        "documents_indexed": int, "error": str | None}``.
+        "documents_indexed": int, "error": str | None}`` merged with
+        :meth:`IndexWriter.get_status` (``queue_depth``, ``in_flight``,
+        ``dirty_paths``, ``dirty_embeddings``).
 
         - ``"queryable"``: ``_index_built`` is True and the build event is
           set — a completed build exists; captures an error as diagnostic
@@ -572,11 +661,13 @@ class Collection:
                 exc_info=True,
             )
             documents_indexed = 0
-        return {
+        result = {
             "status": status,
             "documents_indexed": documents_indexed,
             "error": error,
         }
+        result.update(self._writer.get_status())
+        return result
 
     def wait_until_queryable(self, timeout: float | None = None) -> None:
         """Block until the FTS index is queryable, or raise.
@@ -629,7 +720,7 @@ class Collection:
                 "Index not built: background build was never scheduled "
                 "or did not complete successfully. "
                 "Check get_index_status() for diagnostic details, or call "
-                "build_index() / start_background_build_index() to retry.",
+                "build_index() or build_index_async() to retry.",
                 reason="never_built",
             )
 
@@ -790,7 +881,9 @@ class Collection:
         # process (rows without sentinel = partial — see issue #525).
         self._index_built = False
         self._fts.clear_build_completed()
-        result = self._index_mgr.build_index(force=force)
+        # Route the actual scan through the IndexWriter so all index
+        # mutations are serialised on the single writer thread (#559).
+        result = self._writer.submit(BuildIndex(force=force)).result()
         self._fts.set_build_completed()
         self._index_built = True
         # Recovery: clear any captured background error + signal queryable.
@@ -809,7 +902,7 @@ class Collection:
             IndexUnavailableError: If :meth:`build_index` has not been called.
         """
         self._require_built()
-        return self._index_mgr.reindex()
+        return self._writer.submit(ReindexAll()).result()
 
     def build_embeddings(self, *, force: bool = False) -> int:
         """Build the vector index from all chunks currently in the FTS index.
@@ -827,7 +920,127 @@ class Collection:
                 not configured.
         """
         self._require_built()
-        return self._index_mgr.build_embeddings(force=force)
+        return self._writer.submit(BuildEmbeddings(force=force)).result()
+
+    def build_index_async(self, *, force: bool = False) -> Future[IndexStats]:
+        """Submit a full FTS index build and return the Future.
+
+        Caller may either ``.result()`` to wait or fire-and-forget.
+        On submission, clears ``_index_built`` and the background-build
+        completion event so concurrent readers see "building" until the
+        writer thread finishes the job.  Attaches a done-callback that
+        flips ``_index_built`` to True (and sets the completion event)
+        on success, or captures the exception on
+        ``_background_build_error`` while still setting the event so
+        waiters unblock.  This is the async counterpart to the
+        Collection-level state-management performed by the synchronous
+        :meth:`build_index`.
+
+        Warm-restart short-circuit: if the persisted FTS sentinel
+        (PR #526) is set and the index already contains documents, this
+        method returns an already-resolved ``Future`` without submitting
+        a writer job.  This mirrors the synchronous
+        :meth:`build_index` O(1) fast path so async and sync callers
+        observe identical warm-restart behaviour.
+
+        Args:
+            force: When ``True``, drop and rebuild the index unconditionally.
+
+        Returns:
+            ``concurrent.futures.Future`` carrying the
+            :class:`IndexStats` once the worker completes the job.
+        """
+        # Warm-restart short-circuit: if FTS is already populated and the
+        # sentinel is set, return an already-resolved Future without
+        # touching the writer queue.  Mirrors :meth:`build_index`.
+        if not force and self._fts.is_build_completed():
+            existing = self._fts.list_notes()
+            if existing:
+                logger.debug(
+                    "build_index_async: index already populated (%d docs), skipping",
+                    len(existing),
+                )
+                self._index_built = True
+                self._background_build_error = None
+                self._background_build_done.set()
+                fut: Future[IndexStats] = Future()
+                fut.set_result(
+                    IndexStats(
+                        documents_indexed=len(existing),
+                        chunks_indexed=0,
+                        skipped=0,
+                    )
+                )
+                return fut
+
+        # Cold (or forced) build: reset state before submission so
+        # concurrent readers see the collection as "building" until the
+        # job completes.  The sentinel is also cleared so a crash
+        # mid-build is detectable by the next process.
+        self._index_built = False
+        self._fts.clear_build_completed()
+        self._background_build_error = None
+        self._background_build_done.clear()
+
+        # If submit() raises (typically RuntimeError when the writer is
+        # already closed, but also BaseException variants like
+        # KeyboardInterrupt mid-put), the event would stay cleared and
+        # the done-callback would never attach — any caller already on
+        # ``wait_until_queryable()`` would block until timeout.  Restore
+        # the event with the captured error so waiters unblock with the
+        # real cause, then re-raise to the caller.
+        try:
+            future = self._writer.submit(BuildIndex(force=force))
+        except BaseException as exc:
+            self._background_build_error = exc
+            self._background_build_done.set()
+            raise
+
+        def _on_done(fut: Future[IndexStats]) -> None:
+            try:
+                fut.result()
+            except BaseException as exc:
+                self._background_build_error = exc
+                logger.exception("Async index build failed")
+                # Leave _index_built False; sentinel left cleared so the
+                # next process treats this as partial.
+                self._background_build_done.set()
+                return
+            self._fts.set_build_completed()
+            self._index_built = True
+            self._background_build_error = None
+            self._background_build_done.set()
+
+        future.add_done_callback(_on_done)
+        return future
+
+    def reindex_async(self) -> Future[ReindexResult]:
+        """Submit an incremental FTS reindex and return the Future.
+
+        Unlike the synchronous :meth:`reindex`, this method does NOT
+        require :meth:`build_index` to have run first.  The
+        :class:`~markdown_vault_mcp.writer.IndexWriter`'s FIFO queue
+        guarantees that any :class:`BuildIndex` job submitted earlier
+        (e.g. from the server lifespan via
+        :meth:`build_index_async`) runs before this :class:`ReindexAll`,
+        so the writer thread sees a built index when it dequeues the
+        job.
+        """
+        return self._writer.submit(ReindexAll())
+
+    def build_embeddings_async(self, *, force: bool = False) -> Future[int]:
+        """Submit a vector index build and return the Future.
+
+        Unlike the synchronous :meth:`build_embeddings`, this method
+        does NOT require :meth:`build_index` to have run first.  The
+        :class:`~markdown_vault_mcp.writer.IndexWriter`'s FIFO queue
+        guarantees that any :class:`BuildIndex` job submitted earlier
+        (e.g. from the server lifespan via
+        :meth:`build_index_async`) runs before this
+        :class:`BuildEmbeddings`, so the writer thread sees a built
+        index when it dequeues the job.
+        """
+        return self._writer.submit(BuildEmbeddings(force=force))
 
     def embeddings_status(self) -> dict:
         """Return status information about the vector index.
@@ -1289,6 +1502,42 @@ class Collection:
             return
         self._ensure_callback_worker()
         self._callback_queue.put((abs_path, content, operation))
+
+    def _mark_paths_dirty_for_writer(self, paths: Iterable[str]) -> None:
+        """Route DocumentManager dirty-marks through the writer (#559).
+
+        Called by :class:`DocumentManager` after a successful write,
+        edit, delete, or rename.  Stages the affected vault-relative
+        paths on the :class:`IndexWriter` dirty set and submits a
+        :class:`ProcessDirtyPaths` job so the FTS update runs on the
+        single-owner writer thread.  The dirty set is updated
+        unconditionally; only the follow-up :class:`ProcessDirtyPaths`
+        submission is skipped when the writer is closed (avoiding a
+        ``RuntimeError`` on a closed writer during shutdown).
+        """
+        self._writer.mark_dirty(paths)
+        if self._writer.is_closed():
+            return
+        # Race: writer may close between is_closed() check and submit().
+        # The dirty marks survive on the writer's set and will be picked
+        # up by any future ProcessDirtyPaths (or discarded cleanly on
+        # shutdown), so swallow the RuntimeError raised by submit() in
+        # that narrow case.  Other RuntimeError variants (which submit()
+        # does NOT raise today, but might gain in future) propagate so
+        # they are not silently masked by a blanket suppress().
+        try:
+            self._writer.submit(ProcessDirtyPaths())
+        except RuntimeError:
+            # Confirm the cause was writer-closed; re-check the flag
+            # rather than parsing the exception message.  If the writer
+            # is NOT closed, the RuntimeError came from elsewhere and
+            # must propagate.
+            if not self._writer.is_closed():
+                raise
+            logger.debug(
+                "mark_paths_dirty_writer_closed_after_submit "
+                "marks_retained_on_writer_set=True"
+            )
 
     def read_attachment(self, path: str) -> AttachmentContent:
         """Read the binary content of a non-.md attachment.

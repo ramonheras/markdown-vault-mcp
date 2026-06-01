@@ -429,7 +429,11 @@ def test_lifespan_cold_start_handshake_under_1s(
 def test_lifespan_warm_start_skips_background(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Warm-start lifespan submits a BuildIndex job that short-circuits in
+    O(1) via the FTS sentinel; status reaches queryable shortly after the
+    server starts handling requests (#559)."""
     from markdown_vault_mcp.server import make_server
+    from tests.conftest import wait_for_mcp_writer_drain
 
     vault = tmp_path / "vault"
     vault.mkdir()
@@ -448,6 +452,7 @@ def test_lifespan_warm_start_skips_background(
 
     async def _run() -> dict[str, Any]:
         async with Client(server) as client:
+            await wait_for_mcp_writer_drain(client)
             res = await client.call_tool("get_index_status", {})
             return res.structured_content or {}
 
@@ -456,15 +461,16 @@ def test_lifespan_warm_start_skips_background(
     assert status["documents_indexed"] == 1
 
 
-def test_lifespan_cold_start_with_embeddings_skips_embeddings(
+def test_lifespan_cold_start_with_embeddings_submits_both_jobs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """Provider configured + cold start: lifespan must log the skip and not block.
+    """Provider configured + cold start: lifespan submits BuildIndex AND
+    BuildEmbeddings jobs to the writer FIFO and yields immediately (#559).
 
-    Must inject a slow _index_mgr.build_index mock so the background thread is
-    reliably still running when the lifespan checks is_queryable() — otherwise
-    on a tiny vault the background completes between spawn and check, embeddings
-    runs, and the test asserts the wrong thing.
+    The writer's FIFO ordering guarantees that BuildEmbeddings runs after
+    BuildIndex even when both are submitted while the writer is still
+    draining the BuildIndex job — so no synchronous ``is_queryable()``
+    gate is needed at the lifespan layer.
     """
     import logging
     import time as time_mod
@@ -480,23 +486,8 @@ def test_lifespan_cold_start_with_embeddings_skips_embeddings(
     monkeypatch.setenv("MARKDOWN_VAULT_MCP_INDEX_PATH", str(tmp_path / "fts.db"))
     monkeypatch.setenv("MARKDOWN_VAULT_MCP_STATE_PATH", str(tmp_path / "s.json"))
 
-    # Patch IndexManager.build_index globally to sleep before returning,
-    # ensuring the background thread is still running when the lifespan
-    # makes the is_queryable() decision.
-    from markdown_vault_mcp.managers import index as index_mod
-
-    original_build_index = index_mod.IndexManager.build_index
-
-    def slow_build_index(self, *, force: bool = False):  # type: ignore[no-untyped-def]
-        time_mod.sleep(0.5)
-        return original_build_index(self, force=force)
-
-    monkeypatch.setattr(index_mod.IndexManager, "build_index", slow_build_index)
-
     # Inject a MockEmbeddingProvider into to_collection_kwargs so that
     # kwargs["embedding_provider"] is non-None without needing a real provider.
-    # "mock" is not a registered provider name in get_embedding_provider(), so
-    # we patch at the config level instead.
     from markdown_vault_mcp import config as config_mod
 
     original_to_kwargs = config_mod.CollectionConfig.to_collection_kwargs
@@ -504,7 +495,6 @@ def test_lifespan_cold_start_with_embeddings_skips_embeddings(
     def patched_to_kwargs(self):  # type: ignore[no-untyped-def]
         kw = original_to_kwargs(self)
         kw["embedding_provider"] = MockEmbeddingProvider()
-        # embeddings_path is required when embedding_provider is set.
         if kw.get("embeddings_path") is None:
             kw["embeddings_path"] = tmp_path / "vectors"
         return kw
@@ -516,16 +506,25 @@ def test_lifespan_cold_start_with_embeddings_skips_embeddings(
     server = make_server()
     caplog.set_level(logging.INFO)
 
-    async def _run() -> None:
+    async def _run() -> float:
+        start = time_mod.perf_counter()
         async with Client(server):
-            pass  # lifespan runs
+            handshake_elapsed = time_mod.perf_counter() - start
+            return handshake_elapsed
 
-    asyncio.run(_run())
-    assert any(
-        "embeddings deferred" in record.message.lower()
-        or "skipping embeddings" in record.message.lower()
-        for record in caplog.records
-    ), f"expected 'embeddings deferred' log; got: {[r.message for r in caplog.records]}"
+    handshake_elapsed = asyncio.run(_run())
+    # The lifespan must NOT block on the index/embeddings build.
+    assert handshake_elapsed < 2.0, (
+        f"lifespan handshake took {handshake_elapsed:.3f}s; expected < 2.0s"
+    )
+    # Both submission log entries must be present.
+    messages = [record.message for record in caplog.records]
+    assert any("Submitted BuildIndex job" in m for m in messages), (
+        f"expected 'Submitted BuildIndex job' log; got: {messages}"
+    )
+    assert any("Submitted BuildEmbeddings job" in m for m in messages), (
+        f"expected 'Submitted BuildEmbeddings job' log; got: {messages}"
+    )
 
 
 def test_decorator_preflight_one_tool(
@@ -897,6 +896,69 @@ def test_synchronous_build_index_clears_prior_background_error(
     # Bucket-3 call no longer surfaces the prior error.
     col.get_backlinks("n.md")  # must not raise
     col.close()
+
+
+def test_build_index_async_warm_restart_short_circuit(tmp_path: Path) -> None:
+    """build_index_async returns an already-resolved Future on warm restart (#559).
+
+    The async path must mirror the synchronous build_index() short-circuit: a
+    populated FTS + the persisted completeness sentinel must yield an
+    already-resolved Future carrying the existing document count without
+    submitting a job to the writer queue.
+    """
+    vault = _vault(tmp_path)
+    _seed(vault)
+    index_path = tmp_path / "fts.db"
+
+    # Phase 1: pre-build to set the sentinel and FTS rows.
+    pre = Collection(source_dir=vault, index_path=index_path)
+    pre.build_index()
+    pre.close()
+
+    # Phase 2: fresh Collection sees the warm sentinel; async submission
+    # must short-circuit.
+    col = Collection(source_dir=vault, index_path=index_path)
+    future = col.build_index_async()
+    assert future.done(), "warm-restart short-circuit must return resolved Future"
+    stats = future.result(timeout=0.1)
+    assert stats.documents_indexed >= 1
+    # Writer should NOT be processing a BuildIndex job.
+    assert col._writer.get_status()["in_flight"] is None
+    # Collection is queryable and the background-build event is set.
+    assert col.is_queryable() is True
+    assert col._background_build_done.is_set()
+    col.close()
+
+
+def test_build_index_async_submit_failure_unblocks_waiters(tmp_path: Path) -> None:
+    """If ``submit()`` raises in ``build_index_async``'s cold path, the
+    completion event is still set with the captured error so
+    ``wait_until_queryable()`` doesn't hang until timeout (#559).
+
+    Regression guard for the lock-discipline audit: the cold-path
+    event-clear / submit / attach trio used to leave the event cleared
+    if submit() raised, so any caller already blocked on
+    ``wait_until_queryable()`` would wait until its timeout fired even
+    though the submission had failed synchronously.
+    """
+    col = Collection(source_dir=_vault(tmp_path))
+    # Force the writer closed so submit() raises RuntimeError on the
+    # next call.
+    col._writer.close(timeout=5)
+    try:
+        with pytest.raises(RuntimeError, match="closed"):
+            col.build_index_async()
+        # The cold-path try/except must have set the event before
+        # re-raising; wait_until_queryable() must therefore return
+        # quickly with IndexUnavailableError rather than blocking.
+        with pytest.raises(IndexUnavailableError) as excinfo:
+            col.wait_until_queryable(timeout=2.0)
+        # never_built is the expected reason: event set, _index_built
+        # False, _background_build_error populated.
+        assert excinfo.value.reason == "never_built"
+        assert isinstance(col._background_build_error, RuntimeError)
+    finally:
+        col.close()
 
 
 def test_synchronous_build_index_warm_path_clears_prior_background_error(

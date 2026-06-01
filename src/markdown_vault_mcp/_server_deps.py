@@ -96,39 +96,26 @@ def make_collection_lifespan(config: CollectionConfig) -> Any:
         collection = Collection(**kwargs)
         set_collection_singleton(collection)
 
-        # If periodic git pull is enabled, sync before building the initial index so
-        # build_index() scans the freshest working tree.
+        # If periodic git pull is enabled, sync before submitting the
+        # initial index build so the scan sees the latest working tree.
         await asyncio.to_thread(collection.sync_from_remote_before_index)
 
-        # PR #526 sentinel: warm on-disk DBs short-circuit in O(1) via
-        # synchronous build_index(); cold on-disk routes to background;
-        # in-memory always synchronous (test scenarios only). See #513 PR1.
-        if collection.should_use_background_build():
-            collection.start_background_build_index()
-            logger.info("Cold start: scheduled background FTS build")
-        else:
-            stats = await asyncio.to_thread(collection.build_index)
-            logger.info(
-                "Index built: %d documents (synchronous build)",
-                stats.documents_indexed,
-            )
+        # Submit the initial build jobs to the IndexWriter and yield
+        # immediately (#559). build_index_async() short-circuits in
+        # O(1) on warm restarts (existing FTS sentinel from PR #526);
+        # cold restarts submit a BuildIndex job that the writer
+        # processes asynchronously while the lifespan yields.
+        # Bucket-3 tools block on @needs_queryable until the build
+        # completes; bucket-2 tools return whatever is currently in
+        # the index per #526.
+        collection.build_index_async()
+        logger.info("Submitted BuildIndex job to writer")
 
-        # Embeddings stay on the synchronous lifespan path for PR1. On
-        # cold start the FTS is still being built so we skip + log;
-        # PR2 follow-up backgrounds embeddings so semantic search
-        # becomes available without operator-initiated rebuild.
         if kwargs.get("embedding_provider") is not None:
-            if collection.is_queryable():
-                chunks_embedded = await asyncio.to_thread(collection.build_embeddings)
-                logger.info("Embeddings ready: %d chunks", chunks_embedded)
-            else:
-                logger.info(
-                    "Cold start: embeddings deferred; semantic search "
-                    "returns empty until PR2 backgrounds embeddings or "
-                    "operator runs CLI 'index'"
-                )
+            collection.build_embeddings_async()
+            logger.info("Submitted BuildEmbeddings job to writer")
 
-        # Start background tasks (e.g. git pull loop) after index is built.
+        # Start any other background tasks (e.g. git pull loop).
         collection.start()
 
         # Artifact store singleton is wired in make_server(), not here —

@@ -15,7 +15,7 @@ from fastmcp import Client
 
 from markdown_vault_mcp._server_apps import _hashed
 from markdown_vault_mcp.server import make_server
-from tests.conftest import _CLEAR_VARS, get_app_html
+from tests.conftest import _CLEAR_VARS, get_app_html, wait_for_mcp_writer_drain
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -128,6 +128,7 @@ class TestGraphDataTools:
     async def test_neighborhood_returns_graph(self) -> None:
         server = make_server()
         async with Client(server) as client:
+            await wait_for_mcp_writer_drain(client)
             result = await client.call_tool(
                 _hashed("vault_graph_neighborhood"), {"path": "simple.md"}
             )
@@ -145,6 +146,7 @@ class TestGraphDataTools:
     async def test_neighborhood_with_depth(self) -> None:
         server = make_server()
         async with Client(server) as client:
+            await wait_for_mcp_writer_drain(client)
             r1 = await client.call_tool(
                 _hashed("vault_graph_neighborhood"), {"path": "simple.md", "depth": 1}
             )
@@ -181,6 +183,7 @@ class TestGraphDataTools:
         monkeypatch.setattr(Collection, "read", _spy)
         server = make_server()
         async with Client(server) as client:
+            await wait_for_mcp_writer_drain(client)
             result = await client.call_tool(_hashed("vault_graph_hubs"), {})
             data = _parse_tool_data(result)
         hub_paths = {n["id"] for n in data["nodes"] if n["group"] == "hub"}
@@ -192,6 +195,7 @@ class TestGraphDataTools:
     async def test_edges_have_type(self) -> None:
         server = make_server()
         async with Client(server) as client:
+            await wait_for_mcp_writer_drain(client)
             result = await client.call_tool(
                 _hashed("vault_graph_neighborhood"), {"path": "simple.md"}
             )
@@ -204,6 +208,7 @@ class TestGraphDataTools:
     async def test_neighborhood_nodes_have_backlink_count(self) -> None:
         server = make_server()
         async with Client(server) as client:
+            await wait_for_mcp_writer_drain(client)
             result = await client.call_tool(
                 _hashed("vault_graph_neighborhood"), {"path": "simple.md"}
             )
@@ -215,6 +220,7 @@ class TestGraphDataTools:
     async def test_edges_deduplicated(self) -> None:
         server = make_server()
         async with Client(server) as client:
+            await wait_for_mcp_writer_drain(client)
             result = await client.call_tool(
                 _hashed("vault_graph_neighborhood"), {"path": "simple.md"}
             )
@@ -226,6 +232,7 @@ class TestGraphDataTools:
         """Default call returns no semantic edges."""
         server = make_server()
         async with Client(server) as client:
+            await wait_for_mcp_writer_drain(client)
             result = await client.call_tool(
                 _hashed("vault_graph_neighborhood"), {"path": "simple.md"}
             )
@@ -237,6 +244,7 @@ class TestGraphDataTools:
         """include_semantic=True without embeddings returns graph without semantic edges."""
         server = make_server()
         async with Client(server) as client:
+            await wait_for_mcp_writer_drain(client)
             result = await client.call_tool(
                 _hashed("vault_graph_neighborhood"),
                 {"path": "simple.md", "include_semantic": True},
@@ -315,6 +323,7 @@ class TestIncludeSemanticEdges:
         ):
             server = make_server()
             async with Client(server) as client:
+                await wait_for_mcp_writer_drain(client)
                 result = await client.call_tool(
                     _hashed("vault_graph_neighborhood"),
                     {"path": "simple.md", "include_semantic": True},
@@ -349,6 +358,7 @@ class TestIncludeSemanticEdges:
         ):
             server = make_server()
             async with Client(server) as client:
+                await wait_for_mcp_writer_drain(client)
                 result = await client.call_tool(
                     _hashed("vault_graph_neighborhood"),
                     {"path": "simple.md", "include_semantic": True},
@@ -368,6 +378,9 @@ class TestIncludeSemanticEdges:
     ) -> None:
         """With depth=0 only the center node is in the graph; similar notes are
         added as new nodes (exercises the `if sr.path not in nodes` branch)."""
+        import asyncio as _asyncio
+        import json as _json
+
         from .conftest import MockEmbeddingProvider
 
         embeddings_path = str(tmp_path / "embeddings")
@@ -380,6 +393,16 @@ class TestIncludeSemanticEdges:
         ):
             server = make_server()
             async with Client(server) as client:
+                # BuildEmbeddings runs on the writer FIFO; poll until chunks
+                # are present so the semantic-neighborhood query sees them.
+                for _ in range(50):
+                    status_res = await client.call_tool_mcp("embeddings_status", {})
+                    if (
+                        _json.loads(status_res.content[0].text).get("chunk_count", 0)
+                        > 0
+                    ):
+                        break
+                    await _asyncio.sleep(0.1)
                 result = await client.call_tool(
                     _hashed("vault_graph_neighborhood"),
                     {"path": "simple.md", "depth": 0, "include_semantic": True},
@@ -415,6 +438,7 @@ class TestIncludeSemanticEdges:
         ):
             server = make_server()
             async with Client(server) as client:
+                await wait_for_mcp_writer_drain(client)
                 result = await client.call_tool(
                     _hashed("vault_graph_neighborhood"),
                     {"path": "simple.md", "include_semantic": True},
@@ -450,6 +474,7 @@ class TestIncludeSemanticEdges:
         ):
             server = make_server()
             async with Client(server) as client:
+                await wait_for_mcp_writer_drain(client)
                 result = await client.call_tool(
                     _hashed("vault_graph_neighborhood"),
                     {"path": "simple.md", "include_semantic": True},
@@ -488,6 +513,7 @@ class TestGraphNeighborhoodMaxNodes:
     async def test_max_nodes_caps_node_count(self, _star_vault: Path) -> None:
         server = make_server()
         async with Client(server) as client:
+            await wait_for_mcp_writer_drain(client)
             result = await client.call_tool(
                 _hashed("vault_graph_neighborhood"),
                 {"path": "hub.md", "depth": 2, "max_nodes": 5},
@@ -499,6 +525,7 @@ class TestGraphNeighborhoodMaxNodes:
     async def test_truncated_false_when_under_cap(self, _star_vault: Path) -> None:
         server = make_server()
         async with Client(server) as client:
+            await wait_for_mcp_writer_drain(client)
             result = await client.call_tool(
                 _hashed("vault_graph_neighborhood"),
                 {"path": "hub.md", "depth": 2, "max_nodes": 500},
@@ -536,6 +563,7 @@ class TestGraphNeighborhoodMaxNodes:
         ):
             server = make_server()
             async with Client(server) as client:
+                await wait_for_mcp_writer_drain(client)
                 result = await client.call_tool(
                     _hashed("vault_graph_neighborhood"),
                     {
@@ -590,6 +618,7 @@ class TestGraphNeighborhoodMaxNodes:
         ):
             server = make_server()
             async with Client(server) as client:
+                await wait_for_mcp_writer_drain(client)
                 result = await client.call_tool(
                     _hashed("vault_graph_neighborhood"),
                     {
@@ -617,6 +646,7 @@ class TestGraphNeighborhoodMaxNodesDefault:
     async def test_default_does_not_truncate_small_vault(self) -> None:
         server = make_server()
         async with Client(server) as client:
+            await wait_for_mcp_writer_drain(client)
             result = await client.call_tool(
                 _hashed("vault_graph_neighborhood"),
                 {"path": "simple.md", "depth": 2},

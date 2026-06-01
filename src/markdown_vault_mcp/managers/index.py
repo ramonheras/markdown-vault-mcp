@@ -10,9 +10,10 @@ from __future__ import annotations
 
 import json
 import logging
-import threading
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+
+import yaml
 
 from markdown_vault_mcp.fts_index import _derive_folder
 from markdown_vault_mcp.scanner import parse_note, scan_directory
@@ -36,10 +37,6 @@ logger = logging.getLogger(__name__)
 # when the entire corpus is sent in one batch (see issue #159).
 _EMBEDDING_BATCH_SIZE = 4
 
-# Seconds between automatic background flushes of dirty embeddings to disk.
-# Write operations mark documents as dirty; the flush re-embeds them in bulk.
-_EMBEDDING_FLUSH_INTERVAL = 30
-
 
 class IndexManager:
     """Manages index building, reindexing, and embedding lifecycle.
@@ -51,7 +48,6 @@ class IndexManager:
         embeddings_path: Base path for ``.npy`` / ``.json`` sidecar files.
             ``None`` disables embedding support.
         embedding_provider: Provider used to generate embeddings.
-        write_lock: Shared re-entrant lock serialising write operations.
         chunk_strategy: Strategy for splitting documents into chunks.
         exclude_patterns: Glob patterns for paths to exclude from indexing.
         required_frontmatter: If provided, documents missing any listed
@@ -72,7 +68,6 @@ class IndexManager:
         *,
         embeddings_path: Path | None = None,
         embedding_provider: EmbeddingProvider | None = None,
-        write_lock: threading.RLock,
         chunk_strategy: ChunkStrategy,
         exclude_patterns: list[str] | None = None,
         required_frontmatter: list[str] | None = None,
@@ -85,18 +80,12 @@ class IndexManager:
         self._source_dir = source_dir
         self._embeddings_path = embeddings_path
         self._embedding_provider = embedding_provider
-        self._write_lock = write_lock
         self._chunk_strategy = chunk_strategy
         self._exclude_patterns = exclude_patterns
         self._required_frontmatter = required_frontmatter
         self._indexed_frontmatter_fields: list[str] = indexed_frontmatter_fields or []
         self._get_vectors = get_vectors
         self._set_vectors = set_vectors
-
-        # Deferred embedding state.
-        self._dirty_embeddings: set[str] = set()
-        self._embedding_flush_timer: threading.Timer | None = None
-        self._embedding_flush_lock = threading.Lock()
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -287,16 +276,17 @@ class IndexManager:
         matching ``exclude_patterns`` are skipped, and any previously indexed
         documents that now match the patterns are purged.
 
-        Thread-safety: the filesystem scan runs without holding
-        ``_write_lock`` (read-only), then the mutation phase acquires the
-        lock to prevent races with concurrent write/edit/delete/rename
-        operations.
+        Thread-safety: this method runs on the single-owner
+        :class:`~markdown_vault_mcp.writer.IndexWriter` thread (#559), so
+        no internal lock is required.  Concurrent
+        write/edit/delete/rename operations route through the writer's
+        FIFO queue and serialise against this job.
 
         Returns:
             :class:`~markdown_vault_mcp.types.ReindexResult` with counts
             of changes applied.
         """
-        # Phase 1: scan (outside lock — read-only filesystem walk + hashing).
+        # Phase 1: scan filesystem (read-only walk + hashing).
         changes = self._tracker.detect_changes(self._source_dir)
         logger.info(
             "reindex: %d added, %d modified, %d deleted, %d unchanged",
@@ -342,89 +332,88 @@ class IndexManager:
 
             parsed.append((path, note))
 
-        # Phase 2: apply mutations (inside lock).
-        with self._write_lock:
-            vectors = self._get_vectors()
+        # Phase 2: apply mutations (writer is sole mutator; no lock needed).
+        vectors = self._get_vectors()
 
-            for path in changes.deleted:
-                self._fts.delete_by_path(path)
-                if vectors is not None:
-                    vectors.delete_by_path(path)
+        for path in changes.deleted:
+            self._fts.delete_by_path(path)
+            if vectors is not None:
+                vectors.delete_by_path(path)
 
-            # Purge stale excluded docs (issue #255).
-            stale_excluded = 0
-            if self._exclude_patterns:
-                if (
-                    vectors is None
-                    and self._embedding_provider is not None
-                    and self._embeddings_path is not None
-                ):
-                    self._load_vectors()
-                    vectors = self._get_vectors()
+        # Purge stale excluded docs (issue #255).
+        stale_excluded = 0
+        if self._exclude_patterns:
+            if (
+                vectors is None
+                and self._embedding_provider is not None
+                and self._embeddings_path is not None
+            ):
+                self._load_vectors()
+                vectors = self._get_vectors()
 
-                for row in self._fts.list_notes():
-                    if self._is_path_excluded(row["path"]):
-                        self._fts.delete_by_path(row["path"])
-                        if vectors is not None:
-                            vectors.delete_by_path(row["path"])
-                        stale_excluded += 1
-                if stale_excluded:
-                    logger.info(
-                        "reindex: purged %d stale excluded document(s)",
-                        stale_excluded,
-                    )
+            for row in self._fts.list_notes():
+                if self._is_path_excluded(row["path"]):
+                    self._fts.delete_by_path(row["path"])
+                    if vectors is not None:
+                        vectors.delete_by_path(row["path"])
+                    stale_excluded += 1
+            if stale_excluded:
+                logger.info(
+                    "reindex: purged %d stale excluded document(s)",
+                    stale_excluded,
+                )
 
-            indexed_added = 0
-            indexed_modified = 0
-            added_set = set(changes.added)
+        indexed_added = 0
+        indexed_modified = 0
+        added_set = set(changes.added)
 
-            for path, note in parsed:
-                try:
-                    self._fts.upsert_note(note)
-                except Exception:
-                    logger.warning("reindex: failed to index %s", path, exc_info=True)
-                    continue
-                if path in added_set:
-                    indexed_added += 1
-                else:
-                    indexed_modified += 1
-
-                if vectors is not None and self._embeddings_path is not None:
-                    vectors.delete_by_path(note.path)
-                    texts = [c.content for c in note.chunks]
-                    meta = [
-                        {
-                            "path": note.path,
-                            "title": note.title,
-                            "folder": _derive_folder(note.path),
-                            "heading": c.heading,
-                            "content": c.content,
-                            "start_line": c.start_line,
-                        }
-                        for c in note.chunks
-                    ]
-                    if texts:
-                        vectors.add(texts, meta)
+        for path, note in parsed:
+            try:
+                self._fts.upsert_note(note)
+            except Exception:
+                logger.warning("reindex: failed to index %s", path, exc_info=True)
+                continue
+            if path in added_set:
+                indexed_added += 1
+            else:
+                indexed_modified += 1
 
             if vectors is not None and self._embeddings_path is not None:
-                vectors.save(self._embeddings_path)
+                vectors.delete_by_path(note.path)
+                texts = [c.content for c in note.chunks]
+                meta = [
+                    {
+                        "path": note.path,
+                        "title": note.title,
+                        "folder": _derive_folder(note.path),
+                        "heading": c.heading,
+                        "content": c.content,
+                        "start_line": c.start_line,
+                    }
+                    for c in note.chunks
+                ]
+                if texts:
+                    vectors.add(texts, meta)
 
-            # Re-resolve vault-wide wikilinks.
-            self._fts.resolve_vault_wikilinks()
+        if vectors is not None and self._embeddings_path is not None:
+            vectors.save(self._embeddings_path)
 
-            # Rebuild tracker state from current FTS index contents.
-            state_notes: list[ParsedNote] = [
-                ParsedNote(
-                    path=r["path"],
-                    frontmatter={},
-                    title=r["title"],
-                    chunks=[],
-                    content_hash=r["content_hash"],
-                    modified_at=r["modified_at"],
-                )
-                for r in self._fts.list_notes()
-            ]
-            self._tracker.update_state(state_notes)
+        # Re-resolve vault-wide wikilinks.
+        self._fts.resolve_vault_wikilinks()
+
+        # Rebuild tracker state from current FTS index contents.
+        state_notes: list[ParsedNote] = [
+            ParsedNote(
+                path=r["path"],
+                frontmatter={},
+                title=r["title"],
+                chunks=[],
+                content_hash=r["content_hash"],
+                modified_at=r["modified_at"],
+            )
+            for r in self._fts.list_notes()
+        ]
+        self._tracker.update_state(state_notes)
 
         return ReindexResult(
             added=indexed_added,
@@ -582,91 +571,127 @@ class IndexManager:
     # Deferred embedding flush
     # ------------------------------------------------------------------
 
-    def update_vector_index(self, note: ParsedNote) -> None:
-        """Mark a document for deferred embedding update.
+    def process_dirty_paths(self, paths: set[str]) -> None:
+        """Re-parse each path and update FTS, skipping per-path failures (#559).
 
-        The actual re-embedding and save happen during the next flush
-        (periodic timer, semantic search, or close).
+        After all paths are processed, ``resolve_vault_wikilinks()`` runs
+        once over the whole vault so newly-added, edited, deleted, and
+        renamed documents all leave the link graph consistent — this
+        mirrors the behavior that the pre-#559 inline DocumentManager
+        callsites delivered (write/edit/delete/rename each ended with
+        ``resolve_vault_wikilinks()``).
+
+        Per-path file-read failures (``OSError``, ``UnicodeDecodeError``),
+        malformed-frontmatter errors (``yaml.YAMLError``), and chunker
+        validation failures (``ValueError``) are caught, logged at
+        WARNING, and skipped so a single bad note does not starve the
+        rest — matching the coverage in :meth:`flush_dirty_embeddings`.
+        When the parse failure stems from the file disappearing between
+        the ``is_file()`` check and ``parse_note()``, the stale FTS row
+        is deleted so keyword/hybrid search results stay consistent with
+        what :meth:`flush_dirty_embeddings` will do to the vector index.
+        Other exceptions — notably ``sqlite3.OperationalError``
+        (classified by PR #555's ``IndexUnavailableReason`` discriminator
+        at the caller boundary), ``sqlite3.DatabaseError``, ``MemoryError``,
+        and programming bugs — propagate to the writer's Future so the
+        caller learns instead of seeing a silent skip. The
+        ``resolve_vault_wikilinks()`` call runs in a ``finally`` so the
+        link graph is always restored to a consistent state, even on
+        per-path failures.
+        """
+        if not paths:
+            return
+        try:
+            for path in paths:
+                abs_path = self._source_dir / path
+                try:
+                    if abs_path.is_file() and path.endswith(".md"):
+                        note = parse_note(
+                            abs_path, self._source_dir, self._chunk_strategy
+                        )
+                        if self._required_frontmatter and not all(
+                            k in (note.frontmatter or {})
+                            for k in self._required_frontmatter
+                        ):
+                            self._fts.delete_by_path(path)
+                            continue
+                        self._fts.upsert_note(note)
+                    else:
+                        self._fts.delete_by_path(path)
+                except (OSError, UnicodeDecodeError, ValueError) as exc:
+                    logger.warning(
+                        "process_dirty_paths: skipping %s: %s",
+                        path,
+                        exc,
+                    )
+                    # File-disappeared race: parse_note() opened the
+                    # file after is_file() succeeded but the file was
+                    # then removed (or replaced with something that
+                    # raises one of the caught exceptions on read).
+                    # Drop the stale FTS row so search results match
+                    # what flush_dirty_embeddings will do to the
+                    # vector index — otherwise the deleted document
+                    # lingers in keyword/hybrid search until a full
+                    # reindex.
+                    if not abs_path.is_file():
+                        try:
+                            self._fts.delete_by_path(path)
+                        except Exception:
+                            logger.exception(
+                                "process_dirty_paths: failed to delete "
+                                "stale FTS row for %s",
+                                path,
+                            )
+                    continue
+                except yaml.YAMLError as exc:
+                    logger.warning(
+                        "process_dirty_paths: skipping %s (malformed frontmatter): %s",
+                        path,
+                        exc,
+                    )
+                    continue
+                # sqlite3 / programming-bug exceptions propagate: fail the
+                # job so the writer's Future surfaces them (PR #555's
+                # reason discriminator handles OperationalError
+                # classification at the caller boundary).
+        finally:
+            # Always restore link-graph consistency, even on per-path failures.
+            try:
+                self._fts.resolve_vault_wikilinks()
+            except Exception:
+                logger.exception("process_dirty_paths: resolve_vault_wikilinks failed")
+
+    def flush_dirty_embeddings(self, paths: set[str]) -> None:
+        """Re-embed each path in the snapshot and save the vector index once.
+
+        Called only by the IndexWriter's ``FlushDirtyEmbeddings`` runner.
+        The writer thread is the sole mutator of the vector index, so this
+        method runs without any internal lock.
+
+        Per-path parse failures (``UnicodeDecodeError``, ``OSError``,
+        ``yaml.YAMLError``, ``ValueError`` from the chunk strategy) DO
+        NOT delete existing vectors for that path — the failed entry is
+        skipped entirely in Phase 2, leaving prior embeddings intact.
+        Only successful re-parses with empty chunk lists (note exists
+        but contains no embeddable content), or paths that have been
+        removed/are no longer ``.md`` files, result in vector deletion.
+        Other exceptions (sqlite3 errors, programming bugs,
+        embedding-provider errors) propagate to the writer's Future.
 
         Args:
-            note: Parsed document to mark dirty.
+            paths: Paths to re-embed (relative to source_dir).
         """
         if self._embeddings_path is None or self._embedding_provider is None:
             return
-        with self._embedding_flush_lock:
-            self._dirty_embeddings.add(note.path)
-        self._schedule_embedding_flush()
-
-    def mark_dirty(self, path: str) -> None:
-        """Mark a path as needing deferred embedding update.
-
-        Used by write operations (e.g. delete, rename) that need to mark
-        a path dirty without a full :class:`ParsedNote`.
-
-        Args:
-            path: Relative vault path.
-        """
-        if self._embeddings_path is None or self._embedding_provider is None:
-            return
-        with self._embedding_flush_lock:
-            self._dirty_embeddings.add(path)
-        self._schedule_embedding_flush()
-
-    def remove_from_dirty(self, path: str) -> None:
-        """Remove a path from the dirty embeddings set.
-
-        Called when a document is deleted and its embedding cleanup is
-        handled through the normal dirty-flush mechanism.
-
-        Args:
-            path: Relative vault path to remove.
-        """
-        with self._embedding_flush_lock:
-            self._dirty_embeddings.discard(path)
-
-    def _schedule_embedding_flush(self) -> None:
-        """Schedule a deferred flush of dirty embeddings."""
-        with self._embedding_flush_lock:
-            if self._embedding_flush_timer is not None:
-                self._embedding_flush_timer.cancel()
-            self._embedding_flush_timer = threading.Timer(
-                _EMBEDDING_FLUSH_INTERVAL,
-                self.flush_dirty_embeddings,
-            )
-            self._embedding_flush_timer.daemon = True
-            self._embedding_flush_timer.start()
-
-    def flush_dirty_embeddings(self) -> None:
-        """Re-embed all dirty documents and save the vector index once.
-
-        Called by the periodic timer, before semantic search, and on close.
-        Thread-safe: the dirty-set swap is atomic under
-        ``_embedding_flush_lock``; Phase 2 vector mutations are serialised
-        by ``_write_lock``.
-
-        Two-phase design to minimise lock hold time:
-
-        1. **Outside** ``_write_lock``: parse each dirty document and call
-           the (potentially slow) embedding provider.
-        2. **Inside** ``_write_lock``: apply the fast numpy mutations
-           (delete old rows, append pre-computed vectors, save).
-        """
-        if self._embeddings_path is None or self._embedding_provider is None:
+        if not paths:
             return
 
-        with self._embedding_flush_lock:
-            if self._embedding_flush_timer is not None:
-                self._embedding_flush_timer.cancel()
-                self._embedding_flush_timer = None
-
-            if not self._dirty_embeddings:
-                return
-            paths = self._dirty_embeddings.copy()
-            self._dirty_embeddings.clear()
-
-        # Phase 1: parse and embed OUTSIDE _write_lock.
+        # Phase 1: parse and embed.  Each entry is
+        # (path, vectors_or_None, meta_or_None, failed_flag).
+        # failed=True means parse failed → Phase 2 must NOT delete the
+        # existing vectors for this path (silent-data-loss guard).
         pre_embedded: list[
-            tuple[str, list[list[float]] | None, list[dict[str, Any]] | None]
+            tuple[str, list[list[float]] | None, list[dict[str, Any]] | None, bool]
         ] = []
         for path in paths:
             abs_path = self._source_dir / path
@@ -687,33 +712,34 @@ class IndexManager:
                     ]
                     if texts:
                         raw_vecs = self._embedding_provider.embed(texts)
-                        pre_embedded.append((path, raw_vecs, meta))
+                        pre_embedded.append((path, raw_vecs, meta, False))
                     else:
-                        pre_embedded.append((path, None, None))
-                except (UnicodeDecodeError, OSError) as exc:
+                        # Successful parse, no chunks → delete is correct.
+                        pre_embedded.append((path, None, None, False))
+                except (UnicodeDecodeError, OSError, yaml.YAMLError, ValueError) as exc:
                     logger.warning("Deferred embedding failed for %s: %s", path, exc)
-                    pre_embedded.append((path, None, None))
+                    # Parse failed → leave existing vectors intact.
+                    pre_embedded.append((path, None, None, True))
             else:
-                pre_embedded.append((path, None, None))
+                # File removed or not a .md file → delete is correct.
+                pre_embedded.append((path, None, None, False))
 
-        # Phase 2: mutate vector index under _write_lock.
-        with self._write_lock:
-            vectors = self._load_vectors()
-
-            for entry in pre_embedded:
-                vectors.delete_by_path(entry[0])
-                if entry[1] is not None and entry[2]:
-                    vectors.add_vectors(entry[1], entry[2])
-
-            vectors.save(self._embeddings_path)
-            logger.debug("Flushed deferred embeddings for %d paths", len(paths))
-
-    def cancel_flush_timer(self) -> None:
-        """Cancel any pending flush timer without flushing.
-
-        Called during shutdown before the synchronous flush.
-        """
-        with self._embedding_flush_lock:
-            if self._embedding_flush_timer is not None:
-                self._embedding_flush_timer.cancel()
-                self._embedding_flush_timer = None
+        # Phase 2: mutate vector index (writer is sole mutator; no lock needed).
+        # Short-circuit when every entry failed parse: there is nothing
+        # to mutate, and calling _load_vectors() in that case could
+        # trigger a full vector rebuild via its
+        # VectorIndexCompatibilityError handler — an expensive no-op
+        # for a flush that has no real work to do.
+        if not any(not entry[3] for entry in pre_embedded):
+            return
+        vectors = self._load_vectors()
+        for entry in pre_embedded:
+            entry_path, entry_vecs, entry_meta, entry_failed = entry
+            if entry_failed:
+                # Parse failure → keep prior embeddings; do not touch vectors.
+                continue
+            vectors.delete_by_path(entry_path)
+            if entry_vecs is not None and entry_meta:
+                vectors.add_vectors(entry_vecs, entry_meta)
+        vectors.save(self._embeddings_path)
+        logger.debug("Flushed deferred embeddings for %d paths", len(paths))

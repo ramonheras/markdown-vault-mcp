@@ -54,17 +54,42 @@ def doc_vault(tmp_path: Path) -> Path:
 
 @pytest.fixture()
 def doc_mgr(doc_vault: Path) -> DocumentManager:
-    """Build a DocumentManager with an indexed FTS and writable vault."""
+    """Build a DocumentManager with an indexed FTS and writable vault.
+
+    The ``mark_paths_dirty`` callback in this fixture synchronously
+    updates FTS so the isolation tests can continue to assert FTS state
+    after ``write`` / ``edit`` / ``delete`` / ``rename``.  In production
+    (#559) the callback routes through the :class:`IndexWriter`; the
+    test substitutes a synchronous shim that mirrors the behavior of
+    :meth:`IndexManager.process_dirty_paths`.
+    """
+    from markdown_vault_mcp.scanner import parse_note as _parse_note
+
     fts = FTSIndex(db_path=":memory:")
     for note in scan_directory(doc_vault):
         fts.upsert_note(note)
     fts.resolve_vault_wikilinks()
+
+    def _sync_mark_dirty(paths: object) -> None:
+        for p in paths:  # type: ignore[attr-defined]
+            abs_p = doc_vault / p
+            try:
+                if abs_p.is_file() and p.endswith(".md"):
+                    note = _parse_note(abs_p, doc_vault, HeadingChunker())
+                    fts.upsert_note(note)
+                else:
+                    fts.delete_by_path(p)
+            except (OSError, UnicodeDecodeError):
+                continue
+        fts.resolve_vault_wikilinks()
+
     return DocumentManager(
         fts=fts,
         source_dir=doc_vault,
         write_lock=threading.RLock(),
         chunk_strategy=HeadingChunker(),
         read_only=False,
+        mark_paths_dirty=_sync_mark_dirty,
     )
 
 
@@ -409,12 +434,14 @@ class TestCallbacks:
     """Tests that callbacks are invoked during write operations."""
 
     def test_write_fires_callbacks(self, doc_vault: Path) -> None:
+        """write() fires on_write_callback and routes the path through
+        mark_paths_dirty so the IndexWriter can re-index it (#559)."""
         fts = FTSIndex(db_path=":memory:")
         for note in scan_directory(doc_vault):
             fts.upsert_note(note)
 
         write_calls: list[tuple] = []
-        vector_calls: list[str] = []
+        dirty_paths: list[str] = []
 
         mgr = DocumentManager(
             fts=fts,
@@ -423,19 +450,21 @@ class TestCallbacks:
             chunk_strategy=HeadingChunker(),
             read_only=False,
             on_write_callback=lambda p, _c, op: write_calls.append((p, op)),
-            on_vector_update=lambda note: vector_calls.append(note.path),
+            mark_paths_dirty=lambda paths: dirty_paths.extend(paths),
         )
         mgr.write("cb_test.md", "# Callback test\n")
         assert len(write_calls) == 1
         assert write_calls[0][1] == "write"
-        assert "cb_test.md" in vector_calls
+        assert "cb_test.md" in dirty_paths
 
     def test_delete_fires_dirty_callback(self, doc_vault: Path) -> None:
+        """delete() routes the removed path through mark_paths_dirty so the
+        IndexWriter can purge it (#559)."""
         fts = FTSIndex(db_path=":memory:")
         for note in scan_directory(doc_vault):
             fts.upsert_note(note)
 
-        dirty_calls: list[str] = []
+        dirty_paths: list[str] = []
         write_calls: list[str] = []
 
         mgr = DocumentManager(
@@ -445,10 +474,10 @@ class TestCallbacks:
             chunk_strategy=HeadingChunker(),
             read_only=False,
             on_write_callback=lambda _p, _c, op: write_calls.append(op),
-            on_vector_dirty=lambda path: dirty_calls.append(path),
+            mark_paths_dirty=lambda paths: dirty_paths.extend(paths),
         )
         mgr.delete("alpha.md")
-        assert "alpha.md" in dirty_calls
+        assert "alpha.md" in dirty_paths
         assert "delete" in write_calls
 
 
@@ -715,3 +744,24 @@ class TestReadNoteSizeGuard:
             assert "MAX_NOTE_READ_BYTES" not in str(exc), (
                 f"non-.md read raised the note-cap error inappropriately; got: {exc}"
             )
+
+
+# ---------------------------------------------------------------------------
+# Collection-level tests for the new mark_paths_dirty boundary (#559)
+# ---------------------------------------------------------------------------
+
+
+def test_write_marks_path_dirty_via_collection(tmp_path: Path) -> None:
+    """Through Collection: write() routes FTS update via writer mark_dirty."""
+    from markdown_vault_mcp.collection import Collection
+
+    col = Collection(source_dir=tmp_path, read_only=False)
+    try:
+        col.build_index()
+        # Freeze the writer so we can observe the dirty-mark pre-drain.
+        col._writer.close(timeout=5)
+        col.write(path="new.md", content="# new\n\nhello")
+        assert (tmp_path / "new.md").exists()
+        assert "new.md" in col._writer.snapshot_dirty_paths()
+    finally:
+        col.close()

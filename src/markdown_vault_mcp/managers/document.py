@@ -59,11 +59,10 @@ from markdown_vault_mcp.utils.text import (
 
 if TYPE_CHECKING:
     import threading
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterable
 
     from markdown_vault_mcp.fts_index import FTSIndex
     from markdown_vault_mcp.scanner import ChunkStrategy
-    from markdown_vault_mcp.types import ParsedNote
 
 logger = logging.getLogger(__name__)
 
@@ -88,10 +87,13 @@ class DocumentManager:
             ``0`` disables the limit (default ``262144``, i.e. 256 KB).
         on_write_callback: Fires after a successful write to enqueue a
             git commit.  Signature: ``(abs_path, content, operation)``.
-        on_vector_update: Marks a parsed note for deferred embedding
-            re-index.
-        on_vector_dirty: Marks a path dirty by string (for delete/rename
-            where a full :class:`ParsedNote` is unavailable).
+        mark_paths_dirty: Routes FTS-affecting write operations through
+            the single-owner :class:`IndexWriter` (#559).  Called with an
+            iterable of vault-relative paths after each successful
+            mutation; the writer drains the resulting dirty set via a
+            ``ProcessDirtyPaths`` job.  ``None`` (default) leaves the
+            DocumentManager FTS-side-effect-free, which is the contract
+            used by the isolation tests.
     """
 
     def __init__(
@@ -107,12 +109,11 @@ class DocumentManager:
         max_attachment_size_mb: float = 1.0,
         max_note_read_bytes: int = 262144,
         on_write_callback: Callable[[Path, str, str], None] | None = None,
-        on_vector_update: Callable[[ParsedNote], None] | None = None,
-        on_vector_dirty: Callable[[str], None] | None = None,
+        mark_paths_dirty: Callable[[Iterable[str]], None] | None = None,
     ) -> None:
         self._fts = fts
         self._source_dir = source_dir
-        self._write_lock = write_lock
+        self._file_write_lock = write_lock
         self._chunk_strategy = chunk_strategy
         self._read_only = read_only
         self._exclude_patterns = exclude_patterns
@@ -120,8 +121,7 @@ class DocumentManager:
         self._max_attachment_size_mb = max_attachment_size_mb
         self._max_note_read_bytes = max_note_read_bytes
         self._on_write_callback = on_write_callback or (lambda *_a: None)
-        self._on_vector_update = on_vector_update or (lambda *_a: None)
-        self._on_vector_dirty = on_vector_dirty or (lambda *_a: None)
+        self._mark_paths_dirty = mark_paths_dirty
 
     # ------------------------------------------------------------------
     # Validation helpers
@@ -484,7 +484,7 @@ class DocumentManager:
             ValueError: If *path* escapes the source directory.
         """
         self._check_writable()
-        with self._write_lock:
+        with self._file_write_lock:
             abs_path = self._validate_path(path)
             if if_match is not None:
                 if not abs_path.is_file():
@@ -525,10 +525,8 @@ class DocumentManager:
                 Path(tmp_name).unlink(missing_ok=True)
                 raise
 
-            note = parse_note(abs_path, self._source_dir, self._chunk_strategy)
-            self._fts.upsert_note(note)
-            self._fts.resolve_vault_wikilinks()
-            self._on_vector_update(note)
+            if self._mark_paths_dirty is not None:
+                self._mark_paths_dirty([path])
 
             result = WriteResult(path=path, created=created)
 
@@ -575,7 +573,7 @@ class DocumentManager:
                 size limit (when *skip_size_cap* is ``False``).
         """
         self._check_writable()
-        with self._write_lock:
+        with self._file_write_lock:
             abs_path = self._validate_attachment_path(path)
             if if_match is not None:
                 if not abs_path.is_file():
@@ -702,7 +700,7 @@ class DocumentManager:
                     f"line_start ({line_start}) must be <= line_end ({line_end})"
                 )
 
-        with self._write_lock:
+        with self._file_write_lock:
             abs_path = self._validate_path(path)
             if not abs_path.is_file():
                 raise DocumentNotFoundError(f"Document not found: {path}")
@@ -748,10 +746,8 @@ class DocumentManager:
                 Path(tmp_name).unlink(missing_ok=True)
                 raise
 
-            note = parse_note(abs_path, self._source_dir, self._chunk_strategy)
-            self._fts.upsert_note(note)
-            self._fts.resolve_vault_wikilinks()
-            self._on_vector_update(note)
+            if self._mark_paths_dirty is not None:
+                self._mark_paths_dirty([path])
 
         self._on_write_callback(abs_path, new_content, "edit")
         return EditResult(path=path, replacements=1, match_type=match_type)
@@ -891,7 +887,7 @@ class DocumentManager:
                 allowlist.
         """
         self._check_writable()
-        with self._write_lock:
+        with self._file_write_lock:
             if path.endswith(".md"):
                 abs_path = self._validate_path(path)
                 if not abs_path.is_file():
@@ -903,9 +899,8 @@ class DocumentManager:
                             path, expected=if_match, actual=current_hash
                         )
                 abs_path.unlink()
-                self._fts.delete_by_path(path)
-                self._fts.resolve_vault_wikilinks()
-                self._on_vector_dirty(path)
+                if self._mark_paths_dirty is not None:
+                    self._mark_paths_dirty([path])
             else:
                 abs_path = self._validate_attachment_path(path)
                 if not abs_path.is_file():
@@ -969,7 +964,7 @@ class DocumentManager:
         updated_links = 0
         backlink_callbacks: list[tuple[Path, str]] = []
 
-        with self._write_lock:
+        with self._file_write_lock:
             if old_path.endswith(".md"):
                 old_abs = self._validate_path(old_path)
                 new_abs = self._validate_path(new_path)
@@ -992,21 +987,19 @@ class DocumentManager:
                 new_abs.parent.mkdir(parents=True, exist_ok=True)
                 shutil.move(str(old_abs), str(new_abs))
 
-                self._fts.delete_by_path(old_path)
-
                 note = parse_note(new_abs, self._source_dir, self._chunk_strategy)
-                self._fts.upsert_note(note)
-
-                self._on_vector_dirty(old_path)
-                self._on_vector_dirty(note.path)
 
                 callback_content = new_abs.read_text(encoding="utf-8")
 
-                backlink_callbacks = self._update_backlinks(
+                backlink_callbacks, backlink_paths = self._update_backlinks(
                     old_path, new_path, backlinks
                 )
                 updated_links = len(backlink_callbacks)
-                self._fts.resolve_vault_wikilinks()
+
+                if self._mark_paths_dirty is not None:
+                    dirty: list[str] = [old_path, note.path]
+                    dirty.extend(backlink_paths)
+                    self._mark_paths_dirty(dirty)
             else:
                 old_abs = self._validate_attachment_path(old_path)
                 new_abs = self._validate_attachment_path(new_path)
@@ -1044,17 +1037,17 @@ class DocumentManager:
         old_path: str,
         new_path: str,
         backlinks: list[dict[str, Any]],
-    ) -> list[tuple[Path, str]]:
+    ) -> tuple[list[tuple[Path, str]], list[str]]:
         """Rewrite source files that link to *old_path* to point to *new_path*.
 
-        Called by :meth:`rename` after the file has already been moved on disk
-        and the FTS index updated.  Each source file is read, all of its links
-        to *old_path* are rewritten in a single pass, then written back.
+        Called by :meth:`rename` after the file has already been moved on
+        disk.  Each source file is read, all of its links to *old_path*
+        are rewritten in a single pass, then written back.
 
-        This method must be called while ``_write_lock`` is held.  It does
-        **not** fire write callbacks itself — callers must do so after
-        releasing the lock, using the returned list of ``(abs_path, content)``
-        pairs.
+        This method must be called while ``_file_write_lock`` is held.  It
+        does **not** fire write callbacks or mark paths dirty itself —
+        :meth:`rename` is responsible for both, using the returned
+        ``(callbacks, dirty_paths)`` pair.
 
         Args:
             old_path: Vault-relative path that was renamed (the old location).
@@ -1063,11 +1056,16 @@ class DocumentManager:
                 the rename.
 
         Returns:
-            List of ``(abs_path, new_content)`` pairs for every source
-            document that was successfully rewritten.
+            Tuple ``(callbacks, dirty_paths)``:
+
+            * ``callbacks`` — list of ``(abs_path, new_content)`` pairs for
+              every source document that was successfully rewritten.
+            * ``dirty_paths`` — vault-relative paths of those same source
+              documents, for the caller to feed to
+              ``mark_paths_dirty``.
         """
         if not backlinks:
-            return []
+            return [], []
 
         by_source: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for row in backlinks:
@@ -1077,6 +1075,7 @@ class DocumentManager:
             by_source[new_path] = by_source.pop(old_path)
 
         pending_callbacks: list[tuple[Path, str]] = []
+        dirty_paths: list[str] = []
         for source_path, rows in by_source.items():
             try:
                 source_abs = self._validate_path(source_path)
@@ -1117,12 +1116,8 @@ class DocumentManager:
                 except Exception:
                     Path(tmp_name).unlink(missing_ok=True)
                     raise
-                updated_note = parse_note(
-                    source_abs, self._source_dir, self._chunk_strategy
-                )
-                self._fts.upsert_note(updated_note)
-                self._on_vector_update(updated_note)
                 pending_callbacks.append((source_abs, content))
+                dirty_paths.append(source_path)
             except (
                 OSError,
                 UnicodeDecodeError,
@@ -1141,4 +1136,4 @@ class DocumentManager:
                     exc,
                     exc_info=True,
                 )
-        return pending_callbacks
+        return pending_callbacks, dirty_paths

@@ -40,6 +40,7 @@ from markdown_vault_mcp.utils.text import (
 from markdown_vault_mcp.utils.text import (
     normalize_text as _normalize_text,
 )
+from tests.conftest import wait_for_writer_drain
 
 if TYPE_CHECKING:
     from .conftest import MockEmbeddingProvider
@@ -833,6 +834,7 @@ class TestWrite:
         writable.write(
             "searchable.md", "# Unique Xylophone\n\nRare content for testing.\n"
         )
+        wait_for_writer_drain(writable)
 
         results = writable.search("xylophone", mode="keyword")
         paths = [r.path for r in results]
@@ -873,6 +875,7 @@ class TestWrite:
             "new_semantic.md",
             "# Unique Quantum Entanglement\n\nContent about quantum physics.\n",
         )
+        wait_for_writer_drain(writable_with_embeddings)
 
         results = writable_with_embeddings.search(
             "quantum entanglement", mode="semantic"
@@ -911,6 +914,7 @@ class TestWrite:
             "unicode_note.md",
             "# Unicode Test\n\nCafé naïve résumé \U0001f600\n",
         )
+        wait_for_writer_drain(writable)
 
         results = writable.search("unicode test", mode="keyword")
         paths = [r.path for r in results]
@@ -965,6 +969,7 @@ class TestEdit:
         """Edited content is immediately searchable."""
         writable.write("editable.md", "# Old Title\n\nOld body text.\n")
         writable.edit("editable.md", "Old Title", "New Unique Xylophone Title")
+        wait_for_writer_drain(writable)
 
         results = writable.search("xylophone", mode="keyword")
         paths = [r.path for r in results]
@@ -988,12 +993,14 @@ class TestEdit:
     def test_edit_old_content_removed_from_fts(self, writable: Collection) -> None:
         """edit() removes the old content from FTS; old text is no longer searchable."""
         writable.write("editable_fts.md", "# OldUniqueTitle\n\nOld body text.\n")
+        wait_for_writer_drain(writable)
 
         # Confirm old text is searchable before edit.
         before = writable.search("OldUniqueTitle", mode="keyword")
         assert any(r.path == "editable_fts.md" for r in before)
 
         writable.edit("editable_fts.md", "OldUniqueTitle", "NewReplacedTitle")
+        wait_for_writer_drain(writable)
 
         # Old text must no longer appear in results.
         after_old = writable.search("OldUniqueTitle", mode="keyword")
@@ -1012,6 +1019,7 @@ class TestEdit:
             "original text",
             "quantum mechanics discussion",
         )
+        wait_for_writer_drain(writable_with_embeddings)
 
         results = writable_with_embeddings.search("quantum mechanics", mode="semantic")
         paths = [r.path for r in results]
@@ -1071,6 +1079,7 @@ class TestEdit:
         writable.edit(
             "lines.md", new_text="# Xylophone Title\n", line_start=1, line_end=1
         )
+        wait_for_writer_drain(writable)
         results = writable.search("xylophone", mode="keyword")
         assert any(r.path == "lines.md" for r in results)
 
@@ -1483,6 +1492,7 @@ class TestDelete:
         assert any(r.path == "simple.md" for r in results_before)
 
         writable.delete("simple.md")
+        wait_for_writer_drain(writable)
 
         results_after = writable.search("Simple Document", mode="keyword")
         assert not any(r.path == "simple.md" for r in results_after)
@@ -1513,6 +1523,7 @@ class TestDelete:
         assert any(r.path == "simple.md" for r in before)
 
         writable_with_embeddings.delete("simple.md")
+        wait_for_writer_drain(writable_with_embeddings)
 
         after = writable_with_embeddings.search("simple document", mode="semantic")
         assert not any(r.path == "simple.md" for r in after)
@@ -1532,6 +1543,7 @@ class TestRename:
     def test_rename_updates_search(self, writable: Collection) -> None:
         """After rename, search finds the document at the new path only."""
         writable.rename("simple.md", "moved.md")
+        wait_for_writer_drain(writable)
 
         results = writable.search("Simple Document", mode="keyword")
         paths = [r.path for r in results]
@@ -1576,6 +1588,7 @@ class TestRename:
     def test_rename_folder_updated(self, writable: Collection) -> None:
         """rename() updates the folder derivation after move."""
         writable.rename("simple.md", "new_folder/simple.md")
+        wait_for_writer_drain(writable)
 
         notes = writable.list(folder="new_folder")
         paths = [n.path for n in notes]
@@ -1599,6 +1612,7 @@ class TestRename:
         assert any(r.path == "simple.md" for r in before)
 
         writable.rename("simple.md", "after_rename.md")
+        wait_for_writer_drain(writable)
 
         after = writable.search("Simple Document", mode="keyword")
         assert not any(r.path == "simple.md" for r in after)
@@ -1608,6 +1622,7 @@ class TestRename:
     ) -> None:
         """rename() with embeddings configured indexes the new path, drops the old."""
         writable_with_embeddings.rename("simple.md", "renamed_semantic.md")
+        wait_for_writer_drain(writable_with_embeddings)
 
         after = writable_with_embeddings.search("simple document", mode="semantic")
         paths = [r.path for r in after]
@@ -1641,6 +1656,8 @@ class TestConcurrentWrites:
             futures = [executor.submit(do_write, p) for p in paths]
             for fut in concurrent.futures.as_completed(futures):
                 fut.result()  # re-raise any exception from the thread
+
+        wait_for_writer_drain(writable)
 
         # All 10 files must exist on disk.
         for p in paths:
@@ -3775,7 +3792,14 @@ class TestDeferredEmbeddings:
         tmp_path: Path,
         mock_provider: MockEmbeddingProvider,
     ) -> None:
-        """Dirty documents are re-embedded when semantic_search is called."""
+        """Dirty documents are re-embedded via the writer after a write (#559).
+
+        Pre-#559 the test asserted on ``_index_mgr._dirty_embeddings`` and
+        relied on ``semantic_search`` triggering an inline flush.  Now the
+        single-owner :class:`IndexWriter` owns the vector-dirty set and
+        flushes it as a follow-up job; ``wait_for_writer_drain`` is the
+        observation point.
+        """
         col = Collection(
             source_dir=vault_path,
             embeddings_path=tmp_path / "embeddings",
@@ -3789,15 +3813,17 @@ class TestDeferredEmbeddings:
             "deferred_doc.md",
             "# Deferred Embedding\n\nUniqueContentForTest.\n",
         )
-        # The dirty set should contain this path.
-        assert "deferred_doc.md" in col._index_mgr._dirty_embeddings
 
-        # Semantic search triggers flush.
+        # Drain the writer so FTS update + vector flush both complete.
+        wait_for_writer_drain(col)
+
+        # Semantic search no longer triggers an inline flush; the writer
+        # has already done the work by the time drain returns.
         results = col.search("UniqueContentForTest", mode="semantic")
         paths = [r.path for r in results]
         assert "deferred_doc.md" in paths
-        # Dirty set should now be empty.
-        assert len(col._index_mgr._dirty_embeddings) == 0
+        # Writer's vector-dirty set should be empty after the drain.
+        assert col._writer.get_status()["dirty_embeddings"] == 0
 
     def test_dirty_docs_flushed_on_close(
         self,
@@ -3805,7 +3831,11 @@ class TestDeferredEmbeddings:
         tmp_path: Path,
         mock_provider: MockEmbeddingProvider,
     ) -> None:
-        """Dirty documents are re-embedded when close() is called."""
+        """Dirty documents are re-embedded when close() is called (#559).
+
+        Post-#559 the writer joins on close, so any pending vector work
+        finishes before ``close()`` returns.
+        """
         embeddings_path = tmp_path / "embeddings"
         col = Collection(
             source_dir=vault_path,
@@ -3820,10 +3850,12 @@ class TestDeferredEmbeddings:
             "close_flush.md",
             "# Close Flush\n\nContent to be flushed on close.\n",
         )
-        assert "close_flush.md" in col._index_mgr._dirty_embeddings
 
         col.close()
-        assert len(col._index_mgr._dirty_embeddings) == 0
+        # After close, the writer's queue and dirty sets must be empty.
+        status = col._writer.get_status()
+        assert status["dirty_paths"] == 0
+        assert status["dirty_embeddings"] == 0
 
     def test_git_callback_fires_eventually(self, vault_path: Path) -> None:
         """Git callback fires in the background after write returns."""
@@ -3964,3 +3996,80 @@ def test_collection_search_honours_default_chunks_per_file(tmp_path):
     long_groups = [r for r in results if r.path == "long.md"]
     if long_groups:
         assert len(long_groups[0].sections) <= 2
+
+
+def test_collection_build_index_uses_writer(tmp_path):
+    """Collection.build_index() routes through the IndexWriter."""
+    from markdown_vault_mcp.collection import Collection
+
+    col = Collection(source_dir=tmp_path, read_only=False)
+    try:
+        stats = col.build_index()
+        # IndexWriter is non-None; build_index returned via writer.
+        assert col._writer is not None
+        assert stats is not None
+    finally:
+        col.close()
+
+
+def test_collection_writer_is_started_after_construction(tmp_path):
+    """The IndexWriter is started by Collection construction."""
+    from markdown_vault_mcp.collection import Collection
+
+    col = Collection(source_dir=tmp_path, read_only=False)
+    try:
+        assert col._writer is not None
+        assert col._writer._thread is not None  # thread started
+        assert col._writer._thread.is_alive()
+    finally:
+        col.close()
+
+
+def test_collection_build_index_async_returns_future(tmp_path):
+    from concurrent.futures import Future
+
+    from markdown_vault_mcp.collection import Collection
+
+    col = Collection(source_dir=tmp_path, read_only=False)
+    try:
+        future = col.build_index_async()
+        assert isinstance(future, Future)
+        future.result(timeout=10)
+    finally:
+        col.close()
+
+
+def test_collection_reindex_async_returns_future(tmp_path):
+    from concurrent.futures import Future
+
+    from markdown_vault_mcp.collection import Collection
+
+    col = Collection(source_dir=tmp_path, read_only=False)
+    try:
+        col.build_index()  # required precondition
+        future = col.reindex_async()
+        assert isinstance(future, Future)
+        future.result(timeout=10)
+    finally:
+        col.close()
+
+
+def test_collection_build_embeddings_async_returns_future(tmp_path):
+    from concurrent.futures import Future
+
+    from markdown_vault_mcp.collection import Collection
+    from tests.conftest import MockEmbeddingProvider
+
+    col = Collection(
+        source_dir=tmp_path,
+        read_only=False,
+        embeddings_path=tmp_path / "vec",
+        embedding_provider=MockEmbeddingProvider(),
+    )
+    try:
+        col.build_index()
+        future = col.build_embeddings_async()
+        assert isinstance(future, Future)
+        future.result(timeout=10)
+    finally:
+        col.close()

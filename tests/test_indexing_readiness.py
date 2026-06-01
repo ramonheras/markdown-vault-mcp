@@ -406,3 +406,64 @@ class TestReadinessFlagSemantics:
         with pytest.raises(IndexUnavailableError) as excinfo:
             col.get_backlinks("note.md")
         assert excinfo.value.reason == "never_built"
+
+
+# ---------------------------------------------------------------------------
+# Lifespan: submits jobs and yields immediately (#559)
+# ---------------------------------------------------------------------------
+
+
+def test_lifespan_yields_quickly_on_cold_start(tmp_path: Path) -> None:
+    """Cold-start lifespan yields immediately after submitting BuildIndex (#559).
+
+    The lifespan submits ``BuildIndex`` and (when configured)
+    ``BuildEmbeddings`` jobs to the :class:`IndexWriter` and yields
+    without waiting for completion (true fire-and-forget per spec).
+    This test bounds the handshake on a 50-file cold vault — the
+    yield must complete in well under a second regardless of vault
+    size.  The FTS index is *not* required to be queryable on yield;
+    bucket-3 tools block on ``@needs_queryable`` until the writer
+    drains.
+    """
+    import asyncio
+    import time
+
+    from markdown_vault_mcp._server_deps import make_collection_lifespan
+    from markdown_vault_mcp.config import CollectionConfig
+
+    # Construct a cold vault (many files, no existing DB).
+    for i in range(50):
+        (tmp_path / f"n{i}.md").write_text(f"# n{i}\n\nhello", encoding="utf-8")
+
+    config = CollectionConfig(source_dir=tmp_path, read_only=False)
+    lifespan_fn = make_collection_lifespan(config)
+
+    async def _run() -> None:
+        start = time.monotonic()
+        async with lifespan_fn(None) as ctx:  # type: ignore[arg-type]
+            elapsed = time.monotonic() - start
+            # Fire-and-forget yield must be sub-second even on a cold vault.
+            assert elapsed < 2.0, f"Lifespan took {elapsed:.2f}s to yield"
+            assert ctx["collection"] is not None
+
+    asyncio.run(_run())
+
+
+def test_get_index_status_includes_writer_keys(tmp_path):
+    """get_index_status() returns writer state in addition to legacy keys (#559)."""
+    from markdown_vault_mcp.collection import Collection
+
+    col = Collection(source_dir=tmp_path, read_only=False)
+    try:
+        col.build_index()
+        status = col.get_index_status()
+        assert "status" in status
+        assert "documents_indexed" in status
+        assert "error" in status
+        # New writer keys:
+        assert "queue_depth" in status
+        assert "in_flight" in status
+        assert "dirty_paths" in status
+        assert "dirty_embeddings" in status
+    finally:
+        col.close()
