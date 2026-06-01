@@ -11,6 +11,7 @@ import contextlib
 import datetime
 import logging
 import os
+import re
 import stat
 import subprocess
 import tempfile
@@ -616,8 +617,14 @@ class GitWriteStrategy:
                     self._git_root,
                     path,
                     operation,
-                    commit_name=effective_name,
-                    commit_email=effective_email,
+                    commit_name=self._commit_name,
+                    commit_email=self._commit_email,
+                    author_name=effective_name
+                    if effective_name != self._commit_name
+                    else None,
+                    author_email=effective_email
+                    if effective_email != self._commit_email
+                    else None,
                 )
             if self._enable_push:
                 self._schedule_push()
@@ -2509,12 +2516,29 @@ def git_write_strategy(
     return GitWriteStrategy(token=token, push_delay_s=push_delay_s, git_lfs=git_lfs)
 
 
+_GIT_IDENTITY_UNSAFE = re.compile(r"[\r\n<>]")
+
+
+def _sanitize_git_identity(value: str) -> str:
+    """Strip characters that break git commit-object header parsing.
+
+    Git commit objects use line-based headers; a newline or carriage return in
+    an author/committer field can inject additional header lines.  Angle
+    brackets break the ``Name <email>`` format git expects.  OIDC claim values
+    are user-influenceable at the IdP, so sanitization is required before
+    interpolating them into the ``--author`` string.
+    """
+    return _GIT_IDENTITY_UNSAFE.sub("", value)
+
+
 def _stage_and_commit(
     git_root: Path,
     path: Path,
     operation: Literal["write", "edit", "delete", "rename"],
     commit_name: str = GitWriteStrategy.DEFAULT_COMMIT_NAME,
     commit_email: str = GitWriteStrategy.DEFAULT_COMMIT_EMAIL,
+    author_name: str | None = None,
+    author_email: str | None = None,
 ) -> None:
     """Stage and commit a single file change (no push).
 
@@ -2524,6 +2548,14 @@ def _stage_and_commit(
         operation: The write operation type.
         commit_name: Git committer name (overrides git config).
         commit_email: Git committer email (overrides git config).
+        author_name: Git author name override.  Falls back to *commit_name*
+            when ``None``.  Evaluated independently of *author_email*: when
+            only one field is provided, the other is taken from the committer
+            identity, producing a mixed ``--author`` string.
+        author_email: Git author e-mail override.  Falls back to *commit_email*
+            when ``None``.  Both values are sanitized (``\\r``, ``\\n``,
+            ``<``, ``>`` stripped) before being interpolated into the
+            ``--author`` string to prevent commit-object header injection.
     """
     root = str(git_root)
 
@@ -2588,6 +2620,35 @@ def _stage_and_commit(
 
     commit_msg = f"{operation}: {rel_path}"
 
+    # Build author string when per-request identity differs from committer.
+    # Sanitize both sides of the comparison so a commit_name that itself
+    # contains stripped chars (e.g. angle brackets) doesn't trigger a
+    # spurious --author when no OIDC author is configured, and so a claim
+    # that sanitizes to the same value as the committer is treated as equal.
+    eff_author_name = _sanitize_git_identity(
+        author_name if author_name is not None else commit_name
+    )
+    eff_author_email = _sanitize_git_identity(
+        author_email if author_email is not None else commit_email
+    )
+    san_commit_name = _sanitize_git_identity(commit_name)
+    san_commit_email = _sanitize_git_identity(commit_email)
+    if author_name is not None and eff_author_name != author_name:
+        logger.debug(
+            "git_identity_sanitized field=author_name original=%s sanitized=%s",
+            author_name,
+            eff_author_name,
+        )
+    if author_email is not None and eff_author_email != author_email:
+        logger.debug(
+            "git_identity_sanitized field=author_email original=%s sanitized=%s",
+            author_email,
+            eff_author_email,
+        )
+    author_args: list[str] = []
+    if eff_author_name != san_commit_name or eff_author_email != san_commit_email:
+        author_args = ["--author", f"{eff_author_name} <{eff_author_email}>"]
+
     subprocess.run(
         [
             "git",
@@ -2600,6 +2661,7 @@ def _stage_and_commit(
             "commit",
             "-m",
             commit_msg,
+            *author_args,
         ],
         capture_output=True,
         text=True,
