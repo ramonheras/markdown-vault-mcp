@@ -63,7 +63,7 @@ if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator
     from pathlib import Path
 
-    from markdown_vault_mcp.git import GitWriteStrategy
+    from markdown_vault_mcp.git import GitWriteStrategy, PullResult
     from markdown_vault_mcp.providers import EmbeddingProvider
     from markdown_vault_mcp.vector_index import VectorIndex
 
@@ -420,6 +420,31 @@ class Collection:
             pause_writes=self.pause_writes,
             on_pull=self.reindex,
         )
+
+    def force_pull(self) -> PullResult | None:
+        """Pull from the git remote synchronously.
+
+        Thin public facade over :meth:`GitWriteStrategy.force_pull` used by
+        the GitHub webhook handler so the strategy stays an implementation detail.
+
+        Acquires :meth:`pause_writes` for the duration of the pull so that new
+        MCP writes cannot write to disk while git is modifying the working tree
+        (``git merge --ff-only`` or ``git rebase`` overwrites files in-place).
+        This prevents the race where a write hits disk during the merge and
+        the git checkout then silently discards it.
+
+        Note: writes that have *already* completed (file on disk, callback
+        queued but not yet processed by the background worker) are still subject
+        to a narrower race — see issue #571 for the full fix.
+
+        Returns:
+            :class:`~markdown_vault_mcp.git.PullResult` from the strategy, or
+            ``None`` when no git strategy is configured.
+        """
+        if self._git_strategy is None:
+            return None
+        with self.pause_writes():
+            return self._git_strategy.force_pull()
 
     def stop(self) -> None:
         """Stop background tasks (e.g. git pull loop) without closing the collection.

@@ -257,6 +257,7 @@ Backward compatibility: `MARKDOWN_VAULT_MCP_GIT_TOKEN` without `GIT_REPO_URL` st
 | `MARKDOWN_VAULT_MCP_GIT_COMMIT_NAME_CLAIM` | — | OIDC claim key to use as the commit author name (e.g. `name`); overrides `GIT_COMMIT_NAME` per-request when an OIDC token is present |
 | `MARKDOWN_VAULT_MCP_GIT_COMMIT_EMAIL_CLAIM` | — | OIDC claim key to use as the commit author e-mail (e.g. `email`); overrides `GIT_COMMIT_EMAIL` per-request when an OIDC token is present |
 | `MARKDOWN_VAULT_MCP_GIT_LFS` | `true` | Enable Git LFS — runs `git lfs pull` on startup to fetch LFS-tracked attachments (PDFs, images). Set to `false` for repos without LFS. |
+| `MARKDOWN_VAULT_MCP_GITHUB_WEBHOOK_SECRET` | — | Shared secret for GitHub push-event webhook; when set, mounts `POST /github-webhook` on HTTP/SSE transports to trigger immediate pull + reindex on push events |
 
 ### Attachments
 
