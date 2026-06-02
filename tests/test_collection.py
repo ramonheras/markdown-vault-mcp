@@ -4179,3 +4179,184 @@ def test_build_embeddings_async_failure_recorded_in_status(tmp_path, monkeypatch
         assert "simulated embeddings failure" in status["last_build_embeddings_error"]
     finally:
         col.close()
+
+
+class TestIsDrained:
+    """Tests for Collection.is_drained() (#534)."""
+
+    def test_returns_true_on_idle_writer(self, tmp_path: Path) -> None:
+        from markdown_vault_mcp.collection import Collection
+
+        col = Collection(source_dir=tmp_path, read_only=False)
+        try:
+            col.build_index()
+            assert col.is_drained() is True
+        finally:
+            col.close()
+
+    def test_returns_false_when_dirty_paths_present(self, tmp_path: Path) -> None:
+        from markdown_vault_mcp.collection import Collection
+
+        col = Collection(source_dir=tmp_path, read_only=False)
+        try:
+            col.build_index()
+            col._writer.mark_dirty(["fake.md"])
+            assert col.is_drained() is False
+        finally:
+            col.close()
+
+    def test_returns_false_when_dirty_embeddings_present(self, tmp_path: Path) -> None:
+        from markdown_vault_mcp.collection import Collection
+
+        col = Collection(source_dir=tmp_path, read_only=False)
+        try:
+            col.build_index()
+            col._writer.mark_embedding_dirty(["fake.md"])
+            assert col.is_drained() is False
+        finally:
+            col.close()
+
+    def test_returns_false_during_in_flight_job(self, tmp_path: Path) -> None:
+        import threading
+
+        from markdown_vault_mcp.collection import Collection
+        from markdown_vault_mcp.writer import BuildIndex
+
+        col = Collection(source_dir=tmp_path, read_only=False)
+        try:
+            col.build_index()
+            release = threading.Event()
+            started = threading.Event()
+            original_runner = col._writer._runners["build_index"]
+
+            def _blocking_runner(job, ctx):
+                started.set()
+                release.wait(timeout=5)
+                return original_runner(job, ctx)
+
+            col._writer._runners["build_index"] = _blocking_runner
+            try:
+                fut = col._writer.submit(BuildIndex())
+                started.wait(timeout=5)
+                assert col.is_drained() is False
+            finally:
+                release.set()
+                fut.result(timeout=5)
+        finally:
+            col.close()
+
+
+class TestWriteGeneration:
+    """Tests for Collection.write_generation() (#534)."""
+
+    def test_increments_on_job_completion(self, tmp_path: Path) -> None:
+        from markdown_vault_mcp.collection import Collection
+
+        col = Collection(source_dir=tmp_path, read_only=False)
+        try:
+            col.build_index()
+            gen_before = col.write_generation()
+            # Submit a no-op write (mark + flush dirty paths) so a job
+            # cycle completes through the writer.
+            col._writer.mark_dirty(["sentinel.md"])
+            col._writer.drain_dirty_paths()
+            from markdown_vault_mcp.writer import BuildIndex
+
+            col._writer.submit(BuildIndex()).result(timeout=5)
+            assert col.write_generation() > gen_before
+        finally:
+            col.close()
+
+    def test_monotonic_across_multiple_jobs(self, tmp_path: Path) -> None:
+        from itertools import pairwise
+
+        from markdown_vault_mcp.collection import Collection
+        from markdown_vault_mcp.writer import BuildIndex
+
+        col = Collection(source_dir=tmp_path, read_only=False)
+        try:
+            col.build_index()
+            samples = [col.write_generation()]
+            for _ in range(3):
+                col._writer.submit(BuildIndex()).result(timeout=5)
+                samples.append(col.write_generation())
+            for prev, cur in pairwise(samples):
+                assert cur > prev
+        finally:
+            col.close()
+
+
+class TestWaitForDrain:
+    """Tests for Collection.wait_for_drain() (#534)."""
+
+    def test_returns_true_immediately_when_already_drained(
+        self, tmp_path: Path
+    ) -> None:
+        import time
+
+        from markdown_vault_mcp.collection import Collection
+
+        col = Collection(source_dir=tmp_path, read_only=False)
+        try:
+            col.build_index()
+            start = time.monotonic()
+            drained = col.wait_for_drain(timeout=1.0)
+            elapsed = time.monotonic() - start
+            assert drained is True
+            assert elapsed < 0.2
+        finally:
+            col.close()
+
+    def test_returns_true_after_writer_drains(self, tmp_path: Path) -> None:
+        import threading
+
+        from markdown_vault_mcp.collection import Collection
+        from markdown_vault_mcp.writer import BuildIndex
+
+        col = Collection(source_dir=tmp_path, read_only=False)
+        try:
+            col.build_index()
+            release = threading.Event()
+            started = threading.Event()
+            original_runner = col._writer._runners["build_index"]
+
+            def _blocking_runner(job, ctx):
+                started.set()
+                release.wait(timeout=5)
+                return original_runner(job, ctx)
+
+            col._writer._runners["build_index"] = _blocking_runner
+            fut = col._writer.submit(BuildIndex())
+            started.wait(timeout=5)
+            threading.Timer(0.1, release.set).start()
+            assert col.wait_for_drain(timeout=5.0) is True
+            fut.result(timeout=5)
+        finally:
+            col.close()
+
+    def test_returns_false_on_timeout(self, tmp_path: Path) -> None:
+        import threading
+
+        from markdown_vault_mcp.collection import Collection
+        from markdown_vault_mcp.writer import BuildIndex
+
+        col = Collection(source_dir=tmp_path, read_only=False)
+        try:
+            col.build_index()
+            release = threading.Event()
+            started = threading.Event()
+            original_runner = col._writer._runners["build_index"]
+
+            def _blocking_runner(job, ctx):
+                started.set()
+                release.wait(timeout=5)
+                return original_runner(job, ctx)
+
+            col._writer._runners["build_index"] = _blocking_runner
+            fut = col._writer.submit(BuildIndex())
+            started.wait(timeout=5)
+            assert col.wait_for_drain(timeout=0.1) is False
+            release.set()
+            fut.result(timeout=5)
+        finally:
+            col.close()

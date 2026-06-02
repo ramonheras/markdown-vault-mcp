@@ -11,6 +11,7 @@ import logging
 import queue
 import re
 import threading
+import time
 from concurrent.futures import Future
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -645,6 +646,71 @@ class Collection:
         if self._index_path is None or str(self._index_path) == ":memory:":
             return False
         return not self._fts.is_build_completed()
+
+    def is_drained(self) -> bool:
+        """Return True iff the IndexWriter has no pending or in-flight work.
+
+        Cheap (microsecond-scale). Acquires the writer's per-field
+        ``threading.Lock``s briefly to sample state — not technically
+        non-blocking from an asyncio perspective, but the lock-hold
+        durations are bounded by the writer's own short critical
+        sections. The four indicators (queue depth, in-flight kind,
+        FTS-dirty count, vector-dirty count) are sampled under
+        per-field locks rather than a single cross-field lock, so the
+        writer can transition briefly between sample points.
+
+        Returns:
+            True when ``queue_depth == 0``, ``in_flight is None``, the
+            FTS-dirty set is empty, and the vector-dirty set is empty.
+            Reflects the moment of call only; the writer can transition
+            in or out of "drained" the moment this returns. Callers
+            that need to detect a complete write cycle inside a window
+            should pair this with :meth:`write_generation`.
+        """
+        status = self._writer.get_status()
+        return (
+            status["queue_depth"] == 0
+            and status["in_flight"] is None
+            and status["dirty_paths"] == 0
+            and status["dirty_embeddings"] == 0
+        )
+
+    def write_generation(self) -> int:
+        """Return the writer's monotonic completion counter.
+
+        Increments once per completed job (success or exception).
+        Pair with :meth:`is_drained`: snapshot the counter before and
+        after a read; if it changes, a write cycle completed inside
+        the read window even if :meth:`is_drained` was True at both
+        ends.
+        """
+        return int(self._writer.get_status()["write_generation"])
+
+    def wait_for_drain(self, timeout: float | None = None) -> bool:
+        """Block until :meth:`is_drained` returns True, or until *timeout*.
+
+        Polls writer state every 50ms. Does not hold any lock during the
+        wait; the writer is free to process jobs while a caller waits.
+        Because the deadline is only re-checked after each sleep, the
+        actual maximum wait is ``timeout + 0.05`` seconds.
+
+        Args:
+            timeout: Maximum seconds to wait. ``None`` blocks indefinitely;
+                production callers should always pass a finite timeout.
+
+        Returns:
+            True if the writer drained within the budget; False on
+            timeout. Does not raise on timeout — best-effort semantics
+            so callers can fall through to a stale read.
+        """
+        deadline = None if timeout is None else time.monotonic() + timeout
+        poll_interval = 0.05
+        while True:
+            if self.is_drained():
+                return True
+            if deadline is not None and time.monotonic() >= deadline:
+                return False
+            time.sleep(poll_interval)
 
     def get_index_status(self) -> dict[str, Any]:
         """Return a non-blocking snapshot of background-build state.

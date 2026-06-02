@@ -10,6 +10,7 @@ import asyncio
 import base64
 import ipaddress
 import logging
+import os
 import subprocess
 from dataclasses import asdict
 from typing import TYPE_CHECKING, Any, Literal
@@ -31,6 +32,46 @@ from ._server_deps import get_collection
 from ._server_queryable import needs_queryable
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_drain_timeout() -> float:
+    """Read env var at call time so tests can monkeypatch.setenv it."""
+    return float(os.environ.get("MARKDOWN_VAULT_MCP_DRAIN_TIMEOUT_S", "60"))
+
+
+async def _maybe_wait_for_drain(
+    collection: Collection, wait_for_drain: bool, tool_name: str
+) -> bool:
+    """Wait for the writer to drain when requested. Log on timeout.
+
+    Polls :meth:`Collection.is_drained` directly with ``asyncio.sleep``
+    so concurrent waiters yield to the event loop instead of occupying
+    ``asyncio.to_thread`` slots for the full timeout (would starve the
+    default thread pool at moderate concurrency).
+
+    Returns True when the writer was drained at the point of asking
+    (or when no wait was requested), False when the bounded wait
+    timed out. Callers OR the negation into the response envelope's
+    ``stale`` field so a timed-out wait reliably reports ``stale=True``.
+    """
+    if not wait_for_drain:
+        return True
+    timeout = _resolve_drain_timeout()
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    poll_interval = 0.05
+    while True:
+        if collection.is_drained():
+            return True
+        if loop.time() >= deadline:
+            logger.warning(
+                "wait_for_drain_timeout tool=%s timeout_s=%s",
+                tool_name,
+                timeout,
+            )
+            return False
+        await asyncio.sleep(poll_interval)
+
 
 _ALLOWED_FETCH_SCHEMES = frozenset({"http", "https"})
 
@@ -631,8 +672,9 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
     @needs_queryable()
     async def get_backlinks(
         path: str,
+        wait_for_drain: bool = False,
         collection: Collection = Depends(get_collection),
-    ) -> list[dict[str, Any]]:
+    ) -> dict[str, Any]:
         """Find all documents that link TO the given document (backlinks).
 
         Use this to discover which notes reference a particular document.
@@ -647,16 +689,32 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
         Args:
             path: Relative path of the target document (e.g.
                 "notes/topic.md"). Case-sensitive.
+            wait_for_drain: When True, block until the IndexWriter has
+                no pending or in-flight work before answering. Bounded
+                by MARKDOWN_VAULT_MCP_DRAIN_TIMEOUT_S (default 60s).
+                On timeout, returns the result with `stale=True` rather
+                than raising — best-effort fresh read. Default False
+                returns immediately and reports staleness via the
+                envelope's `stale` field.
 
         Returns:
-            List of dicts, each with:
+            Dict envelope with two keys:
 
-            - source_path (str): Path of the document containing the link.
-            - source_title (str): Title of the source document.
-            - link_text (str): The clickable text of the link.
-            - link_type (str): One of "markdown", "wikilink", or "reference".
-            - fragment (str | None): Heading anchor (e.g. "#section"), or null.
-            - raw_target (str): Literal link target as written in the source.
+            - stale (bool): True when the IndexWriter had pending or
+              in-flight work at any of three observation points (the
+              optional ``wait_for_drain`` timing out, a completed
+              write cycle inside the read window, or non-idle at
+              response construction). False when none of those
+              conditions held — the data is current as of response
+              time.
+            - data (list[dict]): The backlinks list. Each entry has:
+
+              - source_path (str): Path of the document containing the link.
+              - source_title (str): Title of the source document.
+              - link_text (str): The clickable text of the link.
+              - link_type (str): One of "markdown", "wikilink", or "reference".
+              - fragment (str | None): Heading anchor (e.g. "#section"), or null.
+              - raw_target (str): Literal link target as written in the source.
 
         Combine with ``get_similar`` to find connection gaps — notes that are
         semantically close to the target but not yet linked.
@@ -664,8 +722,19 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
         Raises:
             ValueError: If no document exists at the given path.
         """
+        drained_on_request = await _maybe_wait_for_drain(
+            collection, wait_for_drain, "get_backlinks"
+        )
+        gen_before = collection.write_generation()
         results = await asyncio.to_thread(collection.get_backlinks, path)
-        return [asdict(r) for r in results]
+        return {
+            "stale": (
+                (not drained_on_request)
+                or (collection.write_generation() != gen_before)
+                or (not collection.is_drained())
+            ),
+            "data": [asdict(r) for r in results],
+        }
 
     @mcp.tool(
         icons=_TOOL_ICONS["get_outlinks"],
@@ -678,8 +747,9 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
     @needs_queryable()
     async def get_outlinks(
         path: str,
+        wait_for_drain: bool = False,
         collection: Collection = Depends(get_collection),
-    ) -> list[dict[str, Any]]:
+    ) -> dict[str, Any]:
         """Find all links FROM the given document to other documents (outlinks).
 
         Use this to see what a document references. For a full picture of
@@ -692,16 +762,32 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
         Args:
             path: Relative path of the source document (e.g.
                 "notes/topic.md"). Case-sensitive.
+            wait_for_drain: When True, block until the IndexWriter has
+                no pending or in-flight work before answering. Bounded
+                by MARKDOWN_VAULT_MCP_DRAIN_TIMEOUT_S (default 60s).
+                On timeout, returns the result with `stale=True` rather
+                than raising — best-effort fresh read. Default False
+                returns immediately and reports staleness via the
+                envelope's `stale` field.
 
         Returns:
-            List of dicts, each with:
+            Dict envelope with two keys:
 
-            - target_path (str): Path of the linked document.
-            - link_text (str): The clickable text of the link.
-            - link_type (str): One of "markdown", "wikilink", or "reference".
-            - fragment (str | None): Heading anchor (e.g. "#section"), or null.
-            - raw_target (str): Literal link target as written in the source.
-            - exists (bool): True if the target document is indexed.
+            - stale (bool): True when the IndexWriter had pending or
+              in-flight work at any of three observation points (the
+              optional ``wait_for_drain`` timing out, a completed
+              write cycle inside the read window, or non-idle at
+              response construction). False when none of those
+              conditions held — the data is current as of response
+              time.
+            - data (list[dict]): The outlinks list. Each entry has:
+
+              - target_path (str): Path of the linked document.
+              - link_text (str): The clickable text of the link.
+              - link_type (str): One of "markdown", "wikilink", or "reference".
+              - fragment (str | None): Heading anchor (e.g. "#section"), or null.
+              - raw_target (str): Literal link target as written in the source.
+              - exists (bool): True if the target document is indexed.
 
         Combine with ``get_similar`` to find connection gaps — notes the
         source is semantically close to but hasn't linked yet.
@@ -709,8 +795,19 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
         Raises:
             ValueError: If no document exists at the given path.
         """
+        drained_on_request = await _maybe_wait_for_drain(
+            collection, wait_for_drain, "get_outlinks"
+        )
+        gen_before = collection.write_generation()
         results = await asyncio.to_thread(collection.get_outlinks, path)
-        return [asdict(r) for r in results]
+        return {
+            "stale": (
+                (not drained_on_request)
+                or (collection.write_generation() != gen_before)
+                or (not collection.is_drained())
+            ),
+            "data": [asdict(r) for r in results],
+        }
 
     @mcp.tool(
         icons=_TOOL_ICONS["get_broken_links"],
@@ -767,16 +864,18 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
         path: str,
         limit: int = 10,
         chunks_per_file: int | None = None,
+        wait_for_drain: bool = False,
         collection: Collection = Depends(get_collection),
-    ) -> list[dict[str, Any]]:
+    ) -> dict[str, Any]:
         """Find notes most semantically similar to the given document.
 
         Uses stored embedding vectors — no re-embedding needed. The
         reference document is excluded from results. Requires semantic
         search to be configured (check 'stats' for
-        semantic_search_available). Returns an empty list if embeddings
-        are not configured (check 'embeddings_status') or the document has
-        no stored vectors (call 'build_embeddings' to embed missing chunks).
+        semantic_search_available). The envelope's ``data`` field is an
+        empty list if embeddings are not configured (check
+        'embeddings_status') or the document has no stored vectors (call
+        'build_embeddings' to embed missing chunks).
 
         Args:
             path: Relative path of the reference document (e.g.
@@ -784,23 +883,37 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
             limit: Maximum number of similar notes to return (default 10).
             chunks_per_file: Maximum sections returned per file (default 2).
                 Set to 1 for one best section per file.  Must be >= 1.
+            wait_for_drain: When True, block until the IndexWriter has
+                no pending or in-flight work before answering. Bounded
+                by MARKDOWN_VAULT_MCP_DRAIN_TIMEOUT_S (default 60s).
+                On timeout, returns the result with `stale=True` rather
+                than raising — best-effort fresh read. Default False
+                returns immediately and reports staleness via the
+                envelope's `stale` field.
 
         Returns:
-            List of result dicts ranked by file similarity. Each contains:
+            Dict envelope with two keys:
 
-            - path (str): Relative path of the similar document.
-            - title (str): Document title.
-            - folder (str): Parent folder path.
-            - score (float): File-level cosine similarity (max of section
-              scores), 0.0-1.0; higher = more similar.
-            - search_type (str): Always "semantic".
-            - frontmatter (dict): Parsed YAML frontmatter.
-            - sections (list[dict]): Up to chunks_per_file best-matching
-              sections, each with:
+            - stale (bool): True when the IndexWriter had pending or
+              in-flight work at any of three observation points (wait
+              timed out, write completed inside the read window, or
+              non-idle at response time). False otherwise.
+            - data (list[dict]): Result dicts ranked by file similarity.
+              Each entry contains:
 
-              - heading (str | None): Section heading or null for intro.
-              - content (str): Matched chunk text.
-              - score (float): Chunk-level score for this section.
+              - path (str): Relative path of the similar document.
+              - title (str): Document title.
+              - folder (str): Parent folder path.
+              - score (float): File-level cosine similarity (max of section
+                scores), 0.0-1.0; higher = more similar.
+              - search_type (str): Always "semantic".
+              - frontmatter (dict): Parsed YAML frontmatter.
+              - sections (list[dict]): Up to chunks_per_file best-matching
+                sections, each with:
+
+                - heading (str | None): Section heading or null for intro.
+                - content (str): Matched chunk text.
+                - score (float): Chunk-level score for this section.
 
         Useful for finding link candidates that aren't yet wikilinked — the
         vault's organic graph is almost always denser than its explicit one.
@@ -809,13 +922,24 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
         Raises:
             ValueError: If no document exists at the given path.
         """
+        drained_on_request = await _maybe_wait_for_drain(
+            collection, wait_for_drain, "get_similar"
+        )
+        gen_before = collection.write_generation()
         results = await asyncio.to_thread(
             collection.get_similar,
             path,
             limit=limit,
             chunks_per_file=chunks_per_file,
         )
-        return [asdict(r) for r in results]
+        return {
+            "stale": (
+                (not drained_on_request)
+                or (collection.write_generation() != gen_before)
+                or (not collection.is_drained())
+            ),
+            "data": [asdict(r) for r in results],
+        }
 
     # --- Recently modified ---
 
@@ -868,6 +992,7 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
         path: str,
         similar_limit: int = 5,
         link_limit: int = 10,
+        wait_for_drain: bool = False,
         collection: Collection = Depends(get_collection),
     ) -> dict[str, Any]:
         """Get a consolidated context dossier for a document.
@@ -891,53 +1016,66 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
                 are not configured).
             link_limit: Maximum number of backlinks and outlinks to include
                 each (default 10).
+            wait_for_drain: When True, block until the IndexWriter has
+                no pending or in-flight work before answering. Bounded
+                by MARKDOWN_VAULT_MCP_DRAIN_TIMEOUT_S (default 60s).
+                On timeout, returns the result with `stale=True` rather
+                than raising — best-effort fresh read. Default False
+                returns immediately and reports staleness via the
+                envelope's `stale` field.
 
         Returns:
-            Dict with the following fields:
+            Dict envelope with two keys:
 
-            - path (str): Relative path of the document.
-            - title (str): Document title.
-            - folder (str): Parent folder path.
-            - frontmatter (dict): Parsed YAML frontmatter.
-            - modified_at (float): Unix timestamp of last modification.
-            - backlinks (list): Documents linking to this note. List of dicts,
-              each with:
+            - stale (bool): True when the IndexWriter had pending or
+              in-flight work at any of three observation points (wait
+              timed out, write completed inside the read window, or
+              non-idle at response time). False otherwise.
+            - data (dict): The note context. Inner fields:
 
-              - source_path (str): Path of the document containing the link.
-              - source_title (str): Title of the source document.
-              - link_text (str): The clickable text of the link.
-              - link_type (str): One of "markdown", "wikilink", or "reference".
-              - fragment (str | None): Heading anchor (e.g. "#section"), or null.
-              - raw_target (str): Literal link target as written in the source.
-
-            - outlinks (list): Links from this note. List of dicts, each with:
-
-              - target_path (str): Path of the linked document.
-              - link_text (str): The clickable text of the link.
-              - link_type (str): One of "markdown", "wikilink", or "reference".
-              - fragment (str | None): Heading anchor (e.g. "#section"), or null.
-              - raw_target (str): Literal link target as written in the source.
-              - exists (bool): True if the target document is indexed.
-
-            - similar (list): Semantically similar notes, field-collapsed by
-              file (chunks_per_file=1 for compact dossiers).  List of dicts,
-              each with:
-
-              - path (str): Relative path of the similar document.
+              - path (str): Relative path of the document.
               - title (str): Document title.
               - folder (str): Parent folder path.
-              - score (float): File-level cosine similarity 0.0-1.0 = score
-                of the best matching section.
-              - search_type (str): Always "semantic".
               - frontmatter (dict): Parsed YAML frontmatter.
-              - sections (list): Single best-matching section, each with
-                heading (str|null), content (str), score (float).
-                Call get_similar(path, chunks_per_file=N) for more sections.
+              - modified_at (float): Unix timestamp of last modification.
+              - backlinks (list): Documents linking to this note. List of dicts,
+                each with:
 
-            - folder_notes (list[str]): Paths of other notes in the same
-              folder (up to 20). Plain strings, not dicts.
-            - tags (dict[str, list[str]]): Indexed frontmatter field →
-              distinct values for this note.
+                - source_path (str): Path of the document containing the link.
+                - source_title (str): Title of the source document.
+                - link_text (str): The clickable text of the link.
+                - link_type (str): One of "markdown", "wikilink", or "reference".
+                - fragment (str | None): Heading anchor (e.g. "#section"), or null.
+                - raw_target (str): Literal link target as written in the source.
+
+              - outlinks (list): Links from this note. List of dicts, each with:
+
+                - target_path (str): Path of the linked document.
+                - link_text (str): The clickable text of the link.
+                - link_type (str): One of "markdown", "wikilink", or "reference".
+                - fragment (str | None): Heading anchor (e.g. "#section"), or null.
+                - raw_target (str): Literal link target as written in the source.
+                - exists (bool): True if the target document is indexed.
+
+              - similar (list): Semantically similar notes, field-collapsed by
+                file (chunks_per_file=1 for compact dossiers).  List of dicts,
+                each with:
+
+                - path (str): Relative path of the similar document.
+                - title (str): Document title.
+                - folder (str): Parent folder path.
+                - score (float): File-level cosine similarity 0.0-1.0 = score
+                  of the best matching section.
+                - search_type (str): Always "semantic".
+                - frontmatter (dict): Parsed YAML frontmatter.
+                - sections (list): Single best-matching section, each with
+                  heading (str|null), content (str), score (float).
+                  Call get_similar(path, chunks_per_file=N) for more sections.
+
+              - folder_notes (list[str]): Paths of other notes in the same
+                folder (up to 20). Plain strings, not dicts.
+              - tags (dict[str, list[str]]): Indexed frontmatter field →
+                distinct values for this note.
 
         The ``similar`` field in the response surfaces notes that may warrant
         explicit links to the context note but don't yet — a common input to
@@ -946,13 +1084,24 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
         Raises:
             ValueError: If no document exists at the given path.
         """
+        drained_on_request = await _maybe_wait_for_drain(
+            collection, wait_for_drain, "get_context"
+        )
+        gen_before = collection.write_generation()
         result = await asyncio.to_thread(
             collection.get_context,
             path,
             similar_limit=similar_limit,
             link_limit=link_limit,
         )
-        return asdict(result)
+        return {
+            "stale": (
+                (not drained_on_request)
+                or (collection.write_generation() != gen_before)
+                or (not collection.is_drained())
+            ),
+            "data": asdict(result),
+        }
 
     @mcp.tool(
         icons=_TOOL_ICONS["get_orphan_notes"],
@@ -1030,6 +1179,7 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
         source: str,
         target: str,
         max_depth: int = 10,
+        wait_for_drain: bool = False,
         collection: Collection = Depends(get_collection),
     ) -> dict[str, Any]:
         """Find the shortest connection path between two notes in the link graph.
@@ -1045,23 +1195,49 @@ def register_tools(mcp: FastMCP, *, transport: str = "stdio") -> None:
             source: Vault-relative path of the starting note (e.g. 'Ideas/spark.md').
             target: Vault-relative path of the destination note.
             max_depth: Maximum number of hops to search. Default 10, max 10.
+            wait_for_drain: When True, block until the IndexWriter has
+                no pending or in-flight work before answering. Bounded
+                by MARKDOWN_VAULT_MCP_DRAIN_TIMEOUT_S (default 60s).
+                On timeout, returns the result with `stale=True` rather
+                than raising — best-effort fresh read. Default False
+                returns immediately and reports staleness via the
+                envelope's `stale` field.
 
         Returns:
-            A dict with the following fields:
+            Dict envelope with two keys:
 
-            - `found` (bool): Whether a path was found within `max_depth` hops.
-            - `path` (list[str]): Ordered list of note paths from source to target,
-              or an empty list if not found.
-            - `hops` (int): Number of edges in the path (`len(path) - 1`), or -1 if
-              not found.
+            - stale (bool): True when the IndexWriter had pending or
+              in-flight work at any of three observation points (wait
+              timed out, write completed inside the read window, or
+              non-idle at response time). False otherwise.
+            - data (dict): The connection-path result. Inner fields:
+
+              - `found` (bool): Whether a path was found within `max_depth` hops.
+              - `path` (list[str]): Ordered list of note paths from source to target,
+                or an empty list if not found.
+              - `hops` (int): Number of edges in the path (`len(path) - 1`), or -1 if
+                not found.
         """
+        drained_on_request = await _maybe_wait_for_drain(
+            collection, wait_for_drain, "get_connection_path"
+        )
+        gen_before = collection.write_generation()
         result: list[str] | None = await asyncio.to_thread(
             collection.get_connection_path, source, target, max_depth
         )
 
         if result is None:
-            return {"found": False, "path": [], "hops": -1}
-        return {"found": True, "path": result, "hops": len(result) - 1}
+            inner: dict[str, Any] = {"found": False, "path": [], "hops": -1}
+        else:
+            inner = {"found": True, "path": result, "hops": len(result) - 1}
+        return {
+            "stale": (
+                (not drained_on_request)
+                or (collection.write_generation() != gen_before)
+                or (not collection.is_drained())
+            ),
+            "data": inner,
+        }
 
     # --- Git history tools ---
 

@@ -563,6 +563,37 @@ See `docs/superpowers/specs/2026-05-31-issue-559-single-writer-for-indexes-desig
 for the full design rationale, including the cascade of #513 / #519
 prerequisites that motivated centralising mutations on a single writer.
 
+#### Drift signals on B3 readers (#534)
+
+B3 MCP tools (`get_backlinks`, `get_outlinks`, `get_similar`,
+`get_context`, `get_connection_path`) wrap their response in a
+`{"stale": bool, "data": ...}` envelope. `stale` is the OR of three
+signals: the optional `wait_for_drain` timed out (writer never went
+idle within the budget), the writer's monotonic `write_generation`
+counter advanced during the read (a write cycle completed inside the
+read window), or `is_drained()` reports a non-idle writer at
+response-construction time (a write is in flight). The
+`write_generation` counter — incremented under `_in_flight_lock`
+once per completed job — closes the case the pre/post `is_drained()`
+pair could not detect: a write that started and finished entirely
+between two snapshots.
+
+Each B3 tool accepts an optional `wait_for_drain: bool = false`
+parameter. When `true`, the tool layer polls `Collection.is_drained()`
+with `asyncio.sleep` until the writer drains or
+`MARKDOWN_VAULT_MCP_DRAIN_TIMEOUT_S` (default 60s) elapses, then
+runs the query. On timeout the tool returns the result with
+`stale=true` rather than raising — best-effort fresh-read
+semantics. (`Collection.wait_for_drain()` is the synchronous
+counterpart for in-process callers.)
+
+The drift signal reflects writer-internal state only: paths in
+`dirty_paths`, paths in `dirty_embeddings`, the in-flight job
+kind, and the queue depth. **External file changes on disk** —
+files modified outside the MCP server with no `write` tool call
+and no git pull — are not covered by this signal; that drift mode
+is tracked separately in #558.
+
 #### Collection thread-safety contract (issue #519)
 
 Every public method on `Collection`, `FTSIndex`, and the managers is safe
