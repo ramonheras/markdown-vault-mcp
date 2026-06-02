@@ -118,6 +118,50 @@ def make_collection_lifespan(config: CollectionConfig) -> Any:
         # Start any other background tasks (e.g. git pull loop).
         collection.start()
 
+        # File watcher — only when git pull and webhook are both inactive so the
+        # watcher and git checkout don't race to trigger reindex (#558).
+        from markdown_vault_mcp._file_watcher import (
+            VaultFileWatcher,
+            should_start_file_watcher,
+        )
+        from markdown_vault_mcp.exceptions import IndexUnavailableError
+
+        # Use the *resolved* pull interval from kwargs, not config.git_pull_interval_s:
+        # the config default is 600 even on non-git vaults, but to_collection_kwargs()
+        # only passes a non-zero interval through when a git strategy is configured.
+        git_pull_active = kwargs.get("git_pull_interval_s", 0) > 0
+
+        file_watcher = None
+        if should_start_file_watcher(
+            config.file_watcher_enabled,
+            git_pull_active,
+            config.github_webhook_secret,
+        ):
+
+            def _on_file_change() -> None:
+                try:
+                    with collection.pause_writes():
+                        collection.reindex()
+                except IndexUnavailableError:
+                    logger.info(
+                        "file_watcher: index not yet queryable, skipping reindex"
+                    )
+                except Exception:
+                    logger.error("file_watcher: reindex failed", exc_info=True)
+
+            file_watcher = VaultFileWatcher(
+                config.source_dir,
+                _on_file_change,
+                debounce_s=config.file_watcher_debounce_s,
+            )
+            file_watcher.start()
+        elif not config.file_watcher_enabled:
+            logger.debug("file_watcher: disabled via FILE_WATCHER=false")
+        else:
+            logger.info(
+                "file_watcher: disabled — git pull loop / webhook handles reindex cadence"
+            )
+
         # Artifact store singleton is wired in make_server(), not here —
         # the HTTP route captures the store at server-construction time and
         # tool handlers reach it via get_artifact_store().  Tokens carry
@@ -127,6 +171,8 @@ def make_collection_lifespan(config: CollectionConfig) -> Any:
         try:
             yield {"collection": collection, "config": config}
         finally:
+            if file_watcher is not None:
+                file_watcher.stop()
             # Clear the singleton before closing so any in-flight HTTP handler
             # gets a clean RuntimeError instead of touching a Collection
             # mid-close().
