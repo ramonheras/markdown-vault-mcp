@@ -28,6 +28,7 @@ from markdown_vault_mcp.config_sections import (
     IndexingConfig,
     SearchConfig,
     SyncConfig,
+    TransferConfig,
 )
 from markdown_vault_mcp.git import GitWriteStrategy
 
@@ -47,6 +48,24 @@ def _env(name: str, default: str | None = None) -> str | None:
     return _core_env(_ENV_PREFIX, name, default=default)
 
 
+def _parse_int_env(name: str, default: int) -> int:
+    """Read an integer env var, falling back to *default* on absence/parse error."""
+    raw = (_env(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        full_name = f"{_ENV_PREFIX}_{name}"
+        logger.warning(
+            "load_config: invalid %s=%r, using default %s",
+            full_name,
+            raw,
+            default,
+        )
+        return default
+
+
 @dataclass
 class VaultConfig:
     """Configuration for a :class:`~markdown_vault_mcp.vault.Vault`.
@@ -64,6 +83,7 @@ class VaultConfig:
         search: Search ranking and snippet-truncation knobs.
         sync: File-watcher and GitHub-webhook settings.
         content: Attachment/note-read limits and template/prompt folder paths.
+        transfer: One-time upload/download transfer-link TTL and size settings.
         server: Shared server-level configuration (transport, host/port,
             auth, base URL, event store URL, MCP App domain) populated
             from ``MARKDOWN_VAULT_MCP_*`` env vars by
@@ -86,6 +106,7 @@ class VaultConfig:
     search: SearchConfig = field(default_factory=SearchConfig)
     sync: SyncConfig = field(default_factory=SyncConfig)
     content: ContentConfig = field(default_factory=ContentConfig)
+    transfer: TransferConfig = field(default_factory=TransferConfig)
     # CONFIG-FIELDS-END
 
     # Universal server fields delegated to fastmcp_pvl_core.ServerConfig.
@@ -293,6 +314,15 @@ def load_config() -> VaultConfig:
       ``"BAAI/bge-small-en-v1.5"``.
     - ``MARKDOWN_VAULT_MCP_FASTEMBED_CACHE_DIR``: FastEmbed model cache
       directory; default ``None``.
+
+    **Transfer links:**
+
+    - ``MARKDOWN_VAULT_MCP_TRANSFER_TTL_DEFAULT_S``: token lifetime when the
+      caller omits one; default ``3600`` (1 hour).
+    - ``MARKDOWN_VAULT_MCP_TRANSFER_TTL_MAX_S``: ceiling a requested TTL is
+      clamped to; default ``86400`` (24 hours).
+    - ``MARKDOWN_VAULT_MCP_TRANSFER_MAX_UPLOAD_BYTES``: per-upload size cap in
+      bytes; default ``104857600`` (100 MiB).
 
     Transport and auth variables (``TRANSPORT``, ``HOST``, ``PORT``,
     ``BASE_URL``, ``AUTH_MODE``, ``OIDC_*``, ``BEARER_TOKEN``,
@@ -654,6 +684,15 @@ def load_config() -> VaultConfig:
         raise ValueError(f"max_chunk_words must be >= 1, got {max_chunk_words}")
     logger.debug("load_config: max_chunk_words=%s", max_chunk_words)
 
+    transfer_ttl_default_s = _parse_int_env("TRANSFER_TTL_DEFAULT_S", 3600)
+    transfer_ttl_max_s = _parse_int_env("TRANSFER_TTL_MAX_S", 86400)
+    transfer_max_upload_bytes = _parse_int_env("TRANSFER_MAX_UPLOAD_BYTES", 104857600)
+    transfer = TransferConfig(
+        ttl_default_s=transfer_ttl_default_s,
+        ttl_max_s=transfer_ttl_max_s,
+        max_upload_bytes=transfer_max_upload_bytes,
+    )
+
     return VaultConfig(
         # CONFIG-FROM-ENV-START — domain fields populated from env; kept across copier update
         source_dir=source_dir,
@@ -709,6 +748,7 @@ def load_config() -> VaultConfig:
             templates_folder=templates_folder,
             prompts_folder=prompts_folder,
         ),
+        transfer=transfer,
         # CONFIG-FROM-ENV-END
         server=ServerConfig.from_env(_ENV_PREFIX),
     )
