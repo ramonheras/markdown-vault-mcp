@@ -28,6 +28,25 @@ logger = logging.getLogger(__name__)
 # may need to reduce this value significantly — see issue #306.
 _FASTEMBED_ONNX_BATCH_SIZE = 32
 
+# FastEmbed's model registry exposes only `dim`, not context length, so we
+# carry a small table for the models we default to / commonly use. Unknown
+# models return None and fall back to a conservative chunk cap.
+_FASTEMBED_CONTEXT_LENGTHS: dict[str, int] = {
+    "BAAI/bge-small-en-v1.5": 512,
+    "BAAI/bge-base-en-v1.5": 512,
+    "nomic-ai/nomic-embed-text-v1.5": 8192,
+    "jinaai/jina-embeddings-v2-base-en": 8192,
+}
+
+# OpenAI's embeddings API does not report a model's context length, so we
+# carry a table for the supported models. Unknown models return None and
+# fall back to a conservative chunk cap.
+_OPENAI_CONTEXT_LENGTHS: dict[str, int] = {
+    "text-embedding-3-small": 8191,
+    "text-embedding-3-large": 8191,
+    "text-embedding-ada-002": 8191,
+}
+
 
 class EmbeddingProvider(ABC):
     """Abstract base class for embedding providers."""
@@ -66,6 +85,18 @@ class EmbeddingProvider(ABC):
         """Stable model identifier for index compatibility metadata."""
         ...
 
+    @property
+    @abstractmethod
+    def context_length(self) -> int | None:
+        """Maximum input length the model accepts, in tokens.
+
+        Returns None when the limit cannot be determined; callers fall back
+        to a conservative default. Used to derive a conservative chunker char
+        cap that keeps chunks comfortably under the model's token limit (a
+        token-dense batch that still exceeds it is skipped at embed time).
+        """
+        ...
+
 
 class OllamaProvider(EmbeddingProvider):
     """Embedding provider backed by the Ollama REST API.
@@ -101,6 +132,8 @@ class OllamaProvider(EmbeddingProvider):
         self._model = model
         self._cpu_only = cpu_only
         self._dimension: int | None = None
+        self._context_length: int | None = None
+        self._context_queried = False
 
         logger.debug(
             "OllamaProvider initialised: host=%s model=%s cpu_only=%s",
@@ -170,6 +203,60 @@ class OllamaProvider(EmbeddingProvider):
     @property
     def model_name(self) -> str:
         return self._model
+
+    @property
+    def context_length(self) -> int | None:
+        """Query /api/show once for the model's context length; cache it.
+
+        Returns None if the query fails or the field is absent. The result
+        (including ``None`` on failure) is cached permanently for the provider
+        instance — a transiently-unreachable Ollama at startup is not retried,
+        so the conservative fallback cap persists until the server restarts.
+        """
+        if self._context_queried:
+            return self._context_length
+        self._context_queried = True
+        try:
+            with self._httpx.Client() as client:
+                resp = client.post(
+                    f"{self._host}/api/show",
+                    json={"model": self._model},
+                    timeout=10.0,
+                )
+            if resp.status_code != 200:
+                logger.warning(
+                    "ollama_context_length_unavailable model=%s status=%s",
+                    self._model,
+                    resp.status_code,
+                )
+                return None
+            data = resp.json()
+            info = data.get("model_info", {}) if isinstance(data, dict) else None
+            if not isinstance(info, dict):
+                # A well-behaved Ollama returns an object whose model_info is an
+                # object; a proxy/error page (or a malformed model_info) could
+                # be a list or string, on which .get()/.items() would raise an
+                # uncaught AttributeError and crash startup.
+                logger.warning("ollama_context_length_absent model=%s", self._model)
+                return None
+            for key, value in info.items():
+                if key.endswith(".context_length") and isinstance(value, int):
+                    self._context_length = value
+                    return value
+            logger.warning("ollama_context_length_absent model=%s", self._model)
+            return None
+        except (self._httpx.HTTPError, ValueError) as exc:
+            # httpx network/timeout errors (ConnectError, TimeoutException, ...)
+            # subclass httpx.HTTPError, NOT OSError; a malformed body raises
+            # JSONDecodeError (a ValueError). Catching both keeps an unreachable
+            # Ollama at startup from crashing config construction (config.py
+            # reads this eagerly to derive the chunk char cap).
+            logger.warning(
+                "ollama_context_length_query_failed model=%s err=%s",
+                self._model,
+                exc,
+            )
+            return None
 
 
 class OpenAIProvider(EmbeddingProvider):
@@ -294,6 +381,15 @@ class OpenAIProvider(EmbeddingProvider):
     def model_name(self) -> str:
         return self._model
 
+    @property
+    def context_length(self) -> int | None:
+        """Return the model's context length from the known-model table.
+
+        Returns None for models absent from the table; callers fall back to a
+        conservative chunk cap.
+        """
+        return _OPENAI_CONTEXT_LENGTHS.get(self._model)
+
 
 class FastEmbedProvider(EmbeddingProvider):
     """Embedding provider backed by the local fastembed library.
@@ -381,6 +477,15 @@ class FastEmbedProvider(EmbeddingProvider):
     @property
     def model_name(self) -> str:
         return self._model_name
+
+    @property
+    def context_length(self) -> int | None:
+        """Return the model's context length from the known-model table.
+
+        Returns None for models absent from the table; callers fall back to a
+        conservative chunk cap.
+        """
+        return _FASTEMBED_CONTEXT_LENGTHS.get(self._model_name)
 
 
 def get_embedding_provider(config: VaultConfig) -> EmbeddingProvider:

@@ -384,6 +384,26 @@ Two methods manage the index:
   after the scan — but only when a scan actually runs (i.e. on a cold
   index or with `force=True`); a warm-restart short-circuit does not
   apply config changes.
+
+  **Chunking-provenance invalidation (issue #649)**: the chunker is shared
+  by FTS and embeddings, and its per-chunk character cap is derived from the
+  embedding model — so a change to the embedding model (or to an explicit
+  `max_chunk_chars` override) changes FTS chunk boundaries, not just
+  embeddings. Each clean build records the two **stable inputs** to the
+  derived cap — the embedding `model_name` and the explicit operator
+  `max_chunk_chars` override (`None` when the cap was derived from the model
+  context) — in the FTS `meta` table (`embed_model_name` /
+  `max_chunk_chars_override` rows). The runtime-derived cap itself is
+  deliberately **not** recorded. On restart the warm-restart short-circuit
+  additionally requires these stored values to match the current config
+  (`IndexWriteCoordinator._chunking_meta_matches`); a model or override
+  change rejects the short-circuit, so the existing #513 cold-start path
+  runs a full background FTS rebuild followed by embeddings — no manual
+  `reindex` is needed. Because only the stable inputs are compared, a
+  *transient* model-context read (e.g. the Ollama instance briefly
+  unreachable at startup, so its context length reads as `None` and the cap
+  falls back to a conservative default) changes neither key and so does
+  **not** force a rebuild, avoiding flap.
 - **`reindex()`**: incremental update. Uses `ChangeTracker` to detect
   adds/modifies/deletes since the last scan and applies only the delta.
   Applies `exclude_patterns` filtering and purges stale excluded documents.

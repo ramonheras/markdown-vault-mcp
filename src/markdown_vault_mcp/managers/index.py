@@ -60,6 +60,14 @@ class IndexManager:
             :class:`~markdown_vault_mcp.vector_index.VectorIndex` (or
             ``None``).
         set_vectors: Callback to set the vector index on the owner.
+        embed_model_name: Embedding model name in force at build time, or
+            ``None`` when no provider is configured. Recorded into FTS meta
+            after a successful build so a later warm-restart can detect a
+            model change (#649).
+        max_chunk_chars_override: The explicit operator char-cap override in
+            force at build time, or ``None`` when the cap was derived from the
+            model context. Recorded into FTS meta alongside the model as a
+            stable warm-restart key (#649).
     """
 
     def __init__(
@@ -76,6 +84,8 @@ class IndexManager:
         indexed_frontmatter_fields: list[str] | None = None,
         get_vectors: Callable[[], VectorIndex | None],
         set_vectors: Callable[[VectorIndex | None], None],
+        embed_model_name: str | None = None,
+        max_chunk_chars_override: int | None = None,
     ) -> None:
         self._fts = fts
         self._tracker = tracker
@@ -88,6 +98,12 @@ class IndexManager:
         self._indexed_frontmatter_fields: list[str] = indexed_frontmatter_fields or []
         self._get_vectors = get_vectors
         self._set_vectors = set_vectors
+        # Chunking provenance recorded into FTS meta after a successful build
+        # (#649): the shared chunker's char cap derives from the embedding
+        # model (or an explicit override), so a change to either stable input
+        # invalidates FTS chunk boundaries.
+        self._embed_model_name = embed_model_name
+        self._max_chunk_chars_override = max_chunk_chars_override
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -266,6 +282,15 @@ class IndexManager:
                 total_chunks,
                 skipped,
             )
+
+        # Record the embedding model + explicit override so a later warm
+        # restart can reject the short-circuit on a model/override change
+        # (#649). Paired with the completeness sentinel the coordinator sets
+        # after this returns.
+        self._fts.set_chunking_meta(
+            model=self._embed_model_name,
+            max_chunk_chars_override=self._max_chunk_chars_override,
+        )
         return IndexStats(
             documents_indexed=len(notes) - errored,
             chunks_indexed=total_chunks,
@@ -443,7 +468,12 @@ class IndexManager:
                 already exists on disk.
 
         Returns:
-            Total number of chunks embedded.
+            Number of chunks successfully embedded. Any provider exception on
+            a batch (a token-context rejection being the motivating case, but
+            also transient API/network errors) is logged and the batch
+            skipped, so this may be less than the total number of chunks
+            attempted; if every batch is skipped, ``0`` is returned and no
+            vectors are saved.
 
         Raises:
             ValueError: If ``embedding_provider`` or ``embeddings_path`` is
@@ -519,9 +549,29 @@ class IndexManager:
         # without thousands of lines per build (#311).
         started = time.monotonic()
         last_decile = 0
+        # A batch that exceeds the model's token context (e.g. a strict
+        # provider returning HTTP 400) is logged and skipped rather than
+        # aborting the whole build; ``embedded`` tracks chunks actually
+        # vectorised, while decile progress runs over attempted chunks (#649).
+        embedded = 0
         for start in range(0, total, _EMBEDDING_BATCH_SIZE):
             end = min(start + _EMBEDDING_BATCH_SIZE, total)
-            vectors.add(texts[start:end], meta[start:end])
+            try:
+                vectors.add(texts[start:end], meta[start:end])
+                embedded += end - start
+            except Exception as exc:
+                # Broad by design: providers raise heterogeneous types for an
+                # oversized batch (RuntimeError, httpx errors, ...). Log the
+                # traceback so a genuinely unexpected error caught here is still
+                # diagnosable rather than reduced to a one-line message.
+                logger.warning(
+                    "build_embeddings_skip_batch chunks=%d-%d of %d err=%s",
+                    start + 1,
+                    end,
+                    total,
+                    exc,
+                    exc_info=True,
+                )
             logger.debug(
                 "build_embeddings: embedded chunks %d-%d of %d",
                 start + 1,
@@ -543,12 +593,21 @@ class IndexManager:
                     remaining,
                 )
 
-        if total > 0:
+        if embedded > 0:
             vectors.save(self._embeddings_path)
-            logger.info("build_embeddings: embedded and saved %d chunks", total)
+            logger.info("build_embeddings: embedded and saved %d chunks", embedded)
+        elif total > 0:
+            # Every batch was skipped (e.g. provider down for the whole build,
+            # or a dimension mismatch). Surface it loudly rather than as the
+            # benign "nothing to embed" so an operator can tell an empty vault
+            # apart from a wholesale embedding failure (#649).
+            logger.warning(
+                "build_embeddings_all_batches_failed total=%d (no vectors saved)",
+                total,
+            )
         else:
             logger.info("build_embeddings: nothing to embed")
-        return total
+        return embedded
 
     def embeddings_status(self) -> dict[str, Any]:
         """Return status information about the vector index.

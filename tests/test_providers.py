@@ -434,3 +434,201 @@ class TestGetEmbeddingProvider:
             pytest.raises(RuntimeError, match="No embedding provider"),
         ):
             get_embedding_provider(cfg)
+
+
+def test_embedding_provider_requires_context_length():
+    from markdown_vault_mcp.providers import EmbeddingProvider
+
+    assert "context_length" in EmbeddingProvider.__abstractmethods__
+
+
+def test_ollama_context_length_parses_api_show(monkeypatch):
+    from markdown_vault_mcp.providers import OllamaProvider
+
+    class _Resp:
+        status_code = 200
+
+        def json(self):
+            return {"model_info": {"bert.context_length": 8192}}
+
+    class _Client:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def post(self, url, json, timeout):  # noqa: ARG002
+            return _Resp()
+
+    p = OllamaProvider(host="http://x:11434", model="bge-m3:latest")
+    monkeypatch.setattr(p._httpx, "Client", lambda *a, **k: _Client())  # noqa: ARG005
+    assert p.context_length == 8192
+    monkeypatch.setattr(
+        p._httpx,
+        "Client",
+        lambda *a, **k: (_ for _ in ()).throw(  # noqa: ARG005
+            AssertionError("re-queried")
+        ),
+    )
+    assert p.context_length == 8192  # cached, no re-query
+
+
+@pytest.mark.parametrize("err_kind", ["connect", "timeout"])
+def test_ollama_context_length_none_on_network_error(monkeypatch, err_kind):
+    """An unreachable/slow Ollama (httpx errors, NOT OSError) returns None."""
+    import httpx
+
+    from markdown_vault_mcp.providers import OllamaProvider
+
+    exc = (
+        httpx.ConnectError("down")
+        if err_kind == "connect"
+        else httpx.TimeoutException("slow")
+    )
+
+    class _Client:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def post(self, *a, **k):  # noqa: ARG002
+            raise exc
+
+    p = OllamaProvider(host="http://x:11434", model="bge-m3:latest")
+    monkeypatch.setattr(p._httpx, "Client", lambda *a, **k: _Client())  # noqa: ARG005
+    assert p.context_length is None
+
+
+def test_ollama_context_length_none_on_malformed_body(monkeypatch):
+    """A 200 with a non-JSON body (JSONDecodeError = ValueError) returns None."""
+    from markdown_vault_mcp.providers import OllamaProvider
+
+    class _Resp:
+        status_code = 200
+
+        def json(self):
+            raise ValueError("not json")
+
+    class _Client:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def post(self, *a, **k):  # noqa: ARG002
+            return _Resp()
+
+    p = OllamaProvider(host="http://x:11434", model="bge-m3:latest")
+    monkeypatch.setattr(p._httpx, "Client", lambda *a, **k: _Client())  # noqa: ARG005
+    assert p.context_length is None
+
+
+def test_ollama_context_length_none_on_non_200(monkeypatch):
+    """A non-200 /api/show (e.g. model not pulled) returns None."""
+    from markdown_vault_mcp.providers import OllamaProvider
+
+    class _Resp:
+        status_code = 404
+
+        def json(self):
+            return {}
+
+    class _Client:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def post(self, *a, **k):  # noqa: ARG002
+            return _Resp()
+
+    p = OllamaProvider(host="http://x:11434", model="bge-m3:latest")
+    monkeypatch.setattr(p._httpx, "Client", lambda *a, **k: _Client())  # noqa: ARG005
+    assert p.context_length is None
+
+
+def test_ollama_context_length_none_when_field_absent(monkeypatch):
+    """A 200 whose model_info carries no *.context_length key returns None."""
+    from markdown_vault_mcp.providers import OllamaProvider
+
+    class _Resp:
+        status_code = 200
+
+        def json(self):
+            return {"model_info": {"general.architecture": "bert"}}
+
+    class _Client:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def post(self, *a, **k):  # noqa: ARG002
+            return _Resp()
+
+    p = OllamaProvider(host="http://x:11434", model="bge-m3:latest")
+    monkeypatch.setattr(p._httpx, "Client", lambda *a, **k: _Client())  # noqa: ARG005
+    assert p.context_length is None
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        ["not", "a", "dict"],  # top-level body is a list
+        "a string body",  # top-level body is a string
+        {"model_info": ["not", "a", "dict"]},  # model_info is a non-dict
+        {"model_info": "a string"},  # model_info is a string
+    ],
+)
+def test_ollama_context_length_none_on_non_dict_body(monkeypatch, body):
+    """A non-object body OR a non-object model_info returns None, not an
+    uncaught AttributeError from .get()/.items()."""
+    from markdown_vault_mcp.providers import OllamaProvider
+
+    class _Resp:
+        status_code = 200
+
+        def json(self):
+            return body
+
+    class _Client:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def post(self, *a, **k):  # noqa: ARG002
+            return _Resp()
+
+    p = OllamaProvider(host="http://x:11434", model="bge-m3:latest")
+    monkeypatch.setattr(p._httpx, "Client", lambda *a, **k: _Client())  # noqa: ARG005
+    assert p.context_length is None
+
+
+def test_fastembed_context_length_table():
+    from markdown_vault_mcp.providers import FastEmbedProvider
+
+    p = FastEmbedProvider.__new__(FastEmbedProvider)
+    p._model_name = "nomic-ai/nomic-embed-text-v1.5"
+    assert p.context_length == 8192
+    p._model_name = "BAAI/bge-small-en-v1.5"
+    assert p.context_length == 512
+    p._model_name = "some/unknown-model"
+    assert p.context_length is None
+
+
+def test_openai_context_length_table():
+    from markdown_vault_mcp.providers import OpenAIProvider
+
+    p = OpenAIProvider.__new__(OpenAIProvider)
+    p._model = "text-embedding-3-small"
+    assert p.context_length == 8191
+    p._model = "unknown-embedding-model"
+    assert p.context_length is None

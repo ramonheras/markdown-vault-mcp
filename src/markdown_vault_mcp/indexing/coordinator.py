@@ -55,10 +55,19 @@ class IndexWriteCoordinator:
         index_mgr: IndexManager,
         index_path: Path | str | None,
         file_write_lock: threading.RLock,
+        embed_model_name: str | None = None,
+        max_chunk_chars_override: int | None = None,
     ) -> None:
         self._fts = fts
         self._index_path = index_path
         self._file_write_lock = file_write_lock
+        # Current embedding model + explicit char-cap override, compared
+        # against the values recorded in FTS meta to decide whether a warm
+        # restart is valid (#649). These are the STABLE inputs to the derived
+        # chunk cap; comparing them (not the derived cap) avoids flapping when
+        # the model context is read transiently differently.
+        self._embed_model_name = embed_model_name
+        self._max_chunk_chars_override = max_chunk_chars_override
         self._readiness = ReadinessState()
         # Deprecated background-build thread bookkeeping (guarded by the
         # injected file-write lock, matching the former Vault locking).
@@ -186,9 +195,29 @@ class IndexWriteCoordinator:
     # Synchronous builds
     # ------------------------------------------------------------------
 
+    def _chunking_meta_matches(self) -> bool:
+        """True when the stored embedding provenance matches the current config.
+
+        Compares the two STABLE inputs to the shared chunker's char cap — the
+        model name and the explicit ``MAX_CHUNK_CHARS`` override — not the
+        runtime-derived cap. A genuine model change or override change rejects
+        the warm-restart short-circuit (cold rebuild); a derived cap that
+        merely differs because the model context was read transiently
+        differently (e.g. an Ollama instance briefly unreachable) changes
+        neither input, so it does NOT force a rebuild (avoid flapping)."""
+        stored = self._fts.get_chunking_meta()
+        return (
+            stored.model == self._embed_model_name
+            and stored.max_chunk_chars_override == self._max_chunk_chars_override
+        )
+
     def build_index(self, *, force: bool = False) -> IndexStats:
         """Scan source_dir and build the FTS index (warm restart is O(1))."""
-        if not force and self._fts.is_build_completed():
+        if (
+            not force
+            and self._fts.is_build_completed()
+            and self._chunking_meta_matches()
+        ):
             existing = self._fts.list_notes()
             if existing:
                 logger.debug(
@@ -270,7 +299,11 @@ class IndexWriteCoordinator:
         Warm-restart short-circuit returns an already-resolved Future
         without touching the writer queue, mirroring :meth:`build_index`.
         """
-        if not force and self._fts.is_build_completed():
+        if (
+            not force
+            and self._fts.is_build_completed()
+            and self._chunking_meta_matches()
+        ):
             existing = self._fts.list_notes()
             if existing:
                 logger.debug(

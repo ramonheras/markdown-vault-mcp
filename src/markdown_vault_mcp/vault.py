@@ -192,6 +192,8 @@ class Vault:
         snippet_words: int = 200,
         length_downweight_alpha: float = 0.25,
         max_chunk_words: int = 400,
+        max_chunk_chars: int | None = None,
+        max_chunk_chars_override: int | None = None,
     ) -> None:
         self._source_dir = source_dir
         self._index_path = index_path
@@ -204,7 +206,8 @@ class Vault:
         # custom ChunkStrategy instance or an explicit string name override.
         if isinstance(chunk_strategy, str) and chunk_strategy == "heading":
             self._chunk_strategy: ChunkStrategy = HeadingChunker(
-                max_chunk_words=max_chunk_words
+                max_chunk_words=max_chunk_words,
+                max_chunk_chars=max_chunk_chars,
             )
         else:
             # NOTE: When a caller passes an explicit chunk_strategy instance
@@ -213,6 +216,17 @@ class Vault:
             # max_chunk_words only takes effect for the conventional default
             # ("heading" string), so explicit-instance callers retain full control.
             self._chunk_strategy = _resolve_chunk_strategy(chunk_strategy)
+        # The derived cap (max_chunk_chars) is passed straight to the chunker
+        # above and kept nowhere else — it is deliberately NOT a warm-restart
+        # key, so a transient model-context read does not trigger a rebuild.
+        # Stable warm-restart keys recorded into FTS meta at build time (#649):
+        # the embedding model name and the explicit char-cap override. A change
+        # to either rejects the short-circuit and cold-rebuilds.
+        self._max_chunk_chars_override = max_chunk_chars_override
+        # None when no provider is configured.
+        self._embed_model_name: str | None = (
+            embedding_provider.model_name if embedding_provider is not None else None
+        )
         self._on_write = on_write
         self._git_strategy = git_strategy
         self._git_pull_interval_s = git_pull_interval_s
@@ -277,6 +291,8 @@ class Vault:
             # only accessed at call-time, not during IndexManager.__init__.
             get_vectors=lambda: self._search_mgr.vectors,
             set_vectors=lambda v: setattr(self._search_mgr, "vectors", v),
+            embed_model_name=self._embed_model_name,
+            max_chunk_chars_override=self._max_chunk_chars_override,
         )
         # Index-write orchestration: owns the single-owner IndexWriter
         # thread + the build-readiness state machine (#576).  Constructed
@@ -287,6 +303,8 @@ class Vault:
             index_mgr=self._index_mgr,
             index_path=self._index_path,
             file_write_lock=self._file_write_lock,
+            embed_model_name=self._embed_model_name,
+            max_chunk_chars_override=self._max_chunk_chars_override,
         )
         # 3. SearchManager (receives IndexManager callbacks via constructor)
         self._search_mgr = SearchManager(
