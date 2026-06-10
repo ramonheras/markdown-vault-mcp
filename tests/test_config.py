@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 from pathlib import Path
 
 import pytest
@@ -15,8 +14,10 @@ from markdown_vault_mcp.config_sections import (
     EmbeddingsConfig,
     GitConfig,
     IndexingConfig,
+    SearchConfig,
     TransferConfig,
 )
+from markdown_vault_mcp.exceptions import ConfigurationError
 
 
 def test_search_ranking_config_defaults(
@@ -64,7 +65,7 @@ def test_search_ranking_config_rejects_zero_chunks_per_file(
     monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", str(tmp_path))
     monkeypatch.setenv("MARKDOWN_VAULT_MCP_CHUNKS_PER_FILE", "0")
 
-    with pytest.raises(ValueError, match="chunks_per_file"):
+    with pytest.raises(ConfigurationError, match="chunks_per_file"):
         VaultConfig.from_env()
 
 
@@ -112,7 +113,7 @@ def test_max_chunk_chars_override_rejects_zero(
     """MAX_CHUNK_CHARS < 1 is rejected like MAX_CHUNK_WORDS."""
     monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", str(tmp_path))
     monkeypatch.setenv("MARKDOWN_VAULT_MCP_MAX_CHUNK_CHARS", "0")
-    with pytest.raises(ValueError, match="max_chunk_chars"):
+    with pytest.raises(ConfigurationError, match="max_chunk_chars"):
         VaultConfig.from_env()
 
 
@@ -122,7 +123,7 @@ def test_max_chunk_chars_override_rejects_malformed(
     """A non-integer MAX_CHUNK_CHARS raises."""
     monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", str(tmp_path))
     monkeypatch.setenv("MARKDOWN_VAULT_MCP_MAX_CHUNK_CHARS", "lots")
-    with pytest.raises(ValueError, match="MAX_CHUNK_CHARS"):
+    with pytest.raises(ConfigurationError, match="MAX_CHUNK_CHARS"):
         VaultConfig.from_env()
 
 
@@ -147,7 +148,7 @@ class TestParseHelpers:
 class TestLoadConfig:
     def test_missing_source_dir_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", raising=False)
-        with pytest.raises(ValueError, match="MARKDOWN_VAULT_MCP_SOURCE_DIR"):
+        with pytest.raises(ConfigurationError, match="MARKDOWN_VAULT_MCP_SOURCE_DIR"):
             VaultConfig.from_env()
 
     def test_minimal_config(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -256,21 +257,23 @@ class TestLoadConfig:
         _ = VaultConfig.from_env()
         assert "legacy mode is deprecated" in caplog.text
 
-    def test_invalid_pull_interval_uses_default(
+    def test_invalid_pull_interval_raises(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        """A non-numeric GIT_PULL_INTERVAL_S raises (no warn-and-default; #638)."""
         monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", "/tmp/vault")
         monkeypatch.setenv("MARKDOWN_VAULT_MCP_GIT_PULL_INTERVAL_S", "nope")
-        config = VaultConfig.from_env()
-        assert config.git.pull_interval_s == 600
+        with pytest.raises(ConfigurationError):
+            VaultConfig.from_env()
 
-    def test_negative_pull_interval_disables(
+    def test_negative_pull_interval_raises(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        """A negative GIT_PULL_INTERVAL_S raises (no longer clamps to 0; #638)."""
         monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", "/tmp/vault")
         monkeypatch.setenv("MARKDOWN_VAULT_MCP_GIT_PULL_INTERVAL_S", "-5")
-        config = VaultConfig.from_env()
-        assert config.git.pull_interval_s == 0
+        with pytest.raises(ConfigurationError, match="pull_interval_s"):
+            VaultConfig.from_env()
 
     def test_comma_separated_strips_whitespace(
         self, monkeypatch: pytest.MonkeyPatch
@@ -540,23 +543,23 @@ class TestAttachmentConfig:
         config = VaultConfig.from_env()
         assert config.content.max_attachment_size_mb == 0.0
 
-    def test_max_attachment_size_mb_invalid_uses_default(
+    def test_max_attachment_size_mb_invalid_raises(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """VaultConfig.from_env() falls back to 1.0 for invalid MAX_ATTACHMENT_SIZE_MB."""
+        """VaultConfig.from_env() raises on a non-numeric MAX_ATTACHMENT_SIZE_MB (#638)."""
         monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", "/tmp/vault")
         monkeypatch.setenv("MARKDOWN_VAULT_MCP_MAX_ATTACHMENT_SIZE_MB", "not-a-number")
-        config = VaultConfig.from_env()
-        assert config.content.max_attachment_size_mb == 1.0
+        with pytest.raises(ConfigurationError):
+            VaultConfig.from_env()
 
-    def test_max_attachment_size_mb_negative_uses_default(
+    def test_max_attachment_size_mb_negative_raises(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """VaultConfig.from_env() resets negative MAX_ATTACHMENT_SIZE_MB to 1.0."""
+        """VaultConfig.from_env() raises on a negative MAX_ATTACHMENT_SIZE_MB (#638)."""
         monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", "/tmp/vault")
         monkeypatch.setenv("MARKDOWN_VAULT_MCP_MAX_ATTACHMENT_SIZE_MB", "-5")
-        config = VaultConfig.from_env()
-        assert config.content.max_attachment_size_mb == 1.0
+        with pytest.raises(ConfigurationError, match="max_attachment_size_mb"):
+            VaultConfig.from_env()
 
     def test_attachment_config_passed_through_to_vault_kwargs(
         self, monkeypatch: pytest.MonkeyPatch
@@ -636,11 +639,31 @@ class TestGitConfigFromEnv:
         g = GitConfig.from_env("MARKDOWN_VAULT_MCP")
         assert g == GitConfig()
 
-    def test_pull_interval_negative_clamps_to_zero(self, monkeypatch):
+    def test_pull_interval_negative_raises(self, monkeypatch):
+        """A negative GIT_PULL_INTERVAL_S raises (no longer clamps to 0; #638)."""
         from markdown_vault_mcp.config_sections import GitConfig
 
         monkeypatch.setenv("MARKDOWN_VAULT_MCP_GIT_PULL_INTERVAL_S", "-5")
-        assert GitConfig.from_env("MARKDOWN_VAULT_MCP").pull_interval_s == 0
+        with pytest.raises(ConfigurationError, match="pull_interval_s"):
+            GitConfig.from_env("MARKDOWN_VAULT_MCP")
+
+    def test_push_delay_invalid_raises(self, monkeypatch):
+        """A non-numeric GIT_PUSH_DELAY_S raises (no warn-and-default; #638)."""
+        from markdown_vault_mcp.config_sections import GitConfig
+
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_GIT_PUSH_DELAY_S", "nope")
+        with pytest.raises(ConfigurationError):
+            GitConfig.from_env("MARKDOWN_VAULT_MCP")
+
+    @pytest.mark.parametrize(
+        "kwargs", [{"push_delay_s": -1.0}, {"pull_interval_s": -5}]
+    )
+    def test_direct_construction_validates(self, kwargs):
+        """__post_init__ rejects negative cadences on direct construction (#638)."""
+        from markdown_vault_mcp.config_sections import GitConfig
+
+        with pytest.raises(ConfigurationError):
+            GitConfig(**kwargs)
 
     def test_frozen(self):
         import dataclasses
@@ -1078,7 +1101,7 @@ def test_search_ranking_config_rejects_malformed_int(
     monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", str(tmp_path))
     monkeypatch.setenv("MARKDOWN_VAULT_MCP_CHUNKS_PER_FILE", "foo")
 
-    with pytest.raises(ValueError, match="MARKDOWN_VAULT_MCP_CHUNKS_PER_FILE"):
+    with pytest.raises(ConfigurationError, match="MARKDOWN_VAULT_MCP_CHUNKS_PER_FILE"):
         VaultConfig.from_env()
 
 
@@ -1089,7 +1112,9 @@ def test_search_ranking_config_rejects_malformed_float(
     monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", str(tmp_path))
     monkeypatch.setenv("MARKDOWN_VAULT_MCP_LENGTH_DOWNWEIGHT_ALPHA", "abc")
 
-    with pytest.raises(ValueError, match="MARKDOWN_VAULT_MCP_LENGTH_DOWNWEIGHT_ALPHA"):
+    with pytest.raises(
+        ConfigurationError, match="MARKDOWN_VAULT_MCP_LENGTH_DOWNWEIGHT_ALPHA"
+    ):
         VaultConfig.from_env()
 
 
@@ -1120,32 +1145,27 @@ class TestMaxNoteReadBytesEnv:
         config = VaultConfig.from_env()
         assert config.content.max_note_read_bytes == 0
 
-    def test_invalid_value_falls_back_to_default(
+    def test_invalid_value_raises(
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
-        caplog: pytest.LogCaptureFixture,
     ) -> None:
+        """A non-numeric MAX_NOTE_READ_BYTES raises (no warn-and-default; #638)."""
         monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", str(tmp_path))
         monkeypatch.setenv("MARKDOWN_VAULT_MCP_MAX_NOTE_READ_BYTES", "not-a-number")
-        with caplog.at_level(logging.WARNING):
-            config = VaultConfig.from_env()
-        assert config.content.max_note_read_bytes == 262144
-        assert "MAX_NOTE_READ_BYTES" in caplog.text
+        with pytest.raises(ConfigurationError, match="MAX_NOTE_READ_BYTES"):
+            VaultConfig.from_env()
 
-    def test_negative_value_falls_back_to_default(
+    def test_negative_value_raises(
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
-        caplog: pytest.LogCaptureFixture,
     ) -> None:
+        """A negative MAX_NOTE_READ_BYTES raises (#638)."""
         monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", str(tmp_path))
         monkeypatch.setenv("MARKDOWN_VAULT_MCP_MAX_NOTE_READ_BYTES", "-1")
-        with caplog.at_level(logging.WARNING):
-            config = VaultConfig.from_env()
-        assert config.content.max_note_read_bytes == 262144
-        assert "MAX_NOTE_READ_BYTES" in caplog.text
-        assert "negative" in caplog.text.lower()
+        with pytest.raises(ConfigurationError, match="max_note_read_bytes"):
+            VaultConfig.from_env()
 
 
 class TestMaxAttachmentSizeMbDefault:
@@ -1183,34 +1203,62 @@ def test_transfer_config_env_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_transfer_config_rejects_default_above_max():
     """TransferConfig refuses a default TTL above the ceiling."""
-    with pytest.raises(ValueError, match="ttl_max_s"):
+    with pytest.raises(ConfigurationError, match="ttl_max_s"):
         TransferConfig(ttl_default_s=7200, ttl_max_s=3600)
 
 
 def test_transfer_config_rejects_nonpositive_upload_cap():
     """TransferConfig refuses a non-positive upload size cap."""
-    with pytest.raises(ValueError, match="max_upload_bytes"):
+    with pytest.raises(ConfigurationError, match="max_upload_bytes"):
         TransferConfig(max_upload_bytes=0)
 
 
 class TestConfigHelpers:
-    def test_parse_int_env_valid(self, monkeypatch):
-        from markdown_vault_mcp.config_sections._helpers import parse_int_env
+    def test_env_int_valid(self, monkeypatch):
+        from markdown_vault_mcp.config_sections._helpers import env_int
 
         monkeypatch.setenv("MARKDOWN_VAULT_MCP_X", "7")
-        assert parse_int_env("MARKDOWN_VAULT_MCP", "X", 3) == 7
+        assert env_int("MARKDOWN_VAULT_MCP", "X", 3) == 7
 
-    def test_parse_int_env_invalid_falls_back(self, monkeypatch):
-        from markdown_vault_mcp.config_sections._helpers import parse_int_env
+    def test_env_int_unset_returns_default(self, monkeypatch):
+        from markdown_vault_mcp.config_sections._helpers import env_int
+
+        monkeypatch.delenv("MARKDOWN_VAULT_MCP_X", raising=False)
+        assert env_int("MARKDOWN_VAULT_MCP", "X", 3) == 3
+
+    def test_env_int_invalid_raises(self, monkeypatch):
+        from markdown_vault_mcp.config_sections._helpers import env_int
 
         monkeypatch.setenv("MARKDOWN_VAULT_MCP_X", "nope")
-        assert parse_int_env("MARKDOWN_VAULT_MCP", "X", 3) == 3
+        with pytest.raises(ConfigurationError):
+            env_int("MARKDOWN_VAULT_MCP", "X", 3)
 
-    def test_parse_float_env_invalid_falls_back(self, monkeypatch):
-        from markdown_vault_mcp.config_sections._helpers import parse_float_env
+    def test_env_float_invalid_raises(self, monkeypatch):
+        from markdown_vault_mcp.config_sections._helpers import env_float
 
         monkeypatch.setenv("MARKDOWN_VAULT_MCP_X", "nope")
-        assert parse_float_env("MARKDOWN_VAULT_MCP", "X", 1.5) == 1.5
+        with pytest.raises(ConfigurationError):
+            env_float("MARKDOWN_VAULT_MCP", "X", 1.5)
+
+    def test_opt_int_unset_is_none(self, monkeypatch):
+        from markdown_vault_mcp.config_sections._helpers import opt_int
+
+        monkeypatch.delenv("MARKDOWN_VAULT_MCP_X", raising=False)
+        assert opt_int("MARKDOWN_VAULT_MCP", "X") is None
+
+    def test_opt_int_empty_string_is_none(self, monkeypatch):
+        """An empty/whitespace value is treated as unset (returns None), not invalid."""
+        from markdown_vault_mcp.config_sections._helpers import opt_int
+
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_X", "   ")
+        assert opt_int("MARKDOWN_VAULT_MCP", "X") is None
+
+    def test_opt_int_invalid_raises(self, monkeypatch):
+        from markdown_vault_mcp.config_sections._helpers import opt_int
+
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_X", "nope")
+        with pytest.raises(ConfigurationError):
+            opt_int("MARKDOWN_VAULT_MCP", "X")
 
 
 class TestIndexingConfigFromEnv:
@@ -1325,6 +1373,21 @@ class TestEmbeddingsConfigFromEnv:
             == "http://gpu:11434"
         )
 
+    def test_post_init_normalizes_openai_base_url_on_direct_construction(self):
+        """openai_base_url is normalized on direct construction too, not just from_env (#638)."""
+        from markdown_vault_mcp.config_sections import EmbeddingsConfig
+
+        assert (
+            EmbeddingsConfig(
+                openai_base_url="https://proxy.example/v1/"
+            ).openai_base_url
+            == "https://proxy.example/v1"
+        )
+        assert (
+            EmbeddingsConfig(openai_base_url="").openai_base_url
+            == "https://api.openai.com/v1"
+        )
+
     def test_frozen(self):
         import dataclasses
 
@@ -1365,14 +1428,16 @@ class TestSearchConfigFromEnv:
         from markdown_vault_mcp.config_sections import SearchConfig
 
         monkeypatch.setenv("MARKDOWN_VAULT_MCP_CHUNKS_PER_FILE", "0")
-        with pytest.raises(ValueError, match="chunks_per_file"):
+        with pytest.raises(ConfigurationError, match="chunks_per_file"):
             SearchConfig.from_env("MARKDOWN_VAULT_MCP")
 
     def test_chunks_per_file_invalid_raises(self, monkeypatch):
         from markdown_vault_mcp.config_sections import SearchConfig
 
         monkeypatch.setenv("MARKDOWN_VAULT_MCP_CHUNKS_PER_FILE", "nope")
-        with pytest.raises(ValueError, match="MARKDOWN_VAULT_MCP_CHUNKS_PER_FILE"):
+        with pytest.raises(
+            ConfigurationError, match="MARKDOWN_VAULT_MCP_CHUNKS_PER_FILE"
+        ):
             SearchConfig.from_env("MARKDOWN_VAULT_MCP")
 
     @pytest.mark.parametrize(
@@ -1389,7 +1454,7 @@ class TestSearchConfigFromEnv:
         from markdown_vault_mcp.config_sections import SearchConfig
 
         monkeypatch.setenv(f"MARKDOWN_VAULT_MCP_{var}", value)
-        with pytest.raises(ValueError):
+        with pytest.raises(ConfigurationError):
             SearchConfig.from_env("MARKDOWN_VAULT_MCP")
 
     def test_alpha_invalid_raises(self, monkeypatch):
@@ -1397,7 +1462,7 @@ class TestSearchConfigFromEnv:
 
         monkeypatch.setenv("MARKDOWN_VAULT_MCP_LENGTH_DOWNWEIGHT_ALPHA", "abc")
         with pytest.raises(
-            ValueError, match="MARKDOWN_VAULT_MCP_LENGTH_DOWNWEIGHT_ALPHA"
+            ConfigurationError, match="MARKDOWN_VAULT_MCP_LENGTH_DOWNWEIGHT_ALPHA"
         ):
             SearchConfig.from_env("MARKDOWN_VAULT_MCP")
 
@@ -1408,6 +1473,32 @@ class TestSearchConfigFromEnv:
 
         with pytest.raises(dataclasses.FrozenInstanceError):
             SearchConfig().chunks_per_file = 5  # type: ignore[misc]
+
+    @pytest.mark.parametrize(
+        "kwargs",
+        [
+            {"chunks_per_file": 0},
+            {"snippet_words": -1},
+            {"length_downweight_alpha": -0.5},
+            {"max_chunk_words": 0},
+            {"max_chunk_chars_override": 0},
+        ],
+    )
+    def test_direct_construction_validates(self, kwargs):
+        """__post_init__ rejects out-of-range values on every construction path (#638)."""
+        with pytest.raises(ConfigurationError):
+            SearchConfig(**kwargs)
+
+    def test_direct_construction_valid_passes(self):
+        """In-range values (and a None char-cap override) construct fine."""
+        cfg = SearchConfig(
+            chunks_per_file=1,
+            snippet_words=0,
+            length_downweight_alpha=0.0,
+            max_chunk_words=1,
+            max_chunk_chars_override=None,
+        )
+        assert cfg.max_chunk_chars_override is None
 
 
 class TestSyncConfigFromEnv:
@@ -1425,23 +1516,37 @@ class TestSyncConfigFromEnv:
         monkeypatch.setenv("MARKDOWN_VAULT_MCP_FILE_WATCHER", "false")
         assert SyncConfig.from_env("MARKDOWN_VAULT_MCP").file_watcher_enabled is False
 
-    def test_debounce_invalid_resets_to_default(self, monkeypatch):
+    def test_debounce_invalid_raises(self, monkeypatch):
+        """A non-numeric FILE_WATCHER_DEBOUNCE_S raises (no warn-and-default; #638)."""
         from markdown_vault_mcp.config_sections import SyncConfig
 
         monkeypatch.setenv("MARKDOWN_VAULT_MCP_FILE_WATCHER_DEBOUNCE_S", "notanumber")
-        assert SyncConfig.from_env("MARKDOWN_VAULT_MCP").file_watcher_debounce_s == 2.0
+        with pytest.raises(ConfigurationError):
+            SyncConfig.from_env("MARKDOWN_VAULT_MCP")
 
-    def test_debounce_zero_resets_to_default(self, monkeypatch):
+    def test_debounce_zero_raises(self, monkeypatch):
+        """A zero FILE_WATCHER_DEBOUNCE_S raises (must be > 0; #638)."""
         from markdown_vault_mcp.config_sections import SyncConfig
 
         monkeypatch.setenv("MARKDOWN_VAULT_MCP_FILE_WATCHER_DEBOUNCE_S", "0")
-        assert SyncConfig.from_env("MARKDOWN_VAULT_MCP").file_watcher_debounce_s == 2.0
+        with pytest.raises(ConfigurationError, match="file_watcher_debounce_s"):
+            SyncConfig.from_env("MARKDOWN_VAULT_MCP")
 
-    def test_debounce_negative_resets_to_default(self, monkeypatch):
+    def test_debounce_negative_raises(self, monkeypatch):
+        """A negative FILE_WATCHER_DEBOUNCE_S raises (#638)."""
         from markdown_vault_mcp.config_sections import SyncConfig
 
         monkeypatch.setenv("MARKDOWN_VAULT_MCP_FILE_WATCHER_DEBOUNCE_S", "-1.0")
-        assert SyncConfig.from_env("MARKDOWN_VAULT_MCP").file_watcher_debounce_s == 2.0
+        with pytest.raises(ConfigurationError, match="file_watcher_debounce_s"):
+            SyncConfig.from_env("MARKDOWN_VAULT_MCP")
+
+    @pytest.mark.parametrize("debounce", [0, -1.0])
+    def test_direct_construction_validates(self, debounce):
+        """__post_init__ rejects a non-positive debounce on direct construction (#638)."""
+        from markdown_vault_mcp.config_sections import SyncConfig
+
+        with pytest.raises(ConfigurationError, match="file_watcher_debounce_s"):
+            SyncConfig(file_watcher_debounce_s=debounce)
 
     def test_github_webhook_secret(self, monkeypatch):
         from markdown_vault_mcp.config_sections import SyncConfig
@@ -1497,19 +1602,21 @@ class TestContentConfigFromEnv:
         cfg = ContentConfig.from_env("MARKDOWN_VAULT_MCP", tmp_path)
         assert cfg.attachment_extensions is None
 
-    def test_max_attachment_invalid_resets(self, monkeypatch, tmp_path):
+    def test_max_attachment_invalid_raises(self, monkeypatch, tmp_path):
+        """A non-numeric MAX_ATTACHMENT_SIZE_MB raises (#638)."""
         from markdown_vault_mcp.config_sections import ContentConfig
 
         monkeypatch.setenv("MARKDOWN_VAULT_MCP_MAX_ATTACHMENT_SIZE_MB", "not-a-number")
-        cfg = ContentConfig.from_env("MARKDOWN_VAULT_MCP", tmp_path)
-        assert cfg.max_attachment_size_mb == 1.0
+        with pytest.raises(ConfigurationError):
+            ContentConfig.from_env("MARKDOWN_VAULT_MCP", tmp_path)
 
-    def test_max_attachment_negative_resets(self, monkeypatch, tmp_path):
+    def test_max_attachment_negative_raises(self, monkeypatch, tmp_path):
+        """A negative MAX_ATTACHMENT_SIZE_MB raises (#638)."""
         from markdown_vault_mcp.config_sections import ContentConfig
 
         monkeypatch.setenv("MARKDOWN_VAULT_MCP_MAX_ATTACHMENT_SIZE_MB", "-5")
-        cfg = ContentConfig.from_env("MARKDOWN_VAULT_MCP", tmp_path)
-        assert cfg.max_attachment_size_mb == 1.0
+        with pytest.raises(ConfigurationError, match="max_attachment_size_mb"):
+            ContentConfig.from_env("MARKDOWN_VAULT_MCP", tmp_path)
 
     def test_max_attachment_zero_allowed(self, monkeypatch, tmp_path):
         from markdown_vault_mcp.config_sections import ContentConfig
@@ -1518,19 +1625,21 @@ class TestContentConfigFromEnv:
         cfg = ContentConfig.from_env("MARKDOWN_VAULT_MCP", tmp_path)
         assert cfg.max_attachment_size_mb == 0.0
 
-    def test_max_note_read_bytes_invalid_resets(self, monkeypatch, tmp_path):
+    def test_max_note_read_bytes_invalid_raises(self, monkeypatch, tmp_path):
+        """A non-numeric MAX_NOTE_READ_BYTES raises (#638)."""
         from markdown_vault_mcp.config_sections import ContentConfig
 
         monkeypatch.setenv("MARKDOWN_VAULT_MCP_MAX_NOTE_READ_BYTES", "nope")
-        cfg = ContentConfig.from_env("MARKDOWN_VAULT_MCP", tmp_path)
-        assert cfg.max_note_read_bytes == 262144
+        with pytest.raises(ConfigurationError):
+            ContentConfig.from_env("MARKDOWN_VAULT_MCP", tmp_path)
 
-    def test_max_note_read_bytes_negative_resets(self, monkeypatch, tmp_path):
+    def test_max_note_read_bytes_negative_raises(self, monkeypatch, tmp_path):
+        """A negative MAX_NOTE_READ_BYTES raises (#638)."""
         from markdown_vault_mcp.config_sections import ContentConfig
 
         monkeypatch.setenv("MARKDOWN_VAULT_MCP_MAX_NOTE_READ_BYTES", "-1")
-        cfg = ContentConfig.from_env("MARKDOWN_VAULT_MCP", tmp_path)
-        assert cfg.max_note_read_bytes == 262144
+        with pytest.raises(ConfigurationError, match="max_note_read_bytes"):
+            ContentConfig.from_env("MARKDOWN_VAULT_MCP", tmp_path)
 
     def test_max_note_read_bytes_zero_allowed(self, monkeypatch, tmp_path):
         from markdown_vault_mcp.config_sections import ContentConfig
@@ -1538,6 +1647,26 @@ class TestContentConfigFromEnv:
         monkeypatch.setenv("MARKDOWN_VAULT_MCP_MAX_NOTE_READ_BYTES", "0")
         cfg = ContentConfig.from_env("MARKDOWN_VAULT_MCP", tmp_path)
         assert cfg.max_note_read_bytes == 0
+
+    @pytest.mark.parametrize(
+        "kwargs",
+        [{"max_attachment_size_mb": -1.0}, {"max_note_read_bytes": -1}],
+    )
+    def test_direct_construction_validates(self, kwargs):
+        """__post_init__ rejects negative size limits on direct construction (#638)."""
+        from markdown_vault_mcp.config_sections import ContentConfig
+
+        with pytest.raises(ConfigurationError):
+            ContentConfig(**kwargs)
+
+    @pytest.mark.parametrize(
+        "kwargs", [{"max_attachment_size_mb": 0}, {"max_note_read_bytes": 0}]
+    )
+    def test_direct_construction_zero_allowed(self, kwargs):
+        """0 (the unlimited sentinel) is accepted on direct construction (#638)."""
+        from markdown_vault_mcp.config_sections import ContentConfig
+
+        assert ContentConfig(**kwargs) is not None
 
     def test_templates_folder_backslash_trailing_slash(self, monkeypatch, tmp_path):
         from markdown_vault_mcp.config_sections import ContentConfig
@@ -1600,20 +1729,36 @@ class TestTransferConfigFromEnv:
         assert cfg.ttl_max_s == 600
         assert cfg.max_upload_bytes == 2048
 
-    def test_invalid_falls_back_to_default(self, monkeypatch):
+    def test_invalid_raises(self, monkeypatch):
+        """A non-numeric TRANSFER_TTL_DEFAULT_S raises (no warn-and-default; #638)."""
         from markdown_vault_mcp.config_sections import TransferConfig
 
         monkeypatch.setenv("MARKDOWN_VAULT_MCP_TRANSFER_TTL_DEFAULT_S", "nope")
-        cfg = TransferConfig.from_env("MARKDOWN_VAULT_MCP")
-        assert cfg.ttl_default_s == 3600
+        with pytest.raises(ConfigurationError):
+            TransferConfig.from_env("MARKDOWN_VAULT_MCP")
 
     def test_post_init_raises_on_default_above_max(self, monkeypatch):
         from markdown_vault_mcp.config_sections import TransferConfig
 
         monkeypatch.setenv("MARKDOWN_VAULT_MCP_TRANSFER_TTL_DEFAULT_S", "7200")
         monkeypatch.setenv("MARKDOWN_VAULT_MCP_TRANSFER_TTL_MAX_S", "3600")
-        with pytest.raises(ValueError, match="ttl_max_s"):
+        with pytest.raises(ConfigurationError, match="ttl_max_s"):
             TransferConfig.from_env("MARKDOWN_VAULT_MCP")
+
+    @pytest.mark.parametrize(
+        ("kwargs", "match"),
+        [
+            ({"ttl_default_s": 0}, "ttl_default_s"),
+            ({"ttl_default_s": 7200, "ttl_max_s": 3600}, "ttl_max_s"),
+            ({"max_upload_bytes": 0}, "max_upload_bytes"),
+        ],
+    )
+    def test_direct_construction_validates(self, kwargs, match):
+        """__post_init__ rejects out-of-range/ordering violations on direct construction (#638)."""
+        from markdown_vault_mcp.config_sections import TransferConfig
+
+        with pytest.raises(ConfigurationError, match=match):
+            TransferConfig(**kwargs)
 
     def test_frozen(self):
         import dataclasses
