@@ -682,6 +682,19 @@ The contract is:
 - Concurrent file-write tools on the same path are serialised by
   `_file_write_lock`; the IndexWriter's FIFO queue serialises everything
   else.
+- Before a git pull (periodic `sync_once` or interactive `force_pull`), the
+  strategy **pauses new writes and drains the deferred-commit queue** so the
+  merge runs on a clean working tree (#571). A write that landed on disk just
+  before the pull is committed first, rather than aborting the merge on a dirty
+  tree (which previously caused a non-fast-forward push rejection and a spurious
+  `.conflict-mcp-*` sibling on the eventual reconcile). The write callback now
+  fires *inside* `_file_write_lock`, so once the puller holds that lock no
+  landed write can still be unqueued; `WriteCallbackDispatcher.drain()` then
+  blocks until the queue is empty before the merge takes the git lock. The
+  drain is **best-effort and bounded**: if it does not finish within the
+  timeout (or the dispatcher worker has died), the pull logs a WARNING and
+  proceeds anyway, accepting the pre-fix dirty-tree behavior for the
+  still-pending commit rather than blocking the pull indefinitely.
 - The `on_write` callback fires in a **background thread** — it must not
   itself call write methods on the same Vault instance (deadlock).
 - Callbacks must not raise; exceptions are logged and swallowed.

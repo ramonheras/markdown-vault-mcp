@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterator
 
     from markdown_vault_mcp.types import CommitDiff, HistoryEntry
 
@@ -175,6 +175,7 @@ class GitWriteStrategy:
         self._pause_writes: (
             Callable[[], contextlib.AbstractContextManager[None]] | None
         ) = None
+        self._drain_writes: Callable[[], bool] | None = None
         self._on_pull: Callable[[], object] | None = None
         if repo_path is not None:
             if self._managed:
@@ -872,6 +873,12 @@ class GitWriteStrategy:
         round-trip; that is acceptable for the interactive ``git_sync``
         tool and mirrors what :meth:`sync_once` already does.
 
+        Before the merge it self-quiesces via :meth:`_quiesce_writes`: new
+        writes are paused and the deferred-commit queue is drained (best-effort,
+        time-bounded) so a write that landed just before the pull is committed
+        first and the merge runs on a clean tree (#571). Skipped under
+        ``dry_run`` (which only fetches and never touches the working tree).
+
         On ``ff-only`` failure (divergent history) the implementation
         falls through to the same rebase + Syncthing-style sibling write
         path used by :meth:`sync_once` (see :meth:`_resolve_rebase_conflicts`
@@ -903,7 +910,7 @@ class GitWriteStrategy:
         git_root = self._resolve_force_repo()
         env = self._git_env()
         try:
-            with self._lock:
+            with self._quiesce_writes(skip=dry_run), self._lock:
                 from_sha = self._head_sha(git_root)
 
                 # Always fetch first — both dry-run and real-pull need the
@@ -1325,6 +1332,14 @@ class GitWriteStrategy:
         Tries fast-forward first; falls back to rebase when the local
         and upstream branches have diverged (e.g. Obsidian and MCP both
         committed on different files).  Aborts on true conflicts.
+
+        Self-quiesces before the merge via :meth:`_quiesce_writes` (pause new
+        writes + drain the deferred-commit queue, best-effort/time-bounded) so a
+        write racing the periodic pull is committed first and the merge runs on
+        a clean tree (#571). As with :meth:`force_pull`, the pause is held for
+        the whole fetch + merge — including the network round-trip — so MCP
+        writes block for the pull's duration; acceptable for a periodic
+        background pull (default every 600 s) and a fast fetch.
         """
         if self._closed or not self._enable_pull:
             return False
@@ -1336,7 +1351,7 @@ class GitWriteStrategy:
         env = None
         try:
             env = self._git_env()
-            with self._lock:
+            with self._quiesce_writes(), self._lock:
                 upstream_check = subprocess.run(
                     [
                         "git",
@@ -1501,13 +1516,70 @@ class GitWriteStrategy:
         finally:
             self._cleanup_git_env(env)
 
+    def set_write_quiescer(
+        self,
+        pause_writes: Callable[[], contextlib.AbstractContextManager[None]],
+        drain_writes: Callable[[], bool],
+    ) -> None:
+        """Wire the write-quiescing callables used before a pull (#571).
+
+        Called once by the owner (``Vault``) after the write-callback
+        dispatcher exists, so both the interactive ``force_pull`` and the
+        periodic ``sync_once`` can pause new writes and drain pending commits
+        before the merge — independent of whether the periodic pull loop is
+        started.
+
+        Args:
+            pause_writes: Context manager that blocks new file mutations while
+                held (acquires the shared file-write lock).
+            drain_writes: Blocks until all already-queued write callbacks have
+                been committed; returns ``True`` when the queue drained (or
+                there was nothing to drain), ``False`` if it did not finish or
+                the dispatcher worker has died.
+        """
+        self._pause_writes = pause_writes
+        self._drain_writes = drain_writes
+
+    @contextlib.contextmanager
+    def _quiesce_writes(self, *, skip: bool = False) -> Iterator[None]:
+        """Pause new writes and drain pending commits for the duration.
+
+        Enters ``pause_writes`` (blocking new writes + their callback enqueues),
+        drains the queued commits, then yields so the caller's merge runs on a
+        clean working tree. If the drain does not complete, logs a WARNING and
+        proceeds anyway — a stalled drain must never block the pull; the worst
+        case is the pre-fix dirty-tree churn for the still-pending commit. No-op
+        when ``skip`` is set (e.g. a dry-run pull) or when no quiescer was wired
+        (standalone / tests).
+
+        DEADLOCK INVARIANT: the drain runs *before* the caller acquires
+        ``self._lock`` (callers use ``with self._quiesce_writes(...), self._lock:``,
+        which enters this context manager first). The drain blocks on the
+        dispatcher worker, whose commit path acquires ``self._lock`` — so the
+        caller must NOT already hold ``self._lock`` here, and the write callback
+        must NEVER acquire the file-write lock that ``pause_writes`` holds.
+        Reverse either and a pull with a pending commit deadlocks.
+        """
+        if skip or self._pause_writes is None or self._drain_writes is None:
+            yield
+            return
+        with self._pause_writes():
+            if not self._drain_writes():
+                logger.warning(
+                    "Git pull: write-callback queue did not fully drain before "
+                    "the merge; proceeding anyway. A still-pending commit may "
+                    "cause the pre-fix dirty-tree churn for this one merge. If "
+                    "this recurs on every pull, the dispatcher worker may be "
+                    "dead (see the prior 'dead worker' ERROR) and pending "
+                    "commits will never land."
+                )
+            yield
+
     def start(
         self,
         *,
         repo_path: Path,
         pull_interval_s: int,
-        pause_writes: Callable[[], contextlib.AbstractContextManager[None]]
-        | None = None,
         on_pull: Callable[[], object] | None = None,
     ) -> None:
         """Start a periodic fetch + ff-only update loop in a daemon thread."""
@@ -1548,7 +1620,6 @@ class GitWriteStrategy:
                 return
             self._pull_repo_path = repo_path
             self._pull_interval_s = pull_interval_s
-            self._pause_writes = pause_writes
             self._on_pull = on_pull
             self._pull_stop.clear()
             self._pull_thread = threading.Thread(
