@@ -21,6 +21,7 @@ WORKDIR /app
 # case-insensitive); anything else is treated as off.  See
 # ``docs/deployment/docker.md`` for the full attach workflow.
 ARG DEBUG=false
+ARG UV_EXTRAS="--extra all"
 
 # DOCKERFILE-UV-EXTRAS-START — append `--extra <name>` flags below to pull domain-specific extras; kept across copier update
 # Install dependencies first (cache layer).  The ``$( ... )`` shell
@@ -29,14 +30,14 @@ ARG DEBUG=false
 RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
     --mount=type=bind,source=uv.lock,target=uv.lock \
-    uv sync --frozen --no-install-project --no-dev --extra all \
+    uv sync --frozen --no-install-project --no-dev $UV_EXTRAS \
         $( case "$DEBUG" in [Tt][Rr][Uu][Ee]|1|[Yy][Ee][Ss]|[Oo][Nn]) echo "--extra debug" ;; esac )
 
 # Copy source and install project.
 COPY pyproject.toml uv.lock README.md /app/
 COPY src/ /app/src/
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev --extra all \
+    uv sync --frozen --no-dev $UV_EXTRAS \
         $( case "$DEBUG" in [Tt][Rr][Uu][Ee]|1|[Yy][Ee][Ss]|[Oo][Nn]) echo "--extra debug" ;; esac )
 # DOCKERFILE-UV-EXTRAS-END
 
