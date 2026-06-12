@@ -44,6 +44,7 @@ _CLEAR_VARS = (
     "MARKDOWN_VAULT_MCP_OIDC_JWT_SIGNING_KEY",
     "MARKDOWN_VAULT_MCP_OIDC_AUDIENCE",
     "MARKDOWN_VAULT_MCP_OIDC_REQUIRED_SCOPES",
+    "MARKDOWN_VAULT_MCP_OIDC_CLIENT_STORAGE_FERNET_KEY",
 )
 
 
@@ -727,6 +728,7 @@ _OIDC_VARS = (
     "MARKDOWN_VAULT_MCP_OIDC_AUDIENCE",
     "MARKDOWN_VAULT_MCP_OIDC_REQUIRED_SCOPES",
     "MARKDOWN_VAULT_MCP_OIDC_VERIFY_ACCESS_TOKEN",
+    "MARKDOWN_VAULT_MCP_OIDC_CLIENT_STORAGE_FERNET_KEY",
 )
 
 _OIDC_REQUIRED = {
@@ -2573,6 +2575,41 @@ class TestAuthModeSelection:
         with patch("fastmcp.server.auth.oidc_proxy.OIDCProxy", mock_cls):
             make_server()
         assert mock_cls.call_args.kwargs["verify_id_token"] is False
+
+    def test_oidc_client_storage_uses_kv_store_when_signing_key_set(
+        self,
+        vault_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """OIDC proxy client registrations are stored via the configured KV backend."""
+        from unittest.mock import MagicMock, patch
+
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", str(vault_path))
+        for var, val in _OIDC_REQUIRED.items():
+            monkeypatch.setenv(var, val)
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_OIDC_JWT_SIGNING_KEY", "stable-key")
+
+        kv_store = object()
+        wrapped_store = object()
+        mock_cls = MagicMock()
+        with (
+            patch("fastmcp.server.auth.oidc_proxy.OIDCProxy", mock_cls),
+            patch(
+                "markdown_vault_mcp._server_auth.build_kv_store",
+                return_value=kv_store,
+            ) as build_kv,
+            patch(
+                "markdown_vault_mcp._server_auth.FernetEncryptionWrapper",
+                return_value=wrapped_store,
+            ) as wrapper,
+        ):
+            make_server()
+
+        build_kv.assert_called_once()
+        assert build_kv.call_args.kwargs["namespace"] == "oauth"
+        wrapper.assert_called_once()
+        assert wrapper.call_args.kwargs["key_value"] is kv_store
+        assert mock_cls.call_args.kwargs["client_storage"] is wrapped_store
 
     def test_no_auth_when_nothing_configured(
         self,

@@ -214,6 +214,11 @@
           "isSecret": true
         },
         {
+          "name": "MARKDOWN_VAULT_MCP_OIDC_CLIENT_STORAGE_FERNET_KEY",
+          "description": "Optional Fernet key for encrypting persistent OAuth client registrations and upstream tokens. Defaults to a key derived from OIDC_JWT_SIGNING_KEY.",
+          "isSecret": true
+        },
+        {
           "name": "MARKDOWN_VAULT_MCP_OIDC_AUDIENCE",
           "description": "Expected OIDC token audience"
         },
@@ -455,6 +460,11 @@
         {
           "name": "MARKDOWN_VAULT_MCP_OIDC_JWT_SIGNING_KEY",
           "description": "Signing key for OIDC session JWTs (critical on Linux/Docker)",
+          "isSecret": true
+        },
+        {
+          "name": "MARKDOWN_VAULT_MCP_OIDC_CLIENT_STORAGE_FERNET_KEY",
+          "description": "Optional Fernet key for encrypting persistent OAuth client registrations and upstream tokens. Defaults to a key derived from OIDC_JWT_SIGNING_KEY.",
           "isSecret": true
         },
         {

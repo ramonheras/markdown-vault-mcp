@@ -22,7 +22,6 @@ if TYPE_CHECKING:
 from fastmcp import FastMCP
 from fastmcp_pvl_core import (
     ServerConfig,
-    build_auth,
     register_server_info_tool,
     resolve_auth_mode,
     wire_middleware_stack,
@@ -41,6 +40,7 @@ from markdown_vault_mcp.config import (
 
 from ._icons import _SERVER_ICON
 from ._server_apps import register_apps
+from ._server_auth import build_auth
 from ._server_deps import make_vault_lifespan
 from ._server_prompts import register_prompts
 from ._server_resources import register_resources

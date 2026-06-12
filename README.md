@@ -293,6 +293,7 @@ Full OAuth 2.1 authentication for HTTP deployments. OIDC activates when all four
 | `MARKDOWN_VAULT_MCP_OIDC_CLIENT_ID` | Yes | OIDC client ID registered with your provider |
 | `MARKDOWN_VAULT_MCP_OIDC_CLIENT_SECRET` | Yes | OIDC client secret |
 | `MARKDOWN_VAULT_MCP_OIDC_JWT_SIGNING_KEY` | No | JWT signing key; **required on Linux/Docker** — the default is ephemeral and invalidates tokens on restart. Generate with `openssl rand -hex 32` |
+| `MARKDOWN_VAULT_MCP_OIDC_CLIENT_STORAGE_FERNET_KEY` | No | Optional Fernet key for encrypting persistent OAuth client registrations and upstream tokens. When unset, the server derives one from `OIDC_JWT_SIGNING_KEY`. Generate with `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"` if you want a separate key |
 | `MARKDOWN_VAULT_MCP_OIDC_AUDIENCE` | No | Expected JWT audience claim; leave unset if your provider does not set one |
 | `MARKDOWN_VAULT_MCP_OIDC_REQUIRED_SCOPES` | No | Comma-separated required scopes; default `openid` |
 | `MARKDOWN_VAULT_MCP_OIDC_VERIFY_ACCESS_TOKEN` | No | Set `true` to verify the upstream access token as a JWT instead of the id token. Only needed when your provider issues JWT access tokens and you require audience-claim validation on that token. Default: verify the id token (works with all providers, including opaque-token issuers like Authelia) |
