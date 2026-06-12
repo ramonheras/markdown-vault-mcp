@@ -3169,7 +3169,14 @@ class TestGetFileDiff:
         assert not diffs[0].diff.startswith("\n")
 
     def test_per_commit_diff_across_rename(self, tmp_path: Path) -> None:
-        """Per-commit diffs are non-empty even for commits before a rename."""
+        """A per-commit rename+edit shows the content delta, not a full-file add.
+
+        The per-commit path is now rename-aware (mirrors the non-per-commit
+        branch, #683): for the rename commit it diffs the old blob against the
+        new blob (``git diff <sha>^:old <sha>:new``), so a rename-with-edit
+        yields a real content delta — ``-Original`` / ``+Modified`` — instead of
+        the old, rename-unaware full-file add (``git show -- new``).
+        """
         from markdown_vault_mcp.types import CommitDiff
 
         repo = tmp_path / "repo"
@@ -3188,7 +3195,7 @@ class TestGetFileDiff:
             check=True,
         )
         # Commit 1: add note.md
-        (repo / "note.md").write_text("# v1\n")
+        (repo / "note.md").write_text("# Title\nOriginal line\n")
         subprocess.run(
             ["git", "-C", str(repo), "add", "."], capture_output=True, check=True
         )
@@ -3203,14 +3210,18 @@ class TestGetFileDiff:
             text=True,
             check=True,
         ).stdout.strip()
-        # Commit 2: rename note.md -> renamed.md
+        # Commit 2: rename note.md -> renamed.md AND edit its content.
         subprocess.run(
             ["git", "-C", str(repo), "mv", "note.md", "renamed.md"],
             capture_output=True,
             check=True,
         )
+        (repo / "renamed.md").write_text("# Title\nModified line\n")
         subprocess.run(
-            ["git", "-C", str(repo), "commit", "-m", "rename to renamed.md"],
+            ["git", "-C", str(repo), "add", "."], capture_output=True, check=True
+        )
+        subprocess.run(
+            ["git", "-C", str(repo), "commit", "-m", "rename+edit renamed.md"],
             capture_output=True,
             check=True,
         )
@@ -3222,8 +3233,9 @@ class TestGetFileDiff:
         assert isinstance(diffs, list)
         assert len(diffs) == 1
         assert isinstance(diffs[0], CommitDiff)
-        # The rename commit should produce a non-empty diff
-        assert diffs[0].diff
+        # Rename-aware content delta, not a full-file add.
+        assert "-Original line" in diffs[0].diff
+        assert "+Modified line" in diffs[0].diff
 
     def test_single_diff_across_rename(self, tmp_path: Path) -> None:
         """Single diff shows content delta across renames, not a full-file add."""
@@ -3373,81 +3385,439 @@ class TestGetFileDiff:
         assert "Binary files" not in out  # full binary patch marker must be absent
         assert "@@" not in out
 
-    def test_get_file_diff_per_commit_renamed_binary_degraded_stat(
-        self, tmp_path: Path
-    ) -> None:
-        """KNOWN LIMITATION (#683): per-commit --stat of a RENAMED binary shows a
-        text-style stat for the rename commit, not a ``Bin`` summary, because the
-        single-path pathspec defeats git's rename pairing in ``git show``. The
-        non-per-commit path IS rename-aware. Flip this assertion to require
-        ``' -> '``/``Bin`` when #683 is fixed.
+    def _bin_rename_repo(self, tmp_path: Path) -> tuple[Path, str]:
+        """Repo where a STAYS-binary attachment is renamed across commits.
+
+        v1 and v2 both carry a NUL (both binary); high similarity so
+        ``--find-renames=30`` pairs them.  Returns the repo path and the first
+        (pre-rename) commit SHA.
         """
-        repo = tmp_path / "repo"
+        repo = tmp_path / "r"
         repo.mkdir()
-        subprocess.run(
-            ["git", "-C", str(repo), "init"], capture_output=True, check=True
-        )
-        subprocess.run(
-            ["git", "-C", str(repo), "config", "user.email", "t@t.com"],
-            capture_output=True,
-            check=True,
-        )
-        subprocess.run(
-            ["git", "-C", str(repo), "config", "user.name", "T"],
-            capture_output=True,
-            check=True,
-        )
+        for a in (
+            ["init"],
+            ["config", "user.email", "t@t"],
+            ["config", "user.name", "t"],
+        ):
+            subprocess.run(
+                ["git", "-C", str(repo), *a], check=True, capture_output=True
+            )
         assets = repo / "assets"
         assets.mkdir()
-        # Same fixture as test_get_file_diff_binary_attachment_stat_across_rename:
-        # NUL-carrying v1 (binary) renamed to y.png with tweaked bytes (v2,
-        # no NUL, high similarity so --find-renames=30 pairs them).
         common = b"\x89PNG\r\n\x1a\n" + (b"\xaa" * 200)
-        v1 = common + b"\x00" + (b"\xbb" * 50)
-        v2 = common + b"\x11" + (b"\xcc" * 50)
-        (assets / "x.png").write_bytes(v1)
+        (assets / "x.png").write_bytes(common + b"\x00" + (b"\xbb" * 50))
         subprocess.run(
-            ["git", "-C", str(repo), "add", "."], capture_output=True, check=True
+            ["git", "-C", str(repo), "add", "."], check=True, capture_output=True
         )
         subprocess.run(
             ["git", "-C", str(repo), "commit", "-m", "add x.png"],
-            capture_output=True,
             check=True,
+            capture_output=True,
         )
-        first_sha = subprocess.run(
+        first = subprocess.run(
             ["git", "-C", str(repo), "rev-parse", "HEAD"],
+            check=True,
             capture_output=True,
             text=True,
-            check=True,
         ).stdout.strip()
         subprocess.run(
             ["git", "-C", str(repo), "mv", "assets/x.png", "assets/y.png"],
-            capture_output=True,
             check=True,
-        )
-        (assets / "y.png").write_bytes(v2)
-        subprocess.run(
-            ["git", "-C", str(repo), "add", "."], capture_output=True, check=True
-        )
-        subprocess.run(
-            ["git", "-C", str(repo), "commit", "-m", "rename+edit x.png -> y.png"],
             capture_output=True,
-            check=True,
         )
+        (assets / "y.png").write_bytes(common + b"\x00" + (b"\xcc" * 50))
+        subprocess.run(
+            ["git", "-C", str(repo), "add", "."], check=True, capture_output=True
+        )
+        subprocess.run(
+            ["git", "-C", str(repo), "commit", "-m", "rename + edit"],
+            check=True,
+            capture_output=True,
+        )
+        return repo, first
 
+    def test_get_file_diff_per_commit_renamed_binary_is_rename_paired(
+        self, tmp_path: Path
+    ) -> None:
+        """#683 FIXED: per-commit --stat of a renamed binary is a paired rename stat."""
+        repo, first = self._bin_rename_repo(tmp_path)
         strategy = GitWriteStrategy()
         out = strategy.get_file_diff(
             repo,
             repo / "assets" / "y.png",
-            ref=first_sha,
+            ref=first,
             per_commit=True,
             summarize_binary=True,
         )
         assert isinstance(out, list) and out
-        # Currently NO Bin/arrow marker on any per-commit entry (the #683 bug):
-        # git show --stat -- commit_path defeats rename pairing and shows a
-        # text-style count instead of "Bin N -> M bytes".
-        assert not any(" -> " in cd.diff for cd in out)
+        rename_entry = out[0]  # newest-first = the rename+edit commit
+        # `{x.png => y.png}` (the => rename-pair marker) appears ONLY in the paired
+        # form; the old broken `Bin 0 -> N bytes` add-stat does not contain it.
+        assert "=>" in rename_entry.diff and "Bin" in rename_entry.diff
+        assert "@@" not in rename_entry.diff
+
+    def test_get_file_diff_per_commit_classifies_binariness_per_commit(
+        self, tmp_path: Path
+    ) -> None:
+        """A file binary at one commit and text at another is labelled per-commit."""
+        repo = tmp_path / "r"
+        repo.mkdir()
+        for a in (
+            ["init"],
+            ["config", "user.email", "t@t"],
+            ["config", "user.name", "t"],
+        ):
+            subprocess.run(
+                ["git", "-C", str(repo), *a], check=True, capture_output=True
+            )
+        assets = repo / "assets"
+        assets.mkdir()
+        (assets / "f.dat").write_text("plain text v1\n")
+        subprocess.run(
+            ["git", "-C", str(repo), "add", "."], check=True, capture_output=True
+        )
+        subprocess.run(
+            ["git", "-C", str(repo), "commit", "-m", "c1 text"],
+            check=True,
+            capture_output=True,
+        )
+        first = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        (assets / "f.dat").write_text("plain text v2\n")
+        subprocess.run(
+            ["git", "-C", str(repo), "commit", "-am", "c2 text edit"],
+            check=True,
+            capture_output=True,
+        )
+        (assets / "f.dat").write_bytes(b"now\x00binary\x00bytes")
+        subprocess.run(
+            ["git", "-C", str(repo), "commit", "-am", "c3 becomes binary"],
+            check=True,
+            capture_output=True,
+        )
+        strategy = GitWriteStrategy()
+        out = strategy.get_file_diff(
+            repo,
+            repo / "assets" / "f.dat",
+            ref=first,
+            per_commit=True,
+            summarize_binary=True,
+        )
+        assert isinstance(out, list)
+        assert any(
+            "Bin" in cd.diff and "@@" not in cd.diff for cd in out
+        )  # binary commit
+        assert any("@@" in cd.diff for cd in out)  # text commit
+
+    def test_get_file_diff_per_commit_binary_added_in_first_in_range_commit(
+        self, tmp_path: Path
+    ) -> None:
+        """A plain binary add (no rename) in an in-range commit still yields a
+        ``Bin`` stat via the non-rename ``git diff {sha}^..{sha} -- path`` form.
+        """
+        repo = tmp_path / "r"
+        repo.mkdir()
+        for a in (
+            ["init"],
+            ["config", "user.email", "t@t"],
+            ["config", "user.name", "t"],
+        ):
+            subprocess.run(
+                ["git", "-C", str(repo), *a], check=True, capture_output=True
+            )
+        (repo / "seed.txt").write_text("seed\n")
+        subprocess.run(
+            ["git", "-C", str(repo), "add", "."], check=True, capture_output=True
+        )
+        subprocess.run(
+            ["git", "-C", str(repo), "commit", "-m", "seed"],
+            check=True,
+            capture_output=True,
+        )
+        first = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        assets = repo / "assets"
+        assets.mkdir()
+        (assets / "z.png").write_bytes(b"PNG\x00data")
+        subprocess.run(
+            ["git", "-C", str(repo), "add", "."], check=True, capture_output=True
+        )
+        subprocess.run(
+            ["git", "-C", str(repo), "commit", "-m", "add z.png"],
+            check=True,
+            capture_output=True,
+        )
+        strategy = GitWriteStrategy()
+        out = strategy.get_file_diff(
+            repo,
+            repo / "assets" / "z.png",
+            ref=first,
+            per_commit=True,
+            summarize_binary=True,
+        )
+        assert isinstance(out, list) and out
+        assert any("Bin" in cd.diff for cd in out)
+
+    def test_get_file_diff_per_commit_parent_less_falls_back_to_git_show(
+        self, tmp_path: Path
+    ) -> None:
+        """For a genuinely parent-less (root/orphan) commit the per-commit branch
+        falls back to the add-form ``git show`` rather than crashing (#683).
+
+        The ``rev-parse --verify {sha}^`` probe returns non-zero (no parent),
+        so the code classifies this as an orphan commit and uses the fallback
+        instead of surfacing the diff failure as a ``ValueError``.
+        """
+        from unittest.mock import patch
+
+        repo = tmp_path / "r"
+        repo.mkdir()
+        for a in (
+            ["init"],
+            ["config", "user.email", "t@t"],
+            ["config", "user.name", "t"],
+        ):
+            subprocess.run(
+                ["git", "-C", str(repo), *a], check=True, capture_output=True
+            )
+        (repo / "seed.txt").write_text("seed\n")
+        subprocess.run(
+            ["git", "-C", str(repo), "add", "."], check=True, capture_output=True
+        )
+        subprocess.run(
+            ["git", "-C", str(repo), "commit", "-m", "seed"],
+            check=True,
+            capture_output=True,
+        )
+        first = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        (repo / "note.md").write_text("# added\nhello\n")
+        subprocess.run(
+            ["git", "-C", str(repo), "add", "."], check=True, capture_output=True
+        )
+        subprocess.run(
+            ["git", "-C", str(repo), "commit", "-m", "add note"],
+            check=True,
+            capture_output=True,
+        )
+
+        real_run = subprocess.run
+        show_seen: list[bool] = []
+
+        def fake_run(cmd, *args, **kwargs):  # type: ignore[no-untyped-def]
+            # Simulate a parent-less commit by:
+            # 1. Forcing the parent-relative per-commit diff (-p, not --numstat) to fail.
+            # 2. Returning non-zero for the `rev-parse --verify {sha}^` parent probe,
+            #    so the code classifies the commit as parent-less and uses the fallback.
+            if (
+                isinstance(cmd, list)
+                and "diff" in cmd
+                and "-p" in cmd
+                and "--numstat" not in cmd
+            ):
+                raise subprocess.CalledProcessError(128, cmd)
+            if (
+                isinstance(cmd, list)
+                and "rev-parse" in cmd
+                and "--verify" in cmd
+                and any(a.endswith("^") for a in cmd)
+            ):
+                import subprocess as _sp
+
+                return _sp.CompletedProcess(
+                    args=cmd, returncode=1, stdout=b"", stderr=b""
+                )
+            if isinstance(cmd, list) and "show" in cmd:
+                show_seen.append(True)
+            return real_run(cmd, *args, **kwargs)
+
+        strategy = GitWriteStrategy()
+        with patch("markdown_vault_mcp.git.subprocess.run", side_effect=fake_run):
+            out = strategy.get_file_diff(
+                repo,
+                repo / "note.md",
+                ref=first,
+                per_commit=True,
+                summarize_binary=False,
+            )
+        assert isinstance(out, list) and out
+        # Fallback used and produced the add-form diff for the note.
+        assert show_seen
+        assert any("+hello" in cd.diff for cd in out)
+
+    def test_get_file_diff_per_commit_parent_less_fallback_show_also_fails_raises(
+        self, tmp_path: Path
+    ) -> None:
+        """When the primary per-commit diff fails AND the parent-less ``git show``
+        fallback also fails, ``ValueError("Could not retrieve diff for commit …")``
+        is raised (the nested ``exc2`` path).
+
+        Setup mirrors ``test_get_file_diff_per_commit_parent_less_falls_back_to_git_show``:
+        ``rev-parse --verify {sha}^`` returns non-zero (parent-less), so the
+        code takes the fallback branch — but then the fallback ``git show`` also
+        raises, triggering the inner ``except CalledProcessError as exc2`` re-raise.
+        """
+        from unittest.mock import patch
+
+        repo = tmp_path / "r"
+        repo.mkdir()
+        for a in (
+            ["init"],
+            ["config", "user.email", "t@t"],
+            ["config", "user.name", "t"],
+        ):
+            subprocess.run(
+                ["git", "-C", str(repo), *a], check=True, capture_output=True
+            )
+        (repo / "seed.txt").write_text("seed\n")
+        subprocess.run(
+            ["git", "-C", str(repo), "add", "."], check=True, capture_output=True
+        )
+        subprocess.run(
+            ["git", "-C", str(repo), "commit", "-m", "seed"],
+            check=True,
+            capture_output=True,
+        )
+        first = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        (repo / "note.md").write_text("# added\nhello\n")
+        subprocess.run(
+            ["git", "-C", str(repo), "add", "."], check=True, capture_output=True
+        )
+        subprocess.run(
+            ["git", "-C", str(repo), "commit", "-m", "add note"],
+            check=True,
+            capture_output=True,
+        )
+
+        real_run = subprocess.run
+
+        def fake_run(cmd, *args, **kwargs):  # type: ignore[no-untyped-def]
+            # Force the primary per-commit diff (-p) to fail.
+            if (
+                isinstance(cmd, list)
+                and "diff" in cmd
+                and "-p" in cmd
+                and "--numstat" not in cmd
+            ):
+                raise subprocess.CalledProcessError(128, cmd)
+            # Return non-zero for `rev-parse --verify {sha}^` → parent-less.
+            if (
+                isinstance(cmd, list)
+                and "rev-parse" in cmd
+                and "--verify" in cmd
+                and any(a.endswith("^") for a in cmd)
+            ):
+                import subprocess as _sp
+
+                return _sp.CompletedProcess(
+                    args=cmd, returncode=1, stdout=b"", stderr=b""
+                )
+            # Force the fallback `git show` to also fail.
+            if isinstance(cmd, list) and "show" in cmd:
+                raise subprocess.CalledProcessError(128, cmd)
+            return real_run(cmd, *args, **kwargs)
+
+        strategy = GitWriteStrategy()
+        with (
+            patch("markdown_vault_mcp.git.subprocess.run", side_effect=fake_run),
+            pytest.raises(ValueError, match="Could not retrieve diff for commit"),
+        ):
+            strategy.get_file_diff(
+                repo,
+                repo / "note.md",
+                ref=first,
+                per_commit=True,
+                summarize_binary=False,
+            )
+
+    def test_get_file_diff_per_commit_non_parent_less_diff_failure_raises(
+        self, tmp_path: Path
+    ) -> None:
+        """A per-commit diff failure on a commit that HAS a parent raises
+        ``ValueError`` immediately (not a silent fallback to an add-form diff).
+
+        This is the scoping introduced by #683: the old broad ``except`` silently
+        degraded any diff failure; the new code checks whether the commit is
+        parent-less and only falls back for genuine root/orphan commits.  Any
+        other diff failure is a real error and must surface."""
+        from unittest.mock import patch
+
+        repo = tmp_path / "r"
+        repo.mkdir()
+        for a in (
+            ["init"],
+            ["config", "user.email", "t@t"],
+            ["config", "user.name", "t"],
+        ):
+            subprocess.run(
+                ["git", "-C", str(repo), *a], check=True, capture_output=True
+            )
+        (repo / "seed.txt").write_text("seed\n")
+        subprocess.run(
+            ["git", "-C", str(repo), "add", "."], check=True, capture_output=True
+        )
+        subprocess.run(
+            ["git", "-C", str(repo), "commit", "-m", "seed"],
+            check=True,
+            capture_output=True,
+        )
+        first = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        (repo / "note.md").write_text("# added\n")
+        subprocess.run(
+            ["git", "-C", str(repo), "add", "."], check=True, capture_output=True
+        )
+        subprocess.run(
+            ["git", "-C", str(repo), "commit", "-m", "add note"],
+            check=True,
+            capture_output=True,
+        )
+
+        real_run = subprocess.run
+
+        def fake_run(cmd, *args, **kwargs):  # type: ignore[no-untyped-def]
+            # Fail the per-commit diff (-p, not the --numstat probe); let everything
+            # else including `rev-parse --verify` pass through so the code sees a
+            # commit that HAS a parent → ValueError rather than fallback.
+            if isinstance(cmd, list) and (
+                "diff" in cmd and "-p" in cmd and "--numstat" not in cmd
+            ):
+                raise subprocess.CalledProcessError(128, cmd)
+            return real_run(cmd, *args, **kwargs)
+
+        strategy = GitWriteStrategy()
+        with (
+            patch("markdown_vault_mcp.git.subprocess.run", side_effect=fake_run),
+            pytest.raises(ValueError, match="Could not retrieve diff for commit"),
+        ):
+            strategy.get_file_diff(
+                repo,
+                repo / "note.md",
+                ref=first,
+                per_commit=True,
+                summarize_binary=False,
+            )
 
     def test_get_file_diff_summarize_binary_invalid_ref_raises(
         self, tmp_path: Path
@@ -3531,8 +3901,25 @@ class TestGetFileDiff:
     def test_resolve_path_at_ref_skips_copy_entries(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """C<score> entries (copies) are skipped, never returned as a rename match."""
-        fake_stdout = "C092\0source.md\0target.md\0"
+        """C<score> entries (copies) are skipped and the parser stays in sync.
+
+        A copied file renders as a plain add (git does not emit C* records
+        without ``--find-copies``), so its source path is not recovered.
+        The parser must advance past the three-token C* record (status + old +
+        new) with ``i += 3``, NOT ``i += 2``.
+
+        A single-entry fixture is insufficient: a lone C* record returns None
+        regardless of whether the C-branch exists (the loop just ends).  This
+        two-record fixture — a copy followed by a DIFFERENT rename — requires
+        the correct three-field advance to land on and parse the following R*
+        record.  With a wrong ``i += 2`` advance the loop desyncs and returns
+        None instead of the expected "old.md".
+        """
+        # C* (3 fields) followed immediately by R* (3 fields).
+        # The C* copy must be skipped with i += 3 so the R* is reached.
+        fake_stdout = (
+            "C092\x00copied_src.md\x00copied_dst.md\x00R100\x00old.md\x00wanted.md\x00"
+        )
 
         def fake_run(*_args: object, **_kw: object) -> subprocess.CompletedProcess[str]:
             return subprocess.CompletedProcess(
@@ -3540,11 +3927,20 @@ class TestGetFileDiff:
             )
 
         monkeypatch.setattr("markdown_vault_mcp.git.subprocess.run", fake_run)
+        # The copy target ("copied_dst.md") must NOT be resolved.
         assert (
             GitWriteStrategy._resolve_path_at_ref(
-                tmp_path, "deadbeef", "target.md", env=None
+                tmp_path, "deadbeef", "copied_dst.md", env=None
             )
             is None
+        )
+        # The rename target ("wanted.md") MUST be resolved — only reachable if
+        # the C* record was consumed with the correct i += 3 advance.
+        assert (
+            GitWriteStrategy._resolve_path_at_ref(
+                tmp_path, "deadbeef", "wanted.md", env=None
+            )
+            == "old.md"
         )
 
     def test_resolve_path_at_ref_handles_truncated_rename_output(
@@ -3602,6 +3998,323 @@ class TestGetFileDiff:
             pytest.raises(ValueError, match="git log failed"),
         ):
             strategy.get_file_history(repo, path=None, since=None, limit=20)
+
+    def test_get_file_diff_per_commit_pure_rename_emits_marker(
+        self, tmp_path: Path
+    ) -> None:
+        """A pure rename with no content change shows a rename marker, not an empty
+        diff (the two-blob diff of identical blobs is empty) (#683)."""
+        repo = tmp_path / "r"
+        repo.mkdir()
+        for a in (
+            ["init"],
+            ["config", "user.email", "t@t"],
+            ["config", "user.name", "t"],
+        ):
+            subprocess.run(
+                ["git", "-C", str(repo), *a], check=True, capture_output=True
+            )
+        assets = repo / "assets"
+        assets.mkdir()
+        (assets / "a.txt").write_text("stable content, never edited\n" * 5)
+        subprocess.run(
+            ["git", "-C", str(repo), "add", "."], check=True, capture_output=True
+        )
+        subprocess.run(
+            ["git", "-C", str(repo), "commit", "-m", "add a"],
+            check=True,
+            capture_output=True,
+        )
+        first = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        subprocess.run(
+            ["git", "-C", str(repo), "mv", "assets/a.txt", "assets/b.txt"],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(repo), "commit", "-m", "pure rename"],
+            check=True,
+            capture_output=True,
+        )
+        strategy = GitWriteStrategy()
+        out = strategy.get_file_diff(
+            repo,
+            repo / "assets" / "b.txt",
+            ref=first,
+            per_commit=True,
+            summarize_binary=True,
+        )
+        assert isinstance(out, list) and out
+        # The rename commit must NOT be an empty diff; it shows the rename marker.
+        assert any(cd.diff.strip() for cd in out)
+        assert any("=>" in cd.diff and "renamed" in cd.diff for cd in out)
+
+    def test_get_file_diff_per_commit_root_binary_classification_fires(
+        self, tmp_path: Path
+    ) -> None:
+        """parent-less + summarize_binary=True classifies the file against the empty
+        tree so a root binary commit gets a Bin --stat rather than a raw patch (#683).
+
+        The mock forces the primary diff to fail and the parent-probe to return
+        non-zero (orphan), then presents the empty-tree numstat as binary and the
+        fallback git-show --stat as a Bin line.
+        """
+        from unittest.mock import patch
+
+        repo = tmp_path / "r"
+        repo.mkdir()
+        for a in (
+            ["init"],
+            ["config", "user.email", "t@t"],
+            ["config", "user.name", "t"],
+        ):
+            subprocess.run(
+                ["git", "-C", str(repo), *a], check=True, capture_output=True
+            )
+        (repo / "seed.txt").write_text("seed\n")
+        subprocess.run(
+            ["git", "-C", str(repo), "add", "."], check=True, capture_output=True
+        )
+        subprocess.run(
+            ["git", "-C", str(repo), "commit", "-m", "seed"],
+            check=True,
+            capture_output=True,
+        )
+        first = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        assets = repo / "assets"
+        assets.mkdir()
+        (assets / "z.bin").write_bytes(b"BIN\x00DATA")
+        subprocess.run(
+            ["git", "-C", str(repo), "add", "."], check=True, capture_output=True
+        )
+        subprocess.run(
+            ["git", "-C", str(repo), "commit", "-m", "add z.bin"],
+            check=True,
+            capture_output=True,
+        )
+
+        real_run = subprocess.run
+        empty_tree_numstat_seen: list[bool] = []
+
+        def fake_run(cmd, *args, **kwargs):  # type: ignore[no-untyped-def]
+            # 1. Force the primary per-commit diff (--stat or -p, not --numstat) to fail.
+            if isinstance(cmd, list) and "diff" in cmd and "--numstat" not in cmd:
+                raise subprocess.CalledProcessError(128, cmd)
+            # 2. Make the parent-probe return non-zero so the code treats it as orphan.
+            if (
+                isinstance(cmd, list)
+                and "rev-parse" in cmd
+                and "--verify" in cmd
+                and any(a.endswith("^") for a in cmd)
+            ):
+                import subprocess as _sp
+
+                return _sp.CompletedProcess(
+                    args=cmd, returncode=1, stdout=b"", stderr=b""
+                )
+            # 3. Make the empty-tree numstat classify the file as binary.
+            from markdown_vault_mcp.git.query import _EMPTY_TREE_SHA
+
+            if (
+                isinstance(cmd, list)
+                and "diff" in cmd
+                and "--numstat" in cmd
+                and _EMPTY_TREE_SHA in cmd
+            ):
+                empty_tree_numstat_seen.append(True)
+                import subprocess as _sp
+
+                return _sp.CompletedProcess(
+                    args=cmd, returncode=0, stdout="-\t-\tassets/z.bin\n", stderr=""
+                )
+            # 4. The fallback git-show --stat returns a Bin line.
+            if isinstance(cmd, list) and "show" in cmd and "--stat" in cmd:
+                import subprocess as _sp
+
+                return _sp.CompletedProcess(
+                    args=cmd,
+                    returncode=0,
+                    stdout=" assets/z.bin | Bin 0 -> 8 bytes\n",
+                    stderr="",
+                )
+            return real_run(cmd, *args, **kwargs)
+
+        strategy = GitWriteStrategy()
+        with patch("markdown_vault_mcp.git.subprocess.run", side_effect=fake_run):
+            out = strategy.get_file_diff(
+                repo,
+                repo / "assets" / "z.bin",
+                ref=first,
+                per_commit=True,
+                summarize_binary=True,
+            )
+        # The empty-tree numstat probe fired (load-bearing: classifies the root binary).
+        assert empty_tree_numstat_seen
+        assert isinstance(out, list) and out
+        assert any("Bin" in cd.diff for cd in out)
+
+    def test_empty_tree_resolution_matches_repo_object_format(
+        self, tmp_path: Path
+    ) -> None:
+        """The empty-tree object resolved via ``git hash-object`` matches the repo's
+        hash algorithm: the SHA-1 constant for a sha1 repo, a distinct 64-hex SHA for
+        a sha256 repo (the hardcoded SHA-1 constant is invalid there) (#683).
+
+        This pins the load-bearing change behind FIX 2: the parent-less root-binary
+        fallback now classifies against the dynamically-resolved empty tree instead of
+        the hardcoded SHA-1 constant, so SHA-256 repos no longer fail ``git diff``.
+        """
+        from markdown_vault_mcp.git.query import _EMPTY_TREE_SHA
+
+        sha1_repo = tmp_path / "sha1"
+        sha1_repo.mkdir()
+        subprocess.run(
+            ["git", "-C", str(sha1_repo), "init"], check=True, capture_output=True
+        )
+        sha1_empty = subprocess.run(
+            ["git", "-C", str(sha1_repo), "hash-object", "-t", "tree", "--stdin"],
+            input="",
+            text=True,
+            capture_output=True,
+            check=True,
+        ).stdout.strip()
+        assert sha1_empty == _EMPTY_TREE_SHA
+
+        sha256_repo = tmp_path / "sha256"
+        sha256_repo.mkdir()
+        init = subprocess.run(
+            ["git", "-C", str(sha256_repo), "init", "--object-format=sha256"],
+            capture_output=True,
+            text=True,
+        )
+        if init.returncode != 0:
+            pytest.skip(
+                "local git does not support --object-format=sha256: "
+                f"{(init.stderr or '').strip()}"
+            )
+        sha256_empty = subprocess.run(
+            ["git", "-C", str(sha256_repo), "hash-object", "-t", "tree", "--stdin"],
+            input="",
+            text=True,
+            capture_output=True,
+            check=True,
+        ).stdout.strip()
+        # A 64-hex SHA, distinct from the SHA-1 constant — proving the hardcoded
+        # constant would be the wrong object to diff against in a sha256 repo.
+        assert len(sha256_empty) == 64
+        assert sha256_empty != _EMPTY_TREE_SHA
+
+    def test_get_file_diff_per_commit_copy_renders_as_add(self, tmp_path: Path) -> None:
+        """A copied binary renders as a plain ``Bin`` add, not a mislabelled rename (#683).
+
+        Without ``--find-copies`` git reports a ``cp``-based copy as ``A``
+        (add), so ``resolve_path_at_ref`` sees no rename and falls back to the
+        plain ``{sha}^..{sha} -- path`` diff form.  The ``--stat`` output must
+        contain ``Bin`` (binary add) and must NOT contain ``=>`` (which would
+        indicate a spurious rename pairing).
+        """
+        repo = tmp_path / "r"
+        repo.mkdir()
+        for a in (
+            ["init"],
+            ["config", "user.email", "t@t"],
+            ["config", "user.name", "t"],
+        ):
+            subprocess.run(
+                ["git", "-C", str(repo), *a], check=True, capture_output=True
+            )
+        assets = repo / "assets"
+        assets.mkdir()
+        (assets / "orig.png").write_bytes(b"PNG\x00" + b"\xaa" * 300)
+        subprocess.run(
+            ["git", "-C", str(repo), "add", "."], check=True, capture_output=True
+        )
+        subprocess.run(
+            ["git", "-C", str(repo), "commit", "-m", "add orig"],
+            check=True,
+            capture_output=True,
+        )
+        first = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        import shutil
+
+        shutil.copyfile(assets / "orig.png", assets / "copy.png")  # source unchanged
+        subprocess.run(
+            ["git", "-C", str(repo), "add", "."], check=True, capture_output=True
+        )
+        subprocess.run(
+            ["git", "-C", str(repo), "commit", "-m", "add copy.png"],
+            check=True,
+            capture_output=True,
+        )
+        strategy = GitWriteStrategy(token=None, push_delay_s=0)
+        out = strategy.get_file_diff(
+            repo,
+            repo / "assets" / "copy.png",
+            ref=first,
+            per_commit=True,
+            summarize_binary=True,
+        )
+        assert isinstance(out, list) and out
+        copy_entry = out[0]  # newest = the copy-add commit
+        assert "Bin" in copy_entry.diff
+        assert "=>" not in copy_entry.diff  # plain add, NOT a mislabelled rename
+
+
+def test_resolve_path_at_ref_to_ref_resolves_single_commit_rename(
+    tmp_path: Path,
+) -> None:
+    """resolve_path_at_ref with to_ref resolves a rename a single commit made."""
+    import subprocess as _sp
+
+    from markdown_vault_mcp.git.query import resolve_path_at_ref
+
+    repo = tmp_path / "r"
+    repo.mkdir()
+    for a in (
+        ["init"],
+        ["config", "user.email", "t@t"],
+        ["config", "user.name", "t"],
+    ):
+        _sp.run(["git", "-C", str(repo), *a], check=True, capture_output=True)
+    (repo / "x.txt").write_text("hello\n")
+    _sp.run(["git", "-C", str(repo), "add", "."], check=True, capture_output=True)
+    _sp.run(
+        ["git", "-C", str(repo), "commit", "-m", "c1"],
+        check=True,
+        capture_output=True,
+    )
+    _sp.run(
+        ["git", "-C", str(repo), "mv", "x.txt", "y.txt"],
+        check=True,
+        capture_output=True,
+    )
+    _sp.run(
+        ["git", "-C", str(repo), "commit", "-m", "c2"],
+        check=True,
+        capture_output=True,
+    )
+    sha = _sp.run(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert resolve_path_at_ref(repo, f"{sha}^", "y.txt", None, to_ref=sha) == "x.txt"
 
 
 class TestGetFileHistoryVaultScope:

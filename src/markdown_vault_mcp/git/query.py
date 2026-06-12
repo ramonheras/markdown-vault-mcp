@@ -26,17 +26,27 @@ from markdown_vault_mcp.types import CommitDiff, HistoryEntry
 
 logger = logging.getLogger(__name__)
 
+# Git's well-known empty-tree SHA: a real object in every repository.
+# Used to diff a parent-less (root/orphan) commit against "nothing".
+_EMPTY_TREE_SHA = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+
 
 def _diff_is_binary(
     git_root: Path, diff_args: list[str], env: dict[str, str] | None
 ) -> bool:
     """True if git reports the diff target as binary.
 
-    *diff_args* is the ref/path portion of a ``git diff`` invocation — either
-    ``[f"{ref}..HEAD", "--", path_str]`` (no rename) or
-    ``[f"{ref}:{old_path}", f"HEAD:{cur_rel}"]`` (rename-recovered). ``git diff
-    --numstat`` prints ``-\\t-\\t<path>`` for binary and real counts for text;
-    empty output (no change) → non-binary.
+    *diff_args* is the ref/path portion of a ``git diff`` invocation — such as
+    a range/path form (``["<from>..<to>", "--", path_str]``), a two-endpoint
+    blob/tree-spec form (``[f"{a}:{old}", f"{b}:{new}"]``), or two revs followed
+    by a pathspec (e.g. the empty-tree SHA and a commit SHA followed by
+    ``["--", commit_path]``, used for parent-less commits).  The endpoints may
+    be refs, commit SHAs, blob specs, or the empty-tree constant.
+    ``git diff --numstat`` prints ``-\\t-\\t<path>`` for binary and real counts
+    for text; empty output (no change) → non-binary.
+    A non-zero git exit (e.g. a bad ref) yields empty stdout, so it is classified
+    non-binary; the error is then surfaced by the subsequent checked ``git diff``
+    call. This is a detection probe, not the final word.
     """
     result = subprocess.run(
         ["git", "-C", str(git_root), "diff", "--numstat", *diff_args],
@@ -191,8 +201,14 @@ def resolve_path_at_ref(
     ref: str,
     cur_rel: str,
     env: dict[str, str] | None,
+    *,
+    to_ref: str = "HEAD",
 ) -> str | None:
-    """Return the path *cur_rel* had at *ref* via rename detection, else None."""
+    """Return the path *cur_rel* had at *ref* via rename detection, else None.
+
+    Diffs ``ref..to_ref`` (``to_ref`` defaults to ``HEAD``).  Pass a specific
+    commit as *to_ref* to resolve a rename a single commit introduced.
+    """
     try:
         result = subprocess.run(
             [
@@ -206,7 +222,7 @@ def resolve_path_at_ref(
                 # -z: NUL-terminated fields, tolerates tabs/newlines in paths.
                 "-z",
                 ref,
-                "HEAD",
+                to_ref,
             ],
             capture_output=True,
             text=True,
@@ -215,7 +231,12 @@ def resolve_path_at_ref(
         )
     except subprocess.CalledProcessError:
         return None
-    # Stream: <status>\0<path>\0  (R*/C* add a second path before the closing NUL).
+    # Stream: <status>\0<path>\0 — R*/C* records add a second path
+    # (\0<old>\0<new>\0).  Copies (C*) are skipped, not resolved (a copy is
+    # an add, not a rename); the branch keeps the parser in sync if git ever
+    # emits one (e.g. if ``--find-copies`` were added in future).  Without
+    # ``--find-copies`` / ``--find-copies-harder`` git does not emit C* records,
+    # so this branch is defensive dead-code today.
     items = result.stdout.split("\0")[:-1]
     i = 0
     while i < len(items):
@@ -392,24 +413,6 @@ def get_file_diff(
                 diff += f"\n[diff truncated: {omitted} bytes omitted]"
             return diff
 
-        # Binary attachments: per-commit patches are equally meaningless, so
-        # detect binariness once up front (rename-aware, mirroring the
-        # non-per-commit branch) and emit a --stat per commit below.
-        try:
-            cur_rel = path.resolve().relative_to(git_root).as_posix()
-        except ValueError:
-            cur_rel = None
-        old_path = (
-            resolve_path_at_ref(git_root, ref, cur_rel, env)
-            if cur_rel is not None
-            else None
-        )
-        if old_path is None or cur_rel is None or old_path == cur_rel:
-            detect_args = [f"{ref}..HEAD", "--", path_str]
-        else:
-            detect_args = [f"{ref}:{old_path}", f"HEAD:{cur_rel}"]
-        binary = summarize_binary and _diff_is_binary(git_root, detect_args, env)
-
         # per_commit=True: enumerate commits in range then show each.
         # Use --name-only with a sentinel so we can recover the path the
         # file had at each commit — critical for correct diffs across
@@ -440,6 +443,15 @@ def get_file_diff(
         except subprocess.CalledProcessError as exc:
             raise ValueError(f"Commit {ref!r} not found in history") from exc
 
+        # Repo-relative posix path — the correct fallback when a --name-only
+        # block has no path line (git returns posix-relative paths, so the
+        # absolute platform-native path_str would break rename resolution on
+        # Windows).
+        try:
+            rel_fallback = path.resolve().relative_to(git_root).as_posix()
+        except ValueError:
+            rel_fallback = path_str
+
         diffs: list[CommitDiff] = []
         for block in log_result.stdout.split(_PC_SENTINEL):
             block = block.strip()
@@ -454,33 +466,126 @@ def get_file_diff(
             sha, short_sha, timestamp, message = parts[:4]
             # Recover the path the file had at this specific commit.
             # With --follow, this will be the old name for pre-rename commits.
-            commit_path = next((ln.strip() for ln in lines[1:] if ln.strip()), path_str)
-            # NOTE: for a renamed binary the per-commit `git show --stat
-            # -- commit_path` pathspec defeats git's rename pairing and renders a
-            # text-style stat instead of `Bin … bytes` — known limitation, see #683.
-            # The non-per-commit path is rename-aware.
-            show_cmd = [
+            commit_path = next(
+                (ln.strip() for ln in lines[1:] if ln.strip()), rel_fallback
+            )
+
+            # Build a rename-aware diff target for THIS commit vs its parent,
+            # mirroring the non-per-commit branch, so a renamed binary pairs into
+            # `{old => new} | Bin OLD -> NEW` instead of an add/text stat (#683).
+            parent = f"{sha}^"
+            old_at_parent = resolve_path_at_ref(
+                git_root, parent, commit_path, env, to_ref=sha
+            )
+            if old_at_parent is not None and old_at_parent != commit_path:
+                commit_args = [f"{parent}:{old_at_parent}", f"{sha}:{commit_path}"]
+            else:
+                commit_args = [f"{parent}..{sha}", "--", commit_path]
+            # Classify binariness for THIS commit (not the whole range).
+            commit_binary = summarize_binary and _diff_is_binary(
+                git_root, commit_args, env
+            )
+            diff_cmd = [
                 "git",
                 "-C",
                 str(git_root),
-                "show",
-                "--format=",
-                "--stat" if binary else "-p",
-                sha,
-                "--",
-                commit_path,
+                "diff",
+                "--stat" if commit_binary else "-p",
+                *commit_args,
             ]
             try:
                 show_result = subprocess.run(
-                    show_cmd,
-                    capture_output=True,
-                    text=True,
-                    check=True,
-                    env=env,
+                    diff_cmd, capture_output=True, text=True, check=True, env=env
                 )
             except subprocess.CalledProcessError as exc:
-                raise ValueError(f"Could not retrieve diff for commit {sha!r}") from exc
+                # A failure here is expected ONLY for a parent-less (root/orphan)
+                # commit, where `{sha}^` can't resolve. Any other failure is real
+                # and must surface rather than silently degrade to an add-form,
+                # rename-unaware diff.
+                parent_exists = (
+                    subprocess.run(
+                        [
+                            "git",
+                            "-C",
+                            str(git_root),
+                            "rev-parse",
+                            "--verify",
+                            "--quiet",
+                            f"{sha}^",
+                        ],
+                        capture_output=True,
+                        env=env,
+                    ).returncode
+                    == 0
+                )
+                if parent_exists:
+                    raise ValueError(
+                        f"Could not retrieve diff for commit {sha!r}"
+                    ) from exc
+                # Genuinely parent-less: classify against the empty tree (so a root
+                # binary still gets --stat) and render the add-form.
+                # Resolve the empty-tree object for this repo's hash algorithm
+                # (the hardcoded SHA-1 constant is invalid in SHA-256 repos);
+                # fall back to the SHA-1 constant if resolution fails.
+                empty_tree = _EMPTY_TREE_SHA
+                try:
+                    res = subprocess.run(
+                        [
+                            "git",
+                            "-C",
+                            str(git_root),
+                            "hash-object",
+                            "-t",
+                            "tree",
+                            "--stdin",
+                        ],
+                        input="",
+                        capture_output=True,
+                        text=True,
+                        env=env,
+                        check=True,
+                    )
+                    empty_tree = res.stdout.strip() or _EMPTY_TREE_SHA
+                except subprocess.CalledProcessError:
+                    pass
+                root_binary = summarize_binary and _diff_is_binary(
+                    git_root, [empty_tree, sha, "--", commit_path], env
+                )
+                fallback_cmd = [
+                    "git",
+                    "-C",
+                    str(git_root),
+                    "show",
+                    "--format=",
+                    "--stat" if root_binary else "-p",
+                    sha,
+                    "--",
+                    commit_path,
+                ]
+                try:
+                    show_result = subprocess.run(
+                        fallback_cmd,
+                        capture_output=True,
+                        text=True,
+                        check=True,
+                        env=env,
+                    )
+                except subprocess.CalledProcessError as exc2:
+                    raise ValueError(
+                        f"Could not retrieve diff for commit {sha!r}"
+                    ) from exc2
             commit_diff = show_result.stdout.lstrip("\n")
+            if (
+                not commit_diff
+                and old_at_parent is not None
+                and old_at_parent != commit_path
+            ):
+                # Pure rename with byte-identical content: the two-blob diff
+                # of identical blobs is empty, so the rename would otherwise be
+                # invisible. Synthesize a marker rather than emit an empty diff (#683).
+                commit_diff = (
+                    f"{old_at_parent} => {commit_path} (renamed, no content change)\n"
+                )
             if len(commit_diff.encode()) > _DIFF_MAX_BYTES:
                 omitted = len(commit_diff.encode()) - _DIFF_MAX_BYTES
                 commit_diff = commit_diff.encode()[:_DIFF_MAX_BYTES].decode(
