@@ -2902,6 +2902,168 @@ class TestGetFileDiff:
         )
         return repo, first_sha
 
+    def _make_repo_with_attachments(self, tmp_path: Path) -> tuple[Path, str]:
+        """Create a repo with a note plus a binary and a text attachment.
+
+        Across two commits this changes ``note.md`` (text), ``assets/x.png``
+        (binary -- distinct PNG bytes) and ``assets/diagram.svg`` (text).
+        Returns the repo path and the SHA of the first commit (before the
+        second-commit changes).
+        """
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        subprocess.run(
+            ["git", "-C", str(repo), "init"], capture_output=True, check=True
+        )
+        subprocess.run(
+            ["git", "-C", str(repo), "config", "user.email", "test@test.com"],
+            capture_output=True,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(repo), "config", "user.name", "Test"],
+            capture_output=True,
+            check=True,
+        )
+        assets = repo / "assets"
+        assets.mkdir()
+        (repo / "note.md").write_text("# Note v1\n")
+        # A minimal but valid-looking PNG header plus distinct payload bytes.
+        (assets / "x.png").write_bytes(b"\x89PNG\r\n\x1a\n\x00\x01\x02\x03")
+        (assets / "diagram.svg").write_text("<svg>1</svg>\n")
+        subprocess.run(
+            ["git", "-C", str(repo), "add", "."], capture_output=True, check=True
+        )
+        subprocess.run(
+            ["git", "-C", str(repo), "commit", "-m", "add note + attachments"],
+            capture_output=True,
+            check=True,
+        )
+        first_sha = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        # Commit 2: change all three with DIFFERENT bytes/content.
+        (repo / "note.md").write_text("# Note v2\n")
+        (assets / "x.png").write_bytes(b"\x89PNG\r\n\x1a\n\xff\xfe\xfd\xfc\xfb")
+        (assets / "diagram.svg").write_text("<svg>2</svg>\n")
+        subprocess.run(
+            ["git", "-C", str(repo), "add", "."], capture_output=True, check=True
+        )
+        subprocess.run(
+            ["git", "-C", str(repo), "commit", "-m", "edit note + attachments"],
+            capture_output=True,
+            check=True,
+        )
+        return repo, first_sha
+
+    def test_get_file_diff_binary_attachment_returns_stat(self, tmp_path: Path) -> None:
+        """A binary attachment with summarize_binary=True returns a --stat summary."""
+        repo, first_sha = self._make_repo_with_attachments(tmp_path)
+        strategy = GitWriteStrategy()
+        out = strategy.get_file_diff(
+            repo,
+            repo / "assets" / "x.png",
+            ref=first_sha,
+            per_commit=False,
+            summarize_binary=True,
+        )
+        assert isinstance(out, str)
+        assert "x.png" in out
+        # --stat summary contains "Bin N -> M bytes" arrow; full binary patch does not.
+        assert " -> " in out  # stat-only marker (e.g. "Bin 12 -> 13 bytes")
+        assert "Binary files" not in out  # full binary patch marker must be absent
+        assert "@@" not in out  # NOT a unified patch
+
+    def test_get_file_diff_text_attachment_returns_full_diff(
+        self, tmp_path: Path
+    ) -> None:
+        """A text attachment with summarize_binary=True still returns a full diff."""
+        repo, first_sha = self._make_repo_with_attachments(tmp_path)
+        strategy = GitWriteStrategy()
+        out = strategy.get_file_diff(
+            repo,
+            repo / "assets" / "diagram.svg",
+            ref=first_sha,
+            per_commit=False,
+            summarize_binary=True,
+        )
+        assert isinstance(out, str)
+        assert "@@" in out and "Bin" not in out
+
+    def test_get_file_diff_note_unchanged_with_summarize_false(
+        self, tmp_path: Path
+    ) -> None:
+        """summarize_binary=False (default) leaves note diffs as full patches."""
+        repo, first_sha = self._make_repo_with_attachments(tmp_path)
+        strategy = GitWriteStrategy()
+        out = strategy.get_file_diff(
+            repo,
+            repo / "note.md",
+            ref=first_sha,
+            per_commit=False,
+            summarize_binary=False,
+        )
+        assert isinstance(out, str)
+        assert "@@" in out
+
+    def test_get_file_diff_binary_per_commit_stat_lines(self, tmp_path: Path) -> None:
+        """per_commit=True + binary returns CommitDiffs whose diff is a --stat."""
+        repo, first_sha = self._make_repo_with_attachments(tmp_path)
+        strategy = GitWriteStrategy()
+        out = strategy.get_file_diff(
+            repo,
+            repo / "assets" / "x.png",
+            ref=first_sha,
+            per_commit=True,
+            summarize_binary=True,
+        )
+        assert isinstance(out, list) and out
+        assert all("@@" not in cd.diff for cd in out)
+        # --stat summary contains "Bin N -> M bytes" arrow; full binary patch does not.
+        assert any(" -> " in cd.diff for cd in out)  # stat-only marker
+        assert all("Binary files" not in cd.diff for cd in out)  # no full binary patch
+
+    def test_get_file_diff_text_attachment_per_commit_returns_full_diff(
+        self, tmp_path: Path
+    ) -> None:
+        """Text attachments with per_commit=True return real patches, not --stat."""
+        repo, first_sha = self._make_repo_with_attachments(tmp_path)
+        strategy = GitWriteStrategy()
+        out = strategy.get_file_diff(
+            repo,
+            repo / "assets" / "diagram.svg",
+            ref=first_sha,
+            per_commit=True,
+            summarize_binary=True,
+        )
+        assert isinstance(out, list)
+        # Text attachment: each CommitDiff must contain a real unified-diff hunk
+        assert any("@@" in cd.diff for cd in out)
+
+    def test_get_file_diff_binary_no_change_in_range_returns_empty(
+        self, tmp_path: Path
+    ) -> None:
+        """Diffing a binary against its own HEAD SHA returns an empty string."""
+        repo, _first_sha = self._make_repo_with_attachments(tmp_path)
+        head_sha = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        strategy = GitWriteStrategy()
+        out = strategy.get_file_diff(
+            repo,
+            repo / "assets" / "x.png",
+            ref=head_sha,
+            per_commit=False,
+            summarize_binary=True,
+        )
+        assert out == ""
+
     def test_single_diff(self, tmp_path: Path) -> None:
         """get_file_diff with per_commit=False returns a unified diff string."""
         repo, first_sha = self._make_repo_with_commits(tmp_path)
@@ -3122,6 +3284,187 @@ class TestGetFileDiff:
         # -- renamed.md` would show a full-file addition (no `-Original line`).
         assert "-Original line" in diff
         assert "+Modified line" in diff
+
+    def test_get_file_diff_binary_attachment_stat_across_rename(
+        self, tmp_path: Path
+    ) -> None:
+        """A binary attachment renamed within the range still yields a --stat.
+
+        Regression for #342: with rename-unaware binary detection, ``git diff
+        {ref}..HEAD -- assets/y.png`` reports the renamed binary as a plain add
+        (text-style counts, not ``-\t-``), so detection returned False and the
+        code fell through to the full-diff path, emitting the meaningless
+        ``Binary files ... differ`` patch the feature exists to suppress.
+        """
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        subprocess.run(
+            ["git", "-C", str(repo), "init"], capture_output=True, check=True
+        )
+        subprocess.run(
+            ["git", "-C", str(repo), "config", "user.email", "t@t.com"],
+            capture_output=True,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(repo), "config", "user.name", "T"],
+            capture_output=True,
+            check=True,
+        )
+        assets = repo / "assets"
+        assets.mkdir()
+        # The original blob carries a NUL byte, so git classifies *it* as
+        # binary; the renamed blob keeps the bulk of the bytes (so git's
+        # --find-renames=30 still pairs the two paths) but drops the NUL.  This
+        # is the discriminating case: `git diff {ref}..HEAD -- assets/y.png`
+        # treats y.png as a plain add and reports text counts (3\t0), so
+        # rename-unaware detection returns False and the old code fell through
+        # to the full diff, emitting "Binary files ... differ".  The rename-
+        # aware blob-pair form `git diff {ref}:assets/x.png HEAD:assets/y.png`
+        # reports the pair as binary (-\t-), so detection now yields a --stat.
+        common = b"\x89PNG\r\n\x1a\n" + (b"\xaa" * 200)
+        v1 = common + b"\x00" + (b"\xbb" * 50)  # NUL -> git sees x.png as binary
+        v2 = common + b"\x11" + (b"\xcc" * 50)  # no NUL, high similarity to v1
+        # Commit 1: add the binary attachment under its original name.
+        (assets / "x.png").write_bytes(v1)
+        subprocess.run(
+            ["git", "-C", str(repo), "add", "."], capture_output=True, check=True
+        )
+        subprocess.run(
+            ["git", "-C", str(repo), "commit", "-m", "add x.png"],
+            capture_output=True,
+            check=True,
+        )
+        first_sha = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        # Commit 2: rename x.png -> y.png AND tweak its bytes (a rename-with-edit
+        # within the range that git still detects as a rename at the 30%
+        # threshold used by resolve_path_at_ref).
+        subprocess.run(
+            ["git", "-C", str(repo), "mv", "assets/x.png", "assets/y.png"],
+            capture_output=True,
+            check=True,
+        )
+        (assets / "y.png").write_bytes(v2)
+        subprocess.run(
+            ["git", "-C", str(repo), "add", "."], capture_output=True, check=True
+        )
+        subprocess.run(
+            ["git", "-C", str(repo), "commit", "-m", "rename+edit x.png -> y.png"],
+            capture_output=True,
+            check=True,
+        )
+
+        strategy = GitWriteStrategy()
+        out = strategy.get_file_diff(
+            repo,
+            repo / "assets" / "y.png",
+            ref=first_sha,
+            per_commit=False,
+            summarize_binary=True,
+        )
+        assert isinstance(out, str)
+        # Rename-aware --stat summary, not the garbage binary patch.
+        assert " -> " in out  # stat-only marker (e.g. "Bin 12 -> 13 bytes")
+        assert "Binary files" not in out  # full binary patch marker must be absent
+        assert "@@" not in out
+
+    def test_get_file_diff_per_commit_renamed_binary_degraded_stat(
+        self, tmp_path: Path
+    ) -> None:
+        """KNOWN LIMITATION (#683): per-commit --stat of a RENAMED binary shows a
+        text-style stat for the rename commit, not a ``Bin`` summary, because the
+        single-path pathspec defeats git's rename pairing in ``git show``. The
+        non-per-commit path IS rename-aware. Flip this assertion to require
+        ``' -> '``/``Bin`` when #683 is fixed.
+        """
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        subprocess.run(
+            ["git", "-C", str(repo), "init"], capture_output=True, check=True
+        )
+        subprocess.run(
+            ["git", "-C", str(repo), "config", "user.email", "t@t.com"],
+            capture_output=True,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(repo), "config", "user.name", "T"],
+            capture_output=True,
+            check=True,
+        )
+        assets = repo / "assets"
+        assets.mkdir()
+        # Same fixture as test_get_file_diff_binary_attachment_stat_across_rename:
+        # NUL-carrying v1 (binary) renamed to y.png with tweaked bytes (v2,
+        # no NUL, high similarity so --find-renames=30 pairs them).
+        common = b"\x89PNG\r\n\x1a\n" + (b"\xaa" * 200)
+        v1 = common + b"\x00" + (b"\xbb" * 50)
+        v2 = common + b"\x11" + (b"\xcc" * 50)
+        (assets / "x.png").write_bytes(v1)
+        subprocess.run(
+            ["git", "-C", str(repo), "add", "."], capture_output=True, check=True
+        )
+        subprocess.run(
+            ["git", "-C", str(repo), "commit", "-m", "add x.png"],
+            capture_output=True,
+            check=True,
+        )
+        first_sha = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        subprocess.run(
+            ["git", "-C", str(repo), "mv", "assets/x.png", "assets/y.png"],
+            capture_output=True,
+            check=True,
+        )
+        (assets / "y.png").write_bytes(v2)
+        subprocess.run(
+            ["git", "-C", str(repo), "add", "."], capture_output=True, check=True
+        )
+        subprocess.run(
+            ["git", "-C", str(repo), "commit", "-m", "rename+edit x.png -> y.png"],
+            capture_output=True,
+            check=True,
+        )
+
+        strategy = GitWriteStrategy()
+        out = strategy.get_file_diff(
+            repo,
+            repo / "assets" / "y.png",
+            ref=first_sha,
+            per_commit=True,
+            summarize_binary=True,
+        )
+        assert isinstance(out, list) and out
+        # Currently NO Bin/arrow marker on any per-commit entry (the #683 bug):
+        # git show --stat -- commit_path defeats rename pairing and shows a
+        # text-style count instead of "Bin N -> M bytes".
+        assert not any(" -> " in cd.diff for cd in out)
+
+    def test_get_file_diff_summarize_binary_invalid_ref_raises(
+        self, tmp_path: Path
+    ) -> None:
+        """summarize_binary=True with a bad ref still raises ValueError (the
+        _diff_is_binary check=False swallow is re-surfaced downstream).
+        """
+        repo, _ = self._make_repo_with_attachments(tmp_path)
+        strategy = GitWriteStrategy()
+        with pytest.raises(ValueError):
+            strategy.get_file_diff(
+                repo,
+                repo / "assets" / "x.png",
+                ref="deadbeef",
+                per_commit=False,
+                summarize_binary=True,
+            )
 
     def test_resolve_path_at_ref_handles_tab_in_filename(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
