@@ -204,3 +204,12 @@ def get_vault(ctx: Context = CurrentContext()) -> Vault:
         msg = "Vault not initialised — server lifespan has not run"
         raise RuntimeError(msg)
     return vault
+
+
+def get_config(ctx: Context = CurrentContext()) -> VaultConfig:
+    """Resolve the loaded VaultConfig from lifespan context."""
+    config = ctx.lifespan_context.get("config")
+    if config is None:
+        msg = "Vault config not initialised — server lifespan has not run"
+        raise RuntimeError(msg)
+    return config

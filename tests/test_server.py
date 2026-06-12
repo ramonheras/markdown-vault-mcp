@@ -108,6 +108,9 @@ class TestServerIdentity:
         assert "relative" in server.instructions
         assert "'search'" in server.instructions
         assert "'stats'" in server.instructions
+        assert "get_system_instructions" in server.instructions
+        assert "list_skills" in server.instructions
+        assert "read_skill" in server.instructions
         # Core's build_instructions appends an operator-override hint
         # (by design — tells anyone reading the instructions that the
         # env var exists to customise them).
@@ -150,6 +153,9 @@ class TestToolListing:
         # Read-only tools present
         assert "search" in names
         assert "read" in names
+        assert "get_system_instructions" in names
+        assert "list_skills" in names
+        assert "read_skill" in names
         assert "list_documents" in names
         assert "list_folders" in names
         assert "list_tags" in names
@@ -194,6 +200,9 @@ class TestToolAnnotations:
 
         # Read-only tools
         for name in (
+            "get_system_instructions",
+            "list_skills",
+            "read_skill",
             "search",
             "read",
             "list_documents",
@@ -235,6 +244,57 @@ class TestToolAnnotations:
 # ---------------------------------------------------------------------------
 # Read-only tools
 # ---------------------------------------------------------------------------
+
+
+class TestBootstrapTools:
+    """Verify dynamic instruction and skill bootstrap tools."""
+
+    @pytest.mark.usefixtures("_mcp_env")
+    async def test_bootstrap_tools_read_vault_instructions_and_skills(
+        self,
+        vault_path: Path,
+    ) -> None:
+        (vault_path / "AGENTS.md").write_text(
+            "# RHOS Agent Instructions\n\nUse the vault carefully.\n",
+            encoding="utf-8",
+        )
+        skills_dir = vault_path / "Skills" / "Expenses"
+        skills_dir.mkdir(parents=True)
+        (skills_dir / "Skill.md").write_text(
+            "---\n"
+            "title: Expenses\n"
+            "summary: Rules for expenses.\n"
+            "triggers:\n"
+            "  - expense\n"
+            "  - gasto\n"
+            "when_to_use: Use when recording or classifying expenses.\n"
+            "---\n"
+            "# Expenses\n\nFull workflow.\n",
+            encoding="utf-8",
+        )
+
+        server = make_server()
+        async with Client(server) as client:
+            system_result = await client.call_tool("get_system_instructions", {})
+            system_data = cast("dict[str, Any]", system_result.data)
+            assert system_data["instructions_path"] == "AGENTS.md"
+            assert "RHOS Agent Instructions" in system_data["instructions_markdown"]
+            assert "Available Skills" in system_data["instructions_markdown"]
+            assert "Available MCP Tools" in system_data["instructions_markdown"]
+            assert any(tool["name"] == "list_skills" for tool in system_data["tools"])
+            assert any(skill["skill_id"] == "expenses" for skill in system_data["skills"])
+
+            skills_result = await client.call_tool("list_skills", {})
+            skills_data = _parse_tool_data(skills_result)
+            assert any(skill["path"] == "Skills/Expenses/Skill.md" for skill in skills_data)
+
+            skill_result = await client.call_tool(
+                "read_skill",
+                {"skill_id": "expenses"},
+            )
+            skill_data = cast("dict[str, Any]", skill_result.data)
+            assert skill_data["title"] == "Expenses"
+            assert "Full workflow." in skill_data["content"]
 
 
 class TestSearchTool:

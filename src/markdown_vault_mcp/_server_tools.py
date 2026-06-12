@@ -21,6 +21,12 @@ from fastmcp.dependencies import Depends
 from fastmcp.exceptions import ToolError
 from fastmcp.tools import ToolResult
 
+from markdown_vault_mcp._server_bootstrap import (
+    build_skills_index,
+    build_system_instructions_payload,
+    resolve_skill_content,
+)
+from markdown_vault_mcp.config import VaultConfig
 from markdown_vault_mcp.exceptions import EditConflictError
 from markdown_vault_mcp.git import GitWriteStrategy, PullResult, PushResult
 from markdown_vault_mcp.utils.text import decode_utf8
@@ -30,7 +36,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 from ._icons import _TOOL_ICONS
-from ._server_deps import get_vault
+from ._server_deps import get_config, get_vault
 from ._server_queryable import needs_queryable
 
 logger = logging.getLogger(__name__)
@@ -342,6 +348,76 @@ def register_tools(mcp: FastMCP) -> None:
     """
 
     # --- Read-only tools (always visible) ---
+
+    @mcp.tool(
+        icons=_TOOL_ICONS["read"],
+        annotations={
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+        },
+    )
+    async def get_system_instructions(
+        config: VaultConfig = Depends(get_config),
+    ) -> dict[str, Any]:
+        """Load the vault's operating instructions before doing anything else.
+
+        Call this first when the server rules are not already in context. It
+        returns the operator-maintained instructions markdown plus a dynamic
+        index of the currently available skills and the visible MCP tools.
+
+        If these instructions are already in context, do not call this tool
+        again just to reload them; use `list_skills` to refresh only the skill
+        index.
+        """
+        return await build_system_instructions_payload(
+            config.source_dir,
+            mcp=mcp,
+        )
+
+    @mcp.tool(
+        icons=_TOOL_ICONS["list_documents"],
+        annotations={
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+        },
+    )
+    async def list_skills(
+        config: VaultConfig = Depends(get_config),
+    ) -> list[dict[str, Any]]:
+        """Refresh only the dynamic skill index for this vault.
+
+        Use this after `get_system_instructions` is already in context and you
+        need the current list of workflows without reloading the full operating
+        instructions.
+        """
+        return [asdict(skill) for skill in build_skills_index(config.source_dir)]
+
+    @mcp.tool(
+        icons=_TOOL_ICONS["read"],
+        annotations={
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+        },
+    )
+    async def read_skill(
+        skill_id: str | None = None,
+        path: str | None = None,
+        config: VaultConfig = Depends(get_config),
+    ) -> dict[str, Any]:
+        """Load a specific skill before a skill-governed workflow operation.
+
+        Use this before write, classification, injection, or review operations
+        that are governed by a vault workflow. Provide either `skill_id` from
+        `list_skills` or the exact skill `path`, but not both.
+        """
+        return resolve_skill_content(
+            config.source_dir,
+            skill_id=skill_id,
+            path=path,
+        )
 
     @mcp.tool(
         icons=_TOOL_ICONS["search"],

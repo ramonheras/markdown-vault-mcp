@@ -41,6 +41,7 @@ from markdown_vault_mcp.config import (
 from ._icons import _SERVER_ICON
 from ._server_apps import register_apps
 from ._server_auth import build_auth
+from ._server_bootstrap import build_bootstrap_guidance
 from ._server_deps import make_vault_lifespan
 from ._server_prompts import register_prompts
 from ._server_resources import register_resources
@@ -109,7 +110,8 @@ def _build_default_instructions(*, read_only: bool) -> str:
         "user — do not call them to retrieve vault content; use 'search', 'read', "
         "'list_documents', or 'get_context' instead."
     )
-    domain_line = f"{prelude}{write_guidance}{search_guidance}"
+    bootstrap_guidance = f" {build_bootstrap_guidance(read_only=read_only)}"
+    domain_line = f"{prelude}{write_guidance}{search_guidance}{bootstrap_guidance}"
     return _core_build_instructions(
         read_only=read_only,
         env_prefix=_ENV_PREFIX,
