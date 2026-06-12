@@ -368,7 +368,9 @@ def register_tools(mcp: FastMCP) -> None:
 
         If these instructions are already in context, do not call this tool
         again just to reload them; use `list_skills` to refresh only the skill
-        index.
+        index. Because this tool already returns the current skills and tools,
+        do not call `list_skills` immediately afterwards unless you genuinely
+        need a later refresh.
         """
         return await build_system_instructions_payload(
             config.source_dir,

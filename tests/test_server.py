@@ -118,6 +118,22 @@ class TestServerIdentity:
         assert "Operators:" in server.instructions
 
     @pytest.mark.usefixtures("_mcp_env")
+    def test_default_instructions_inline_agents_markdown(
+        self,
+        vault_path: Path,
+    ) -> None:
+        (vault_path / "AGENTS.md").write_text(
+            "# RHOS Agent Instructions\n\nOnly refresh skills dynamically.\n",
+            encoding="utf-8",
+        )
+        server = make_server()
+        assert "RHOS Agent Instructions" in server.instructions
+        assert "Only refresh skills dynamically." in server.instructions
+        assert "do not call `get_system_instructions` just to reload them" in (
+            server.instructions
+        )
+
+    @pytest.mark.usefixtures("_mcp_env")
     def test_custom_server_name(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("MARKDOWN_VAULT_MCP_SERVER_NAME", "my-vault")
         server = make_server()
@@ -281,6 +297,9 @@ class TestBootstrapTools:
             assert "RHOS Agent Instructions" in system_data["instructions_markdown"]
             assert "Available Skills" in system_data["instructions_markdown"]
             assert "Available MCP Tools" in system_data["instructions_markdown"]
+            assert "Do not call `list_skills` immediately after this" in (
+                system_data["instructions_markdown"]
+            )
             assert any(tool["name"] == "list_skills" for tool in system_data["tools"])
             assert any(skill["skill_id"] == "expenses" for skill in system_data["skills"])
 

@@ -69,13 +69,31 @@ def build_bootstrap_guidance(*, read_only: bool) -> str:
         "You are connected to a Markdown/Obsidian-style vault used to store notes, "
         "tasks, projects, decisions, and workflows."
         f"{write_guard} "
-        "If the full operating instructions are not already available in your "
-        "context, call `get_system_instructions` first. If they are already in "
-        "context, do not call `get_system_instructions` again just to reload "
-        "them; call `list_skills` to refresh the available workflows. Before "
-        "writing, classifying, or injecting content, inspect the relevant skill "
-        "with `read_skill` when one applies. Prefer semantic vault tools over "
-        "raw file writes."
+        "The operating instructions are included below when the client loads "
+        "server instructions correctly. In that case, do not call "
+        "`get_system_instructions` just to reload them; call `list_skills` only "
+        "when you need to refresh the available workflows. If the operating "
+        "instructions are missing from context, call `get_system_instructions` "
+        "before doing anything else. Before writing, classifying, or injecting "
+        "content, inspect the relevant skill with `read_skill` when one applies. "
+        "Prefer semantic vault tools over raw file writes."
+    )
+
+
+def load_operator_instructions_markdown(source_dir: Path) -> tuple[str | None, str]:
+    """Load the operator-maintained instructions markdown for startup/bootstrap."""
+    instructions_path = resolve_system_instructions_path(source_dir)
+    if instructions_path is None:
+        return (
+            None,
+            "# Operating Instructions\n\n"
+            "No AGENTS-style instructions file was found in the vault root. "
+            "Use the dynamic skill index and inspect the relevant skill before "
+            "making structured vault changes.",
+        )
+    return (
+        instructions_path.relative_to(source_dir.resolve()).as_posix(),
+        read_text_utf8(instructions_path).strip(),
     )
 
 
@@ -276,21 +294,8 @@ async def build_system_instructions_payload(
 ) -> dict[str, Any]:
     """Build the full dynamic operating context exposed by the bootstrap tool."""
     source_dir = source_dir.resolve()
-    instructions_path = resolve_system_instructions_path(source_dir)
-    instructions_rel = (
-        instructions_path.relative_to(source_dir).as_posix()
-        if instructions_path is not None
-        else None
-    )
-    instructions_content = (
-        read_text_utf8(instructions_path)
-        if instructions_path is not None
-        else (
-            "# Operating Instructions\n\n"
-            "No AGENTS-style instructions file was found in the vault root. "
-            "Use the dynamic skill index below and inspect the relevant skill "
-            "before making structured vault changes."
-        )
+    instructions_rel, instructions_content = load_operator_instructions_markdown(
+        source_dir
     )
 
     skills = build_skills_index(source_dir)
@@ -299,6 +304,10 @@ async def build_system_instructions_payload(
     markdown = (
         "# RHOS System Instructions\n\n"
         "These instructions are generated dynamically by the MCP server.\n\n"
+        "This response already includes the current operating instructions, "
+        "skill index, and visible MCP tools. Do not call `list_skills` "
+        "immediately after this just to fetch the same index again; use it "
+        "later only when you need a refresh.\n\n"
         "If this document is already in your context, do not call "
         "`get_system_instructions` again just to reload it. Use `list_skills` "
         "to refresh only the skill index.\n\n"

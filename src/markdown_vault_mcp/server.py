@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -41,7 +42,10 @@ from markdown_vault_mcp.config import (
 from ._icons import _SERVER_ICON
 from ._server_apps import register_apps
 from ._server_auth import build_auth
-from ._server_bootstrap import build_bootstrap_guidance
+from ._server_bootstrap import (
+    build_bootstrap_guidance,
+    load_operator_instructions_markdown,
+)
 from ._server_deps import make_vault_lifespan
 from ._server_prompts import register_prompts
 from ._server_resources import register_resources
@@ -81,7 +85,7 @@ def build_event_store(config: ServerConfig) -> EventStore:
 # ---------------------------------------------------------------------------
 
 
-def _build_default_instructions(*, read_only: bool) -> str:
+def _build_default_instructions(*, read_only: bool, source_dir: str) -> str:
     """Build the default instructions string based on read-only state.
 
     Composes MV's domain-specific guidance into a ``domain_line`` and
@@ -110,8 +114,19 @@ def _build_default_instructions(*, read_only: bool) -> str:
         "user — do not call them to retrieve vault content; use 'search', 'read', "
         "'list_documents', or 'get_context' instead."
     )
+    instructions_rel, instructions_content = load_operator_instructions_markdown(
+        Path(source_dir)
+    )
     bootstrap_guidance = f" {build_bootstrap_guidance(read_only=read_only)}"
-    domain_line = f"{prelude}{write_guidance}{search_guidance}{bootstrap_guidance}"
+    agent_guidance = (
+        " Included operator instructions follow from "
+        f"`{instructions_rel or 'generated fallback'}`:\n\n"
+        f"{instructions_content}\n"
+    )
+    domain_line = (
+        f"{prelude}{write_guidance}{search_guidance}{bootstrap_guidance}"
+        f"{agent_guidance}"
+    )
     return _core_build_instructions(
         read_only=read_only,
         env_prefix=_ENV_PREFIX,
@@ -152,7 +167,10 @@ def make_server(transport: str = "stdio") -> FastMCP:
     if config.instructions is not None:
         instructions = config.instructions
     else:
-        instructions = _build_default_instructions(read_only=is_read_only)
+        instructions = _build_default_instructions(
+            read_only=is_read_only,
+            source_dir=str(config.source_dir),
+        )
 
     auth = build_auth(config.server)
     # build_auth returns None only for mode="none" or precondition-miss inside an
