@@ -2611,6 +2611,42 @@ class TestAuthModeSelection:
         assert wrapper.call_args.kwargs["key_value"] is kv_store
         assert mock_cls.call_args.kwargs["client_storage"] is wrapped_store
 
+    def test_oidc_client_storage_primes_file_kv_collections(
+        self,
+        vault_path: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """File-backed OAuth KV stores pre-create FastMCP collection dirs."""
+        from unittest.mock import MagicMock, patch
+
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_SOURCE_DIR", str(vault_path))
+        for var, val in _OIDC_REQUIRED.items():
+            monkeypatch.setenv(var, val)
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_OIDC_JWT_SIGNING_KEY", "stable-key")
+        oauth_dir = tmp_path / "oauth"
+        monkeypatch.setenv("MARKDOWN_VAULT_MCP_KV_STORE_URL", f"file://{oauth_dir}")
+
+        with (
+            patch("fastmcp.server.auth.oidc_proxy.OIDCProxy", MagicMock()),
+            patch("markdown_vault_mcp._server_auth.build_kv_store", return_value=object()),
+            patch(
+                "markdown_vault_mcp._server_auth.FernetEncryptionWrapper",
+                return_value=object(),
+            ),
+        ):
+            make_server()
+
+        expected_dirs = {
+            "oauth__mcp-upstream-tokens",
+            "oauth__mcp-oauth-proxy-clients",
+            "oauth__mcp-oauth-transactions",
+            "oauth__mcp-authorization-codes",
+            "oauth__mcp-jti-mappings",
+            "oauth__mcp-refresh-tokens",
+        }
+        assert expected_dirs == {path.name for path in oauth_dir.iterdir() if path.is_dir()}
+
     def test_no_auth_when_nothing_configured(
         self,
         vault_path: Path,

@@ -11,7 +11,9 @@ import base64
 import hashlib
 import logging
 import sys
+from pathlib import Path
 from typing import Any, cast
+from urllib.parse import unquote, urlparse
 
 from cryptography.fernet import Fernet
 from fastmcp_pvl_core import (
@@ -31,6 +33,15 @@ from markdown_vault_mcp.config import _ENV_PREFIX
 
 logger = logging.getLogger(__name__)
 
+_OIDC_PROXY_COLLECTIONS = (
+    "mcp-upstream-tokens",
+    "mcp-oauth-proxy-clients",
+    "mcp-oauth-transactions",
+    "mcp-authorization-codes",
+    "mcp-jti-mappings",
+    "mcp-refresh-tokens",
+)
+
 
 def _derive_fernet_key(secret: str) -> bytes:
     """Derive a Fernet-compatible key from an operator-managed secret."""
@@ -47,6 +58,49 @@ def _storage_encryption_key(config: ServerConfig) -> bytes | None:
     return None
 
 
+def _file_kv_store_directory(config: ServerConfig) -> Path | None:
+    """Return the local directory for file:// KV stores, if configured."""
+    kv_store_url = getattr(config, "kv_store_url", None) or getattr(
+        config, "event_store_url", None
+    )
+    if not kv_store_url:
+        return None
+
+    parsed = urlparse(kv_store_url)
+    if parsed.scheme != "file":
+        return None
+    if parsed.netloc not in {"", "localhost"}:
+        return None
+    if not parsed.path:
+        return None
+    return Path(unquote(parsed.path))
+
+
+def _prime_oidc_file_kv_collections(
+    config: ServerConfig,
+    *,
+    namespace: str,
+) -> None:
+    """Pre-create OAuth collection directories for file-backed KV stores.
+
+    FastMCP lazily initializes per-collection metadata. Under concurrent OAuth
+    handshakes we have seen collection info files created without the matching
+    directory, which then crashes the first write with FileNotFoundError during
+    mkstemp(). Creating the directories up front keeps the filetree backend in a
+    consistent state across restarts and concurrent registrations.
+    """
+    data_directory = _file_kv_store_directory(config)
+    if data_directory is None:
+        return
+
+    data_directory.mkdir(parents=True, exist_ok=True)
+    for collection in _OIDC_PROXY_COLLECTIONS:
+        (data_directory / f"{namespace}__{collection}").mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+
 def build_oidc_client_storage(config: ServerConfig) -> Any | None:
     """Build encrypted persistent storage for OAuth proxy clients and tokens."""
     encryption_key = _storage_encryption_key(config)
@@ -59,6 +113,8 @@ def build_oidc_client_storage(config: ServerConfig) -> Any | None:
             _ENV_PREFIX,
         )
         return None
+
+    _prime_oidc_file_kv_collections(config, namespace="oauth")
 
     return FernetEncryptionWrapper(
         key_value=build_kv_store(config, namespace="oauth"),
